@@ -1,4 +1,4 @@
-// Text markup tools (Highlight text H, Underline U, Strikeout K), Sticky note (N) and
+// Text markup tools (Highlight text H, Underline U, Strikeout K, Squiggly G), Sticky note (N) and
 // "Add comment" (Enter / Edit > Comment…) for any selected object. Objects follow
 // docs/CORE-API.md: text markups carry `quads` in visible page space (text-frame corner order,
 // see markup-geom.js); notes are {x, y, w, h, icon, color, note}; any object may carry `note`.
@@ -18,9 +18,21 @@ const TEXT_TYPES = {
   textHighlight: { tool: 'text-highlight', label: 'Highlight text', key: 'H', color: '#ffd400', opacity: 0.4, icon: '<path d="M4 20h16"/><path d="M7 15l7-9 4 3-7 9H7z"/>' },
   underline: { tool: 'underline', label: 'Underline text', key: 'U', color: '#2e8b57', opacity: 1, icon: '<path d="M7 4v7a5 5 0 0 0 10 0V4"/><path d="M5 20h14"/>' },
   strikeout: { tool: 'strikeout', label: 'Strikeout text', key: 'K', color: '#d62828', opacity: 1, icon: '<path d="M16 6.5A4 3 0 0 0 8 7c0 4 8 3 8 7a4 3 0 0 1-8 .5"/><path d="M4 12h16"/>' },
+  squiggly: { tool: 'squiggly', label: 'Squiggly underline', key: 'G', color: '#2e8b57', opacity: 1, icon: '<path d="M7 4v7a5 5 0 0 0 10 0V4"/><path d="M4 20l2-2 2 2 2-2 2 2 2-2 2 2 2-2 2 2"/>' },
 };
 const styles = Object.fromEntries(Object.entries(TEXT_TYPES).map(([t, d]) => [t, { color: d.color, opacity: d.opacity }]));
 const NOTE_ICON = '<path d="M4 5h16v11H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>';
+// Sticky note icons (the core writes the name as /Name; the overlay draws one glyph per name).
+const NOTE_ICONS = {
+  Comment: NOTE_ICON,
+  Note: '<path d="M6 4h9l3 3v13H6z"/><path d="M9 10h6M9 13h6M9 16h4"/>',
+  Key: '<circle cx="8" cy="12" r="3.5"/><path d="M11.5 12H20M17 12v3M20 12v2"/>',
+  Help: '<circle cx="12" cy="12" r="8"/><path d="M9.5 9.5a2.5 2.5 0 0 1 4.8 1c0 1.7-2.3 2-2.3 3.5"/><path d="M12 17h.01"/>',
+  Paragraph: '<path d="M13 4v16M17 4v16M19 4h-9a4 4 0 0 0 0 8h3"/>',
+  Insert: '<path d="M6 17l6-10 6 10"/>',
+};
+const noteStyle = { icon: 'Comment' };
+const iconSelect = (cls, value, onchange) => h(`select.${cls}`, { 'aria-label': 'Note icon', onchange }, Object.keys(NOTE_ICONS).map((n) => h('option', { value: n, selected: n === value }, n)));
 const svgIcon = (inner) => `<svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${inner}</svg>`;
 const r3 = (v) => Math.round(v * 1000) / 1000;
 function svgEl(name, attrs, parent) {
@@ -43,6 +55,14 @@ function renderMarkup(o, parent) {
       continue;
     }
     const sw = Number.isFinite(o.strokeWidth) ? o.strokeWidth : qHeight(q) / 14;
+    if (o.type === 'squiggly') { // zigzag along the bottom edge, as the core's appearance stream draws it
+      const hgt = qHeight(q) || 1, len = Math.hypot(BR[0] - BL[0], BR[1] - BL[1]) || 1, step = hgt / 6;
+      const u = [(TL[0] - BL[0]) / hgt, (TL[1] - BL[1]) / hgt], v = [(BR[0] - BL[0]) / len, (BR[1] - BL[1]) / len];
+      const pts = [];
+      for (let d = 0, i = 0; d <= len; d += step, i++) { const up = (i % 2 ? step : 0) + sw / 2; pts.push(`${r3(BL[0] + v[0] * d + u[0] * up)},${r3(BL[1] + v[1] * d + u[1] * up)}`); }
+      svgEl('polyline', { points: pts.join(' '), fill: 'none', stroke: o.color ?? '#000000', 'stroke-width': r3(sw), 'stroke-linejoin': 'round' }, g);
+      continue;
+    }
     const t = o.type === 'strikeout' ? 0.5 : 1 - sw / 2 / (qHeight(q) || 1);
     const a = lerp(TL, BL, t), b = lerp(TR, BR, t);
     svgEl('line', { x1: r3(a[0]), y1: r3(a[1]), x2: r3(b[0]), y2: r3(b[1]), stroke: o.color ?? '#000000', 'stroke-width': r3(sw) }, g);
@@ -63,10 +83,11 @@ const noteBox = (o) => ({ x: o.x, y: o.y, w: o.w ?? 20, h: o.h ?? 20 });
 const noteType = {
   render(o, parent) {
     const b = noteBox(o), s = b.w / 24;
-    const g = svgEl('g', { class: 'ann-note', transform: `translate(${r3(b.x)} ${r3(b.y)}) scale(${r3(s)})` }, parent);
+    const name = NOTE_ICONS[o.icon] ? o.icon : 'Comment';
+    const g = svgEl('g', { class: 'ann-note', 'data-icon': name, transform: `translate(${r3(b.x)} ${r3(b.y)}) scale(${r3(s)})` }, parent);
     svgEl('rect', { x: 0.5, y: 0.5, width: 23, height: 23, rx: 4, fill: o.color ?? '#ffd400', stroke: '#16261f', 'stroke-width': 1 }, g);
     const ic = svgEl('g', { fill: 'none', stroke: '#16261f', 'stroke-width': 1.6, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }, g);
-    ic.innerHTML = NOTE_ICON;
+    ic.innerHTML = NOTE_ICONS[name];
     return g;
   },
   bbox: noteBox,
@@ -126,10 +147,13 @@ function applyTextMarkup(tab, type) {
 let popup = null;
 function closePopup(save) {
   if (!popup) return;
-  const { el, tab, id, ta, before } = popup;
+  const { el, tab, id, ta, before, iconSel, iconBefore } = popup;
   popup = null;
   el.remove();
-  if (save && annotations.getObject(tab, id) && ta.value !== before) annotations.update(tab, id, { note: ta.value });
+  const patch = {};
+  if (ta.value !== before) patch.note = ta.value;
+  if (iconSel && iconSel.value !== iconBefore) patch.icon = iconSel.value;
+  if (save && annotations.getObject(tab, id) && Object.keys(patch).length) annotations.update(tab, id, patch);
 }
 /** Inline editor for obj.note (the sticky note text, or any object's comment). */
 async function openComment(tab, id) {
@@ -142,10 +166,11 @@ async function openComment(tab, id) {
   const date = new Date(o.modified || o.created || Date.now());
   const ta = h('textarea.mk-popup-text', { rows: 5, 'aria-label': o.type === 'note' ? 'Note text' : 'Comment', placeholder: o.type === 'note' ? 'Note…' : 'Comment…' });
   ta.value = o.note ?? '';
+  const iconSel = o.type === 'note' ? iconSelect('mk-popup-icon', o.icon, () => {}) : null;
   const el = h('div.mk-popup', { role: 'dialog', 'aria-label': o.type === 'note' ? 'Sticky note' : 'Comment' },
     h('div.mk-popup-head', {}, h('span.mk-popup-author', {}, author), h('span.mk-popup-date', {}, date.toLocaleString())),
     ta,
-    h('div.mk-popup-actions', {},
+    h('div.mk-popup-actions', {}, iconSel,
       h('button.mk-popup-btn', { type: 'button', onclick: () => closePopup(false) }, 'Cancel'),
       h('button.mk-popup-btn.primary', { type: 'button', onclick: () => closePopup(true) }, 'Save')));
   el.style.left = `${Math.max(8, Math.min(c.clientX + 8, window.innerWidth - 268))}px`;
@@ -155,7 +180,7 @@ async function openComment(tab, id) {
     if (e.key === 'Escape') { e.preventDefault(); closePopup(false); } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); closePopup(true); }
   });
   document.body.append(el);
-  popup = { el, tab, id, ta, before: ta.value };
+  popup = { el, tab, id, ta, before: ta.value, iconSel, iconBefore: iconSel?.value };
   ta.focus();
 }
 
@@ -172,7 +197,7 @@ const noteTool = {
     const existing = noteAt(tab, e.clientX, e.clientY);
     if (existing) { annotations.select(tab, [existing.id]); openComment(tab, existing.id); return; }
     const p = annotations.toPage(tab, hit.pageIndex, e.clientX, e.clientY);
-    const o = annotations.add(tab, { type: 'note', page: hit.pageIndex, x: p.x - 10, y: p.y - 10, w: 20, h: 20, icon: 'Comment', color: '#ffd400', note: '' });
+    const o = annotations.add(tab, { type: 'note', page: hit.pageIndex, x: p.x - 10, y: p.y - 10, w: 20, h: 20, icon: noteStyle.icon, color: '#ffd400', note: '' });
     annotations.select(tab, [o.id]);
     openComment(tab, o.id);
   },
@@ -194,7 +219,9 @@ export function initMarkupTools(app) {
       onPointerUp: (e, { tab }) => { if (e.button === 0) setTimeout(() => applyTextMarkup(tab, type), 0); },
     });
   }
-  registerTool({ id: 'note', label: 'Sticky note', icon: svgIcon(NOTE_ICON), shortcut: 'N', cursor: 'copy', ...noteTool, onDeactivate: () => closePopup(true) });
+  app?.registerMenuItem?.('Tools', { id: 'squiggly', label: 'Squiggly underline', shortcut: 'G', action: () => setTool('squiggly') });
+  const noteIconCtl = (c) => c.append(h('label.opt', {}, h('span', {}, 'Icon'), iconSelect('opt-note-icon', noteStyle.icon, (e) => { noteStyle.icon = e.target.value; })));
+  registerTool({ id: 'note', label: 'Sticky note', icon: svgIcon(NOTE_ICON), shortcut: 'N', cursor: 'copy', options: [noteIconCtl], ...noteTool, onDeactivate: () => closePopup(true) });
   const selected = () => { const t = activeTab(); const s = t ? annotations.getSelection(t) : []; return s.length === 1 ? s[0] : null; };
   app?.registerMenuItem?.('Edit', { id: 'add-comment', label: 'Comment on selection…', shortcut: 'Enter', action: () => { const id = selected(); if (id) openComment(activeTab(), id); }, enabled: () => !!selected() });
   window.addEventListener('pointerdown', (e) => { if (popup && !e.target.closest?.('.mk-popup')) closePopup(true); }, true);
@@ -210,9 +237,9 @@ export function initMarkupTools(app) {
     // H highlights selected text; without a text selection it stays the area Highlight (tools-shapes).
     const k = e.key.toLowerCase();
     if (k === 'h' && !textSelected()) return;
-    const tool = { h: 'text-highlight', u: 'underline', k: 'strikeout', n: 'note' }[k];
+    const tool = { h: 'text-highlight', u: 'underline', k: 'strikeout', g: 'squiggly', n: 'note' }[k];
     if (tool) { e.preventDefault(); e.stopImmediatePropagation(); setTool(tool); }
   }, true);
 }
 
-export const markupTools = { applyTextMarkup, openComment, closePopup, styles };
+export const markupTools = { applyTextMarkup, openComment, closePopup, styles, noteStyle, NOTE_ICONS };

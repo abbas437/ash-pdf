@@ -431,6 +431,7 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .mk-popup-btn { font: inherit; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; }
 .mk-popup-btn:hover { background: var(--hover); }
 .mk-popup-btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.mk-popup-icon { font: inherit; margin-right: auto; padding: 2px 4px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
 
 /* ---- Comments tab (ui/comments.js) ---- */
 :root { --cm-accepted: #1f6b3a; --cm-rejected: #9b2c1f; --cm-cancelled: #5d6a63; --cm-completed: #1f4f7a; --cm-badge-text: #fffdf8; }

@@ -17,7 +17,7 @@ import { STATUSES, STATUS_LABELS, typeLabel, toEntries, filterEntries, groupByPa
 const TAB = 'comments';
 const TYPE_ICON = {
   rect: 'shapes', ellipse: 'shapes', line: 'shapes', arrow: 'shapes', ink: 'draw', highlight: 'highlight', textHighlight: 'highlight',
-  text: 'text', underline: 'text', strikeout: 'text', callout: 'callout', stamp: 'stamp', image: 'image', whiteout: 'whiteout', note: 'comment',
+  text: 'text', underline: 'text', strikeout: 'text', squiggly: 'text', callout: 'callout', stamp: 'stamp', image: 'image', whiteout: 'whiteout', note: 'comment',
 };
 const filters = { type: '', author: '', status: '' };
 let gen = 0;
