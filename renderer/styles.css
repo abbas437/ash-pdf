@@ -315,7 +315,7 @@ body.img-armed .viewer-host .page { cursor: copy; }
 .sign-item:disabled { opacity: .6; }
 .sign-thumb { display: grid; place-items: center; flex: none; width: 92px; height: 38px; padding: 2px; background: var(--sig-paper); border: 1px solid var(--line); border-radius: 4px; }
 .sign-thumb img { max-width: 100%; max-height: 32px; }
-.sign-lock { font-size: 11px; color: var(--sig-danger); }
+.sign-lock { font-size: 11px; color: #9b2c1f; } /* on the always-light paper thumb, both themes */
 .sign-text { display: flex; flex-direction: column; min-width: 0; }
 .sign-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .sign-meta { font-size: 11.5px; color: var(--muted); }

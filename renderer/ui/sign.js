@@ -223,7 +223,10 @@ export function initSign(app) {
     html: `${SIGN_ICON}<span class="sign-btn-label">Sign</span>${CARET}`,
     onclick: () => (menuEl.hidden ? openMenu() : closeMenu()),
   });
-  btnEl.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); openMenu(true); } });
+  btnEl.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); openMenu(true); }
+    else if (e.key === 'Escape' && !menuEl.hidden) { e.preventDefault(); e.stopPropagation(); closeMenu(true); }
+  });
   menuEl = h('div.sign-menu', { role: 'menu', 'aria-label': 'Sign', hidden: true });
   menuEl.addEventListener('keydown', onMenuKey);
   const tools = document.querySelector('.toolbar .tb-tools');
