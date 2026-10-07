@@ -7,7 +7,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
+import { PDFDocument, PDFName, StandardFonts, degrees } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
@@ -171,6 +171,27 @@ try {
   check(an2.map((a) => a.subtype).sort().join() === 'Highlight,Highlight,Square,StrikeOut,Text,Underline', `second save annotations: ${an2.map((a) => a.subtype)}`);
   check(an2.find((a) => a.subtype === 'Text').contentsObj?.str === 'Check duct size (revised)', 'edited note not saved');
   check(kindsOf(await objs()) === 'note,rect,strikeout,textHighlight,textHighlight,underline', `objects after second save: ${kindsOf(await objs())}`);
+
+  step = 'squiggly (G) + note icon';
+  await page.keyboard.press('g');
+  check(await ev('return app.state.tool;') === 'squiggly', 'G does not arm the squiggly tool');
+  const { o: sq } = await markWord('squiggly', 1, 'words');
+  check(sq?.type === 'squiggly' && sq.quads?.length === 1 && (await page.$(`.ann-squiggly polyline`)), `squiggly: ${JSON.stringify(sq)}`);
+  await page.mouse.dblclick(...await ev('v.scrollToPage(tab, 0); const c = v.pageToClient(tab, 0, 300, 300); return [c.clientX, c.clientY];'));
+  await page.waitForSelector('.mk-popup .mk-popup-icon');
+  await page.selectOption('.mk-popup-icon', 'Key');
+  await page.click('.mk-popup-btn.primary');
+  check((await objs()).find((o) => o.id === note.id).icon === 'Key' && await page.$('.ann-note[data-icon="Key"]'), 'note icon not changed to Key');
+  check(await ev('return await app.saveTab(tab, true);'), 'third saveTab returned false');
+  const out3 = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  const doc3 = await pdfjsDoc(out3);
+  const an3 = [...await (await doc3.getPage(1)).getAnnotations(), ...await (await doc3.getPage(2)).getAnnotations()];
+  doc3.close();
+  check(an3.some((a) => a.subtype === 'Squiggly' && a.quadPoints?.length >= 8), `Squiggly not saved: ${an3.map((a) => a.subtype)}`);
+  // pdf.js reports name "NoIcon" for a note with an appearance stream, so read /Name with pdf-lib.
+  const pl = await PDFDocument.load(out3), names = pl.getPages()[0].node.Annots().asArray().map((r) => pl.context.lookup(r))
+    .filter((d) => d.get(PDFName.of('Subtype')) === PDFName.of('Text')).map((d) => d.get(PDFName.of('Name'))?.decodeText?.() ?? String(d.get(PDFName.of('Name'))));
+  check(names.length === 1 && names[0] === 'Key', `note /Name: ${names}`);
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('MARKUP OK');
