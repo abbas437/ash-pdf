@@ -264,6 +264,47 @@ Burns all field appearances into the pages and removes the AcroForm. No-op for P
 
 ---
 
+## pagemarks.js
+
+Header & footer (page numbers), watermark, background and Bates numbering. Each mark is written
+as its **own content stream** in the page `/Contents` array, wrapped in
+`/Artifact <</Type /Pagination /Subtype /Header|/Footer|/Watermark|/Background /ASH_Mark (kind)>> BDC … EMC`,
+and its stream dictionary carries `/ASH_Mark /<kind>`. Over-content marks are appended, behind
+marks are inserted just before the page content, backgrounds first of all. While a page carries any
+mark, its original content is bracketed by two tagged streams (`q` / `Q`) so graphics state cannot
+leak either way. Resources use document-unique keys `ASH_<hf|wm|bg|bt><n>_*` (Font, XObject,
+ExtGState). Positions are in visible space (after `/Rotate`, CropBox∩MediaBox), so a header is at
+the top of the page as displayed. Text uses the standard 14 fonts: any character outside WinAnsi
+(e.g. Arabic) is refused with `code: 'UNSUPPORTED_TEXT'` rather than drawn as `?`.
+
+Common options: `pages` (0-based index array or range string `"1-3,5"`, default all),
+`subset: 'all'|'even'|'odd'` (by page number), `replace: true` (remove this kind first, i.e. update),
+`font: 'Helvetica'|'Times'|'Courier'`, `bold`, `fontSize`, `color: '#rrggbb'`.
+Kinds: `'headerFooter'`, `'watermark'`, `'background'`, `'bates'` (`MARK_KINDS`).
+
+### `addHeaderFooter(bytes, opts) → Promise<Uint8Array>`
+`{header: {left, center, right}, footer: {left, center, right}, startNumber=1, numberFormat='1'|'i'|'I'|'a'|'A',
+fontSize=10, margins: {top=36, bottom=36, left=54, right=54} (pt), date=new Date(), fileName, ...common}`.
+Tokens: `<<page>>`, `<<pages>>` (last number of the range), `<<file>>`, `<<date>>` / `<<date:FMT>>`
+(`YYYY YY MMM MM M DD D`, e.g. `<<date:DD/MM/YYYY>>`). Numbering counts from the first page of `pages`.
+`formatNumber(n, style)`, `formatDate(date, fmt)` and `expandTokens(tpl, {page, pages, date, fileName})` are exported too.
+
+### `addWatermark(bytes, opts) → Promise<Uint8Array>`
+`{text | image (PNG/JPEG bytes), fontSize=48, scale (fraction of the page width; overrides fontSize; images default 0.5),
+color='#ff0000', opacity=0.3, rotation=45 (deg, anticlockwise), position='center'|'top-left'|'top-center'|…|'bottom-right',
+tile=false, tileGap=72, margin=36, layer='over'|'behind', ...common}`.
+
+### `addBackground(bytes, opts) → Promise<Uint8Array>`
+`{color | image (PNG/JPEG bytes; fitted with aspect kept, centred), scale=1, opacity=1, pages, subset, replace}`. Always behind content.
+
+### `addBates(bytes, opts) → Promise<{bytes, lastNumber}>`
+`{prefix='', suffix='', startNumber=1, digits=6 (zero padding), position='footer-right' ('header'|'footer' + '-left'|'-center'|'-right'),
+fontSize=10, margins, ...common}`. Numbers run consecutively over the selected pages.
+
+### `removeMarks(bytes, kind='all') → Promise<Uint8Array>`, `listMarks(bytes) → Promise<[{kind, pages}]>`
+`kind` is one kind, an array of kinds or `'all'`. Removal drops exactly the tagged streams and `ASH_*`
+resources; once no mark is left the original `/Contents` (single stream, array or none) is restored as it was.
+
 ## Geometry helpers (index.js)
 
 `pageGeometry(pdfLibPage)` → `{rotation, media, crop, view, width, height}`;
