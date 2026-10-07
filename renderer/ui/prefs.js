@@ -1,5 +1,5 @@
 // Edit > Preferences… (Ctrl+,): the user's default settings in one dialog, sectioned
-// General / Documents / Annotations / Toolbar, plus View > Show tool labels.
+// General / Documents / Annotations / Toolbar, plus View > Show tool labels and View > Coloured tool icons.
 //   initPrefs({ registerMenuItem, setTheme }) -> { openPrefs, loadPrefs }
 //   prefsForNewTab() -> {zoomMode, zoom} for a tab about to be built
 //   applySidebarOnOpen() after a document opened
@@ -17,6 +17,7 @@ const cache = { ...PREF_DEFAULTS };
 let lastZoom = null;   // 'view.lastZoom': 'fit-width' | 'fit-page' | number
 let setThemeFn = null;
 let labelsItem = null;
+let colorsItem = null;
 
 export async function loadPrefs() {
   const keys = Object.keys(PREF_DEFAULTS);
@@ -37,6 +38,13 @@ function setToolLabels(on) {
   cache['ui.toolLabels'] = !!on;
   document.body.classList.toggle('tool-labels', !!on);
   labelsItem?.el?.setAttribute('aria-checked', String(!!on));
+}
+
+/** Colour the toolbar icons by tool group, or show them monochrome (visual only; callers persist). */
+function setToolColors(on) {
+  cache['ui.toolColors'] = !!on;
+  document.body.classList.toggle('tool-colors', !!on);
+  colorsItem?.el?.setAttribute('aria-checked', String(!!on));
 }
 
 /** Keep data-label on every toolbar button in step with its tooltip (tools register later). */
@@ -75,7 +83,7 @@ const SECTIONS = [
       h('input.input', { type: 'text', name: 'annotations.author', maxlength: String(AUTHOR_MAX), placeholder: DEFAULT_AUTHOR, autocomplete: 'off' })),
     select('stamps.shape', 'Default stamp shape', [['rect', 'Rectangle'], ['rounded', 'Rounded'], ['circle', 'Circle'], ['ellipse', 'Ellipse']]),
   ]],
-  ['toolbar', 'Toolbar', () => [check('ui.toolLabels', 'Show tool labels under the icons')]],
+  ['toolbar', 'Toolbar', () => [check('ui.toolLabels', 'Show tool labels under the icons'), check('ui.toolColors', 'Coloured tool icons')]],
 ];
 
 function fill(root, values) {
@@ -133,6 +141,8 @@ async function applyPrefs(next) {
   await setThemeFn(next.theme); // switches and persists 'theme'
   setToolLabels(next['ui.toolLabels']);
   await save('ui.toolLabels', next['ui.toolLabels']);
+  setToolColors(next['ui.toolColors']);
+  await save('ui.toolColors', next['ui.toolColors']);
   await save('startup.mode', next['startup.mode']);
   await save('open.target', next['open.target']);
   await save('view.defaultZoom', next['view.defaultZoom']);
@@ -173,6 +183,12 @@ export function initPrefs({ registerMenuItem, setTheme, toolbar }) {
   } };
   registerMenuItem('View', labelsItem);
   labelsItem.el.setAttribute('role', 'menuitemcheckbox');
+  colorsItem = { id: 'toolcolors', label: 'Coloured tool icons', action: () => {
+    setToolColors(!cache['ui.toolColors']);
+    save('ui.toolColors', cache['ui.toolColors']);
+  } };
+  registerMenuItem('View', colorsItem);
+  colorsItem.el.setAttribute('role', 'menuitemcheckbox');
   watchToolbarLabels(toolbar);
   // Remember the zoom in use for 'Last used' (debounced: zooming emits many events).
   let timer = 0;
@@ -184,5 +200,5 @@ export function initPrefs({ registerMenuItem, setTheme, toolbar }) {
       save('view.lastZoom', lastZoom);
     }, 400);
   });
-  return loadPrefs().then(() => setToolLabels(cache['ui.toolLabels']));
+  return loadPrefs().then(() => { setToolLabels(cache['ui.toolLabels']); setToolColors(cache['ui.toolColors']); });
 }
