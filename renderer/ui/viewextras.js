@@ -164,10 +164,12 @@ export async function printPages(tab, { indices, copies = 1, scaling = 'fit', an
 }
 
 // Unsaved overlay objects (tab.objects) burnt into a temporary pdf.js copy of the document with
-// the core flattenObjects. The caller destroys `tmp` when done.
+// the core flattenObjects, which draws every type the app creates (notes and text markups with
+// the same code as their saved appearances, annots.js). A type it does not know is left out with a
+// console warning rather than failing the print. The caller destroys `tmp` when done.
 async function flattenedCopy(tab) {
   const { flattenObjects } = await import('../../src/core/index.js');
-  const bytes = await flattenObjects(tab.bytes.slice(), tab.objects.map((o) => structuredClone(o)));
+  const bytes = await flattenObjects(tab.bytes.slice(), tab.objects.map((o) => structuredClone(o)), { skipUnknown: true });
   const V = new URL('./vendor/pdfjs/', document.baseURI).href; // same resources as viewer.js
   const tmp = viewer.pdfjs.getDocument({ data: bytes, password: tab.password ?? undefined, cMapUrl: V + 'cmaps/', cMapPacked: true, standardFontDataUrl: V + 'standard_fonts/',
     wasmUrl: V + 'wasm/', iccUrl: V + 'iccs/', isEvalSupported: false, enableScripting: false });

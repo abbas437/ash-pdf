@@ -3,11 +3,11 @@
 // the same code as flattenObjects (annotate.js) on a scratch page, then copied in as Form XObjects.
 import {
   PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFNumber, PDFString, PDFHexString, PDFStream,
-  PDFRawStream, PDFObjectCopier, decodePDFRawStream, BlendMode, rgb,
+  PDFRawStream, PDFObjectCopier, decodePDFRawStream, rgb,
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError } from './internal.js';
-import { flattenObjects, measureText, standardFontName } from './annotate.js';
+import { flattenObjects, measureText, standardFontName, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
 
 const N = (s) => PDFName.of(s);
@@ -21,9 +21,7 @@ const SUBTYPE = {
 };
 const MARKUP = new Set(['Square', 'Circle', 'Line', 'Ink', 'PolyLine', 'FreeText', 'Stamp', 'Highlight', 'Text', 'Underline', 'StrikeOut', 'Squiggly']);
 const MARKUP_TYPE = { Underline: 'underline', StrikeOut: 'strikeout', Squiggly: 'squiggly' };
-const FLATTENABLE = new Set(['rect', 'ellipse', 'line', 'arrow', 'ink', 'polyline', 'text', 'callout', 'stamp', 'image', 'highlight']);
 const STATUS = { accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled', completed: 'Completed', none: 'None' };
-const DEFAULT_COLOR = { note: '#ffd400', underline: '#00a000', strikeout: '#e00000', squiggly: '#00a000', textHighlight: '#ffff00' };
 const EXTRA_KEY = 'ASHStudio'; // private: JSON of style fields the standard keys cannot carry
 const IMAGE_KEY = 'ASHImage'; // private: original image bytes of an image stamp
 
@@ -162,48 +160,6 @@ function shift(o, dx, dy) {
 
 // ---------------------------------------------------------------- appearance streams
 
-/** Draw the types flattenObjects does not know (note icon, text markups) on a scratch page. */
-function drawCustom(page, o, H) {
-  const svg = (d, opts) => page.drawSvgPath(d, { x: 0, y: H, ...opts });
-  const color = parseColor(o.color, DEFAULT_COLOR[o.type]) || rgb(0, 0, 0);
-  const opacity = Math.min(1, Math.max(0, num(o.opacity, 1)));
-  const P = (x, y) => `${r4(x)} ${r4(y)}`;
-  if (o.type === 'note') {
-    const sx = num(o.w, 20) / 20;
-    const sy = num(o.h, 20) / 20;
-    const p = (x, y) => P(o.x + x * sx, o.y + y * sy);
-    svg(`M ${p(2, 1)} L ${p(18, 1)} L ${p(19, 2)} L ${p(19, 14)} L ${p(18, 15)} L ${p(9, 15)} L ${p(4, 19)} L ${p(5, 15)} L ${p(2, 15)} L ${p(1, 14)} L ${p(1, 2)} Z`,
-      { color, borderColor: rgb(0.2, 0.2, 0.2), borderWidth: 0.75, opacity, borderOpacity: opacity });
-    svg([5, 8, 11].map((y) => `M ${p(4, y)} L ${p(16, y)}`).join(' '), { borderColor: rgb(0.2, 0.2, 0.2), borderWidth: 1, borderOpacity: opacity });
-    return;
-  }
-  for (const q of o.quads) {
-    const [tlx, tly, trx, try_, blx, bly, brx, bry] = q;
-    const hgt = Math.hypot(tlx - blx, tly - bly) || 1;
-    const ux = (tlx - blx) / hgt; // unit vector from bottom edge toward top edge
-    const uy = (tly - bly) / hgt;
-    const t = num(o.strokeWidth, Math.max(0.5, hgt / 14));
-    if (o.type === 'textHighlight') {
-      svg(`M ${P(tlx, tly)} L ${P(trx, try_)} L ${P(brx, bry)} L ${P(blx, bly)} Z`, { color, opacity, blendMode: BlendMode.Multiply });
-    } else if (o.type === 'underline') {
-      svg(`M ${P(blx + (ux * t) / 2, bly + (uy * t) / 2)} L ${P(brx + (ux * t) / 2, bry + (uy * t) / 2)}`, { borderColor: color, borderWidth: t, borderOpacity: opacity });
-    } else if (o.type === 'strikeout') {
-      svg(`M ${P((tlx + blx) / 2, (tly + bly) / 2)} L ${P((trx + brx) / 2, (try_ + bry) / 2)}`, { borderColor: color, borderWidth: t, borderOpacity: opacity });
-    } else {
-      const len = Math.hypot(brx - blx, bry - bly) || 1;
-      const vx = (brx - blx) / len;
-      const vy = (bry - bly) / len;
-      const step = hgt / 6;
-      let d = '';
-      for (let s = 0, i = 0; s <= len; s += step, i++) {
-        const up = i % 2 ? step : 0;
-        d += `${i ? 'L' : 'M'} ${P(blx + vx * s + ux * (up + t / 2), bly + vy * s + uy * (up + t / 2))} `;
-      }
-      svg(d, { borderColor: color, borderWidth: t, borderOpacity: opacity });
-    }
-  }
-}
-
 function toFlattenObjects(o, page) {
   if (o.type === 'ink' || o.type === 'polyline') return inkPaths(o).map((points) => ({ ...o, page, type: 'ink', points, paths: undefined }));
   return [{ ...o, page }];
@@ -231,12 +187,9 @@ async function buildAppearances(doc, items) {
   const tmp = await PDFDocument.create();
   const flat = [];
   items.forEach(({ o, bbox }, i) => {
-    const W = Math.max(bbox.w, 1);
-    const H = Math.max(bbox.h, 1);
-    const page = tmp.addPage([W, H]);
+    tmp.addPage([Math.max(bbox.w, 1), Math.max(bbox.h, 1)]);
     const so = shift(o, -bbox.x, -bbox.y);
-    if (FLATTENABLE.has(o.type)) flat.push(...toFlattenObjects(so, i));
-    else drawCustom(page, so, H);
+    flat.push(...toFlattenObjects(so, i));
   });
   let bytes = await tmp.save();
   if (flat.length) bytes = await flattenObjects(bytes, flat);
