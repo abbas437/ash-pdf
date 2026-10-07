@@ -10,6 +10,7 @@ import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parse
 import { flattenObjects, measureText, standardFontName, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
 import { cloudArc } from './cloud.js';
+import { stampShape } from './stamps.js';
 
 const N = (s) => PDFName.of(s);
 const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
@@ -347,6 +348,7 @@ function typeEntries(o, g, lay) {
         e.Name = N(String(o.text ?? '').replace(/[^A-Za-z0-9]/g, '') || 'Draft');
         extra.text = o.text ?? '';
         if (o.subtext) extra.subtext = String(o.subtext);
+        if (o.shape && o.shape !== 'rect') extra.shape = String(o.shape);
       } else {
         e.Name = N('Image');
         extra.kind = 'image';
@@ -930,6 +932,7 @@ function toObject(doc, en, g) {
         o.type = 'stamp';
         o.text = extra.text ?? (nameOf(dict.lookup(N('Name'))) || 'Draft').replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase();
         if (extra.subtext) o.subtext = extra.subtext;
+        o.shape = stampShape(extra.shape);
         o.color = C;
         o.borderWidth = width;
       }

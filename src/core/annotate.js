@@ -477,7 +477,14 @@ class PagePainter {
         const capH = m.heightOfFontAtSize(1, { descender: false });
         const L = stampLayout({ ...o, borderWidth: bw, subtext: sub }, font.widthOfTextAtSize(text || ' ', 1), sub ? font.widthOfTextAtSize(sub, 1) : 0, capH);
         this.rotated(o.x + o.w / 2, o.y + o.h / 2, num(o.rotation, 0), () => {
-          if (bw > 0) {
+          if (L.rings) {
+            for (const r of L.rings) this.page.drawEllipse({ x: L.cx, y: this.uy(L.cy), xScale: Math.max(0, r.rx), yScale: Math.max(0, r.ry), borderColor: color, borderWidth: r.width, borderOpacity: opacityOf(o.opacity) });
+          } else if (bw > 0 && L.corner) {
+            const x0 = o.x + bw / 2, y0 = o.y + bw / 2, x1 = o.x + o.w - bw / 2, y1 = o.y + o.h - bw / 2;
+            const r = Math.max(0, Math.min(L.corner, (x1 - x0) / 2, (y1 - y0) / 2));
+            this.svg(`M ${f(x0 + r)} ${f(y0)} L ${f(x1 - r)} ${f(y0)} A ${f(r)} ${f(r)} 0 0 1 ${f(x1)} ${f(y0 + r)} L ${f(x1)} ${f(y1 - r)} A ${f(r)} ${f(r)} 0 0 1 ${f(x1 - r)} ${f(y1)} L ${f(x0 + r)} ${f(y1)} A ${f(r)} ${f(r)} 0 0 1 ${f(x0)} ${f(y1 - r)} L ${f(x0)} ${f(y0 + r)} A ${f(r)} ${f(r)} 0 0 1 ${f(x0 + r)} ${f(y0)} Z`,
+              { borderColor: color, borderWidth: bw, borderOpacity: opacityOf(o.opacity) });
+          } else if (bw > 0) {
             this.page.drawRectangle({
               x: o.x + bw / 2,
               y: this.uy(o.y + o.h - bw / 2),

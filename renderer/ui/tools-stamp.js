@@ -13,11 +13,12 @@ import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, resizeBox, getAuthor } from './annotations.js';
-import { STANDARD_STAMPS, DYNAMIC_STAMPS, stampSubtext, stampLayout } from '../../src/core/stamps.js';
+import { STANDARD_STAMPS, DYNAMIC_STAMPS, stampShape, stampSubtext, stampLayout } from '../../src/core/stamps.js';
 import { DATE_FORMATS, removeBackground } from '../../src/core/siglib.js';
 import { loadImage } from './signatures.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+const SHAPES = [['rect', 'Rectangle'], ['rounded', 'Rounded'], ['circle', 'Circle'], ['ellipse', 'Ellipse']];
 const COLOURS = [['#1b7f3b', 'Green'], ['#d62828', 'Red'], ['#1d4ed8', 'Blue'], ['#d97706', 'Orange']];
 const STAMP_FONT_PT = 14;
 const STAMP_BORDER = 2;
@@ -25,10 +26,10 @@ const CAP_H = 0.718;          // Helvetica-Bold cap height per unit font size (a
 const MIN_PX = 3;             // smaller drags are clicks
 const IMAGE_FRAC = 0.4;       // default image width, fraction of page width
 
-const opt = { stamp: STANDARD_STAMPS[0], text: 'APPROVED', color: '#1b7f3b', rotation: 0, addDate: false, imgOpacity: 1, imgRotation: 0,
+const opt = { stamp: STANDARD_STAMPS[0], text: 'APPROVED', color: '#1b7f3b', shape: 'rect', rotation: 0, addDate: false, imgOpacity: 1, imgRotation: 0,
   dyn: { dateFormat: 'YYYY-MM-DD', showAuthor: true, showDate: true, showTime: false } };
-const LIB = 'stamp', LAST_KEY = 'stamps.last', DYN_KEY = 'stamps.dynamic';
-let custom = [];             // [{id, text, color, borderWidth, name, order}] from the library (kind 'stamp')
+const LIB = 'stamp', LAST_KEY = 'stamps.last', DYN_KEY = 'stamps.dynamic', SHAPE_KEY = 'stamps.shape';
+let custom = [];             // [{id, text, color, borderWidth, shape, name, order}] from the library (kind 'stamp')
 let pending = null;           // armed image: {bytes, mime, url, nw, nh, frac, width?, extra?, companions?, onPlaced?}
 let shiftHeld = false;
 let app = null;
@@ -50,11 +51,16 @@ function textWidth1(text) {
   measureCtx.font = 'bold 100px Helvetica, Arial, "Liberation Sans", sans-serif';
   return measureCtx.measureText(text || ' ').width / 100;
 }
-/** Default stamp box for `text` (about 14 pt type inside a 2 pt border). */
-function stampSize(text, fontPt = STAMP_FONT_PT, sub = '') {
+/** Default stamp box for `text` (about 14 pt type inside a 2 pt border; round shapes leave room for the rings). */
+function stampSize(text, fontPt = STAMP_FONT_PT, sub = '', shape = 'rect') {
   const pad = STAMP_BORDER + 4;
-  if (sub) return { w: Math.max(textWidth1(text) * fontPt, textWidth1(sub) * fontPt * 0.6) + 2 * pad + 8, h: (CAP_H * fontPt) / 0.6 + 2 * pad };
-  return { w: textWidth1(text) * fontPt + 2 * pad + 8, h: CAP_H * fontPt + 2 * pad + 8 };
+  const z = sub
+    ? { w: Math.max(textWidth1(text) * fontPt, textWidth1(sub) * fontPt * 0.6) + 2 * pad + 8, h: (CAP_H * fontPt) / 0.6 + 2 * pad }
+    : { w: textWidth1(text) * fontPt + 2 * pad + 8, h: CAP_H * fontPt + 2 * pad + 8 };
+  if (shape === 'circle') { const d = Math.min(180, Math.max(84, z.w * 1.1 + 24)); return { w: d, h: d }; }
+  if (shape === 'ellipse') { const w = z.w * 1.3 + 24; return { w, h: Math.max(z.h * 1.9 + 24, w * 0.5) }; }
+  if (shape === 'rounded') return { w: z.w + 6, h: z.h + 4 };
+  return z;
 }
 
 // ---------------------------------------------------------------- object types
@@ -75,10 +81,12 @@ const stampType = {
     const bw = Number.isFinite(o.borderWidth) ? o.borderWidth : 3;
     const color = o.color ?? '#c00000';
     const g = svgEl('g', { class: 'ann-stamp', transform: rotAttr(o), opacity: Number.isFinite(o.opacity) ? o.opacity : null }, parent);
-    if (bw > 0) svgEl('rect', { x: o.x + bw / 2, y: o.y + bw / 2, width: Math.max(0, o.w - bw), height: Math.max(0, o.h - bw), rx: 3, fill: 'none', stroke: color, 'stroke-width': bw }, g);
     const text = String(o.text ?? '').replace(/\n/g, ' ');
     const sub = String(o.subtext ?? '').replace(/\n/g, ' ');
     const L = stampLayout({ ...o, borderWidth: bw, subtext: sub }, textWidth1(text), sub ? textWidth1(sub) : 0, CAP_H);
+    g.dataset.shape = L.shape;
+    if (L.rings) for (const r of L.rings) svgEl('ellipse', { cx: L.cx, cy: L.cy, rx: Math.max(0, r.rx), ry: Math.max(0, r.ry), fill: 'none', stroke: color, 'stroke-width': r.width }, g);
+    else if (bw > 0) svgEl('rect', { x: o.x + bw / 2, y: o.y + bw / 2, width: Math.max(0, o.w - bw), height: Math.max(0, o.h - bw), rx: L.corner || 3, fill: 'none', stroke: color, 'stroke-width': bw }, g);
     const line = (str, size, y) => { svgEl('text', { x: o.x + o.w / 2, y, 'text-anchor': 'middle', 'font-family': 'Helvetica, Arial, "Liberation Sans", sans-serif', 'font-weight': 'bold', 'font-size': size, fill: color }, g).textContent = str; };
     line(text, L.size, L.base);
     if (sub) line(sub, L.subSize, L.subBase);
@@ -118,7 +126,7 @@ const imageType = {
 // ---------------------------------------------------------------- stamp tool
 function stampObjects(box, page, subtext = '') {
   const base = { type: 'stamp', page, color: opt.color, rotation: opt.rotation, borderWidth: opt.stamp.borderWidth ?? STAMP_BORDER };
-  const list = [{ ...base, ...box, text: opt.text, ...(subtext ? { subtext } : {}) }];
+  const list = [{ ...base, ...box, text: opt.text, ...(subtext ? { subtext } : {}), ...(opt.shape !== 'rect' ? { shape: opt.shape } : {}) }];
   if (opt.addDate) {
     const text = `DATE: ${today()}`;
     const d = stampSize(text, STAMP_FONT_PT * 0.7);
@@ -160,7 +168,7 @@ function stampCreator() {
       const sub = opt.stamp.dynamic ? stampSubtext(new Date(), { ...opt.dyn, author: await getAuthor() }) : '';
       const scale = viewer.scale(tab);
       if (Math.max(b.w, b.h) * scale < MIN_PX || Math.min(b.w, b.h) <= 0) { // click: default size centred on the pointer
-        const s = stampSize(opt.text, STAMP_FONT_PT, sub), P = pageBox(tab, page);
+        const s = stampSize(opt.text, STAMP_FONT_PT, sub, opt.shape), P = pageBox(tab, page);
         b = { x: Math.min(Math.max(0, start.x - s.w / 2), Math.max(0, P.width - s.w)), y: Math.min(Math.max(0, start.y - s.h / 2), Math.max(0, P.height - s.h)), ...s };
       }
       addObjects(tab, stampObjects(b, page, sub));
@@ -187,32 +195,41 @@ async function loadCustom() {
     if (it?.bytes) { c.bytes = new Uint8Array(it.bytes); c.url = URL.createObjectURL(new Blob([c.bytes], { type: 'image/png' })); }
   }
 }
+function setShape(v) {
+  opt.shape = stampShape(v);
+  window.api.settingsSet(SHAPE_KEY, opt.shape).catch(() => {});
+}
+/** Make `s` the active stamp; a custom text stamp brings its stored shape. */
 function useStamp(s) {
   opt.stamp = s; opt.text = s.text; opt.color = s.color;
+  if (s.custom) setShape(s.shape);
   window.api.settingsSet(LAST_KEY, s.id).catch(() => {});
   bus.emit('stamp:changed', { id: s.id });
 }
 function preview(s) {
   if (s.kind === 'image') return h('img.stamp-preview.stamp-preview-img', { src: s.url ?? '', alt: '', 'aria-hidden': 'true' });
   const sub = s.dynamic ? 'by Name · Date' : '';
-  const z = stampSize(s.text, STAMP_FONT_PT, sub);
+  const shape = s.custom ? stampShape(s.shape) : opt.shape;
+  const z = stampSize(s.text, STAMP_FONT_PT, sub, shape);
   const svg = svgEl('svg', { class: 'stamp-preview', viewBox: `0 0 ${z.w} ${z.h}`, 'aria-hidden': 'true' });
-  stampType.render({ x: 0, y: 0, ...z, text: s.text, subtext: sub, color: s.color, borderWidth: s.borderWidth ?? STAMP_BORDER }, svg);
+  stampType.render({ x: 0, y: 0, ...z, text: s.text, subtext: sub, color: s.color, borderWidth: s.borderWidth ?? STAMP_BORDER, shape }, svg);
   return svg;
 }
 async function createStampDialog(item) {
   const text = h('input.input#stamp-new-text', { type: 'text', maxlength: '60', value: item?.text ?? '', 'aria-label': 'Stamp text' });
   const colour = h('select.input.stamp-new-colour', { 'aria-label': 'Colour' }, ...COLOURS.map(([hex, n]) => h('option', { value: hex, selected: hex === (item?.color ?? COLOURS[0][0]) }, n)));
   const border = h('input.stamp-new-border', { type: 'checkbox', checked: item ? item.borderWidth > 0 : true });
+  const cur = item ? stampShape(item.shape) : opt.shape;
+  const shape = h('select.input.stamp-new-shape', { 'aria-label': 'Shape' }, ...SHAPES.map(([v, n]) => h('option', { value: v, selected: v === cur }, n)));
   const v = await app.showDialog({
     title: item ? 'Rename stamp' : 'Create stamp',
-    body: h('div.pt-form', {}, h('label.field', {}, h('span', {}, 'Text (one line)'), text), h('label.field', {}, h('span', {}, 'Colour'), colour), h('label.opt', {}, border, h('span', {}, 'Border'))),
+    body: h('div.pt-form', {}, h('label.field', {}, h('span', {}, 'Text (one line)'), text), h('label.field', {}, h('span', {}, 'Colour'), colour), h('label.field', {}, h('span', {}, 'Shape'), shape), h('label.opt', {}, border, h('span', {}, 'Border'))),
     buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: item ? 'Save' : 'Create', value: 'ok', primary: true, validate: () => !!text.value.trim() }],
     initialFocus: '#stamp-new-text',
   });
   if (v !== 'ok') return null;
   const t = text.value.trim().replace(/\s+/g, ' ').toUpperCase();
-  const meta = { name: t, text: t, color: colour.value, borderWidth: border.checked ? STAMP_BORDER : 0, order: item?.order ?? custom.length };
+  const meta = { name: t, text: t, color: colour.value, borderWidth: border.checked ? STAMP_BORDER : 0, shape: stampShape(shape.value), order: item?.order ?? custom.length };
   const id = item?.id ?? `st${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
   await window.api.libraryPut(LIB, id, item ? { meta } : { meta, bytes: Uint8Array.of(0) });
   await loadCustom();
@@ -315,7 +332,15 @@ function stampOptions(c) {
   const btn = h('button.btn.opt-stamp-pick', { type: 'button', 'aria-haspopup': 'dialog', title: 'Choose a stamp', onclick: () => (palette ? closePalette() : openPalette(btn)) });
   const show = () => { btn.replaceChildren(preview(opt.stamp), h('span.stamp-label', {}, opt.stamp.name ?? opt.stamp.text), h('span', { 'aria-hidden': 'true' }, '▾')); };
   show();
-  const off = bus.on('stamp:changed', () => { if (!btn.isConnected) { off?.(); return; } show(); for (const b of sw.children) b.setAttribute('aria-pressed', String(b.dataset.color === opt.color)); });
+  const pressShape = () => { for (const b of shp.children) b.setAttribute('aria-pressed', String(b.dataset.shape === opt.shape)); };
+  const off = bus.on('stamp:changed', () => { if (!btn.isConnected) { off?.(); return; } show(); pressShape(); for (const b of sw.children) b.setAttribute('aria-pressed', String(b.dataset.color === opt.color)); });
+  const shp = h('div.opt-seg.opt-stamp-shapes', { role: 'group', 'aria-label': 'Stamp shape' });
+  for (const [v, name] of SHAPES) {
+    shp.append(h('button.tb-btn.opt-stamp-shape', {
+      type: 'button', title: name, 'aria-label': `${name} stamp`, 'aria-pressed': String(opt.shape === v), dataset: { shape: v }, html: SHAPE_ICONS[v],
+      onclick: () => { setShape(v); pressShape(); show(); patchSelected('stamp', { shape: v }); },
+    }));
+  }
   const sw = h('div.opt-seg.opt-stamp-colours', { role: 'group', 'aria-label': 'Stamp colour' });
   for (const [hex, name] of COLOURS) {
     sw.append(h('button.tb-btn.opt-swatch', {
@@ -325,7 +350,7 @@ function stampOptions(c) {
   }
   const rot = h('input.opt-stamp-rotation', { type: 'range', min: '-45', max: '45', step: '1', value: String(opt.rotation), oninput: (e) => { opt.rotation = Number(e.target.value); patchSelected('stamp', { rotation: opt.rotation }); } });
   const date = h('input.opt-stamp-date', { type: 'checkbox', checked: opt.addDate, onchange: (e) => { opt.addDate = e.target.checked; } });
-  c.append(h('span.opt.stamp-pick-wrap', {}, h('span', {}, 'Stamp'), btn), sw, h('label.opt', {}, h('span', {}, 'Rotation'), rot), h('label.opt', {}, date, h('span', {}, 'Add date')));
+  c.append(h('span.opt.stamp-pick-wrap', {}, h('span', {}, 'Stamp'), btn), sw, shp, h('label.opt', {}, h('span', {}, 'Rotation'), rot), h('label.opt', {}, date, h('span', {}, 'Add date')));
 }
 
 // ---------------------------------------------------------------- image tool
@@ -396,16 +421,25 @@ function imageOptions(c) {
 }
 
 // ---------------------------------------------------------------- init
+const shapeIcon = (inner) => `<svg class="icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true" focusable="false">${inner}</svg>`;
+const SHAPE_ICONS = {
+  rect: shapeIcon('<rect x="3" y="7" width="18" height="10"/>'),
+  rounded: shapeIcon('<rect x="3" y="7" width="18" height="10" rx="4"/>'),
+  circle: shapeIcon('<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="6"/>'),
+  ellipse: shapeIcon('<ellipse cx="12" cy="12" rx="10" ry="6.5"/><ellipse cx="12" cy="12" rx="7" ry="3.8"/>'),
+};
 const STAMP_ICON = '<svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="7" width="18" height="10" rx="1.5"/><path d="M7 12h10"/></svg>';
 export function initStampTools(a) {
   app = a;
   annotations.registerObjectType('stamp', stampType);
   annotations.registerObjectType('image', imageType);
   const c = stampCreator();
-  Promise.all([window.api.settingsGet(LAST_KEY).catch(() => null), window.api.settingsGet(DYN_KEY).catch(() => null), loadCustom()]).then(([last, dyn]) => {
+  Promise.all([window.api.settingsGet(LAST_KEY).catch(() => null), window.api.settingsGet(DYN_KEY).catch(() => null), loadCustom(), window.api.settingsGet(SHAPE_KEY).catch(() => null)]).then(([last, dyn, , shape]) => {
     if (dyn && typeof dyn === 'object') Object.assign(opt.dyn, dyn);
+    opt.shape = stampShape(shape);
     const s = allStamps().find((x) => x.id === last);
-    if (s && s.kind !== 'image') { opt.stamp = s; opt.text = s.text; opt.color = s.color; bus.emit('stamp:changed', { id: s.id }); }
+    if (s && s.kind !== 'image') { opt.stamp = s; opt.text = s.text; opt.color = s.color; if (s.custom) opt.shape = stampShape(s.shape); }
+    bus.emit('stamp:changed', { id: opt.stamp.id });
   });
   registerTool({ id: 'stamp', label: 'Stamp', icon: STAMP_ICON, shortcut: 'S', cursor: 'crosshair', options: [stampOptions], onPointerDown: c.onPointerDown, onPointerMove: c.onPointerMove, onPointerUp: c.onPointerUp, onDeactivate: () => { closePalette(); c.cancel(activeTab()); } });
   registerTool({ id: 'image', label: 'Image (PNG, JPEG)', icon: 'image', shortcut: 'I', cursor: 'copy', options: [imageOptions], ...imageTool });
