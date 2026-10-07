@@ -284,6 +284,101 @@ try {
   const opened = await app.evaluate(() => globalThis.__opened);
   expect('shell.openExternal https', JSON.stringify(opened), JSON.stringify(opened) === '["https://example.com/a?b=1"]');
 
+  // ---- windows: New window / Open in new window / files from a second instance
+  const winFlags = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => {
+    const p = w.webContents.getLastWebPreferences();
+    return { sandbox: p.sandbox, contextIsolation: p.contextIsolation, nodeIntegration: p.nodeIntegration };
+  }));
+  const winCount = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
+  const titles = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.getTitle()).sort());
+  const appReady = (page) => page.waitForFunction(() => window.ashStudio?.state, null, { timeout: 30000 });
+  const hasTab = (page, name) => page.waitForFunction((n) => window.ashStudio?.state.tabs.some((t) => t.name === n && t.view), name, { timeout: 30000 });
+  const watch = (page) => {
+    page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+    page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
+  };
+  const winPdf = async (name) => { const p = join(tmp, name); await writeFile(p, pdfBytes); return p; };
+  const secondInstance = (p) => app.evaluate(({ app: a }, [p, root]) => { a.emit('second-instance', {}, [process.execPath, root, p], root); }, [p, root]);
+  const focusByTitle = (t) => app.evaluate(({ BrowserWindow }, t) => {
+    const w = BrowserWindow.getAllWindows().find((x) => x.getTitle().startsWith(t));
+    w.focus(); w.emit('focus'); // xvfb has no window manager to report focus changes
+  }, t);
+  const windowsLeft = (n) => app.evaluate(({ BrowserWindow }, n) => new Promise((ok, no) => {
+    const end = Date.now() + 10000;
+    const tick = () => (BrowserWindow.getAllWindows().length === n ? ok()
+      : Date.now() > end ? no(new Error(`expected ${n} windows, have ${BrowserWindow.getAllWindows().length}`)) : setTimeout(tick, 50));
+    tick();
+  }), n);
+  const closeByTitle = (t) => app.evaluate(({ BrowserWindow }, t) => BrowserWindow.getAllWindows().find((x) => x.getTitle().startsWith(t)).close(), t);
+
+  step = 'windows: Ctrl+N opens a second window with the same security settings';
+  expect('window count before', await winCount(), (await winCount()) === 1);
+  let nextWin = app.waitForEvent('window', { timeout: 30000 });
+  await win.locator('body').press('Control+n');
+  const win2 = await nextWin;
+  watch(win2);
+  await appReady(win2);
+  let flags = await winFlags();
+  expect('webPreferences of every window', JSON.stringify(flags), flags.length === 2
+    && flags.every((f) => f.sandbox === true && f.contextIsolation === true && f.nodeIntegration === false));
+  expect('no node in the second page', 'require', await win2.evaluate(() => typeof window.require + typeof window.process) === 'undefinedundefined');
+
+  step = 'windows: IPC from the second window (open, read, title per window)';
+  const second = await winPdf('second.pdf');
+  await app.evaluate(({ dialog }, d) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [d] }); }, second);
+  r = await win2.evaluate(() => window.api.openFiles({}).then((f) => f.map((x) => x.name).join()));
+  expect('openFiles in window 2', r, r === 'second.pdf');
+  r = await win2.evaluate((p) => window.api.readFile(p).then((b) => b.length), second);
+  expect('readFile in window 2', r, r === pdfBytes.length);
+  await call('setTitle', 'one');
+  await win2.evaluate(() => window.api.setTitle('two'));
+  let t = await titles();
+  expect('per-window titles', JSON.stringify(t), t[0].startsWith('one') && t[1].startsWith('two'));
+
+  step = 'windows: Open in new window opens the chosen PDF as a tab in a new window';
+  nextWin = app.waitForEvent('window', { timeout: 30000 });
+  r = await call('openInNewWindow');
+  expect('openInNewWindow', r, r === 'ok:true');
+  const win3 = await nextWin;
+  watch(win3);
+  await hasTab(win3, 'second.pdf');
+  expect('window count', await winCount(), (await winCount()) === 3);
+  await win3.evaluate(() => window.api.setTitle('three'));
+  await closeByTitle('three');
+  await windowsLeft(2);
+
+  step = "windows: second instance, open.target 'tab' -> tab in the focused window";
+  r = await call('settingsSet', 'open.target', 'tab');
+  expect('settingsSet open.target', r, r === 'ok:true');
+  await focusByTitle('two');
+  await secondInstance(await winPdf('third.pdf'));
+  await hasTab(win2, 'third.pdf');
+  expect('window count after second instance (tab)', await winCount(), (await winCount()) === 2);
+  r = await win.evaluate(() => window.ashStudio.state.tabs.some((x) => x.name === 'third.pdf'));
+  expect('third.pdf not in window 1', r, r === false);
+
+  step = "windows: second instance, open.target 'window' -> new window";
+  await call('settingsSet', 'open.target', 'window');
+  nextWin = app.waitForEvent('window', { timeout: 30000 });
+  await secondInstance(await winPdf('fourth.pdf'));
+  const win4 = await nextWin;
+  watch(win4);
+  await hasTab(win4, 'fourth.pdf');
+  flags = await winFlags();
+  expect('webPreferences after second instance', JSON.stringify(flags), flags.length === 3
+    && flags.every((f) => f.sandbox === true && f.contextIsolation === true && f.nodeIntegration === false));
+  await win4.evaluate(() => window.api.setTitle('four'));
+  await closeByTitle('four');
+  await call('settingsSet', 'open.target', undefined);
+
+  step = 'windows: closing the second window leaves the first working';
+  await closeByTitle('third.pdf'); // window 2's title follows its active tab
+  await windowsLeft(1);
+  r = await call('readFile', pdfPath);
+  expect('readFile in window 1 after close', r, r === `ok:${JSON.stringify({ bytes: pdfBytes.length })}`);
+  await secondInstance(await winPdf('fifth.pdf'));
+  await hasTab(win, 'fifth.pdf');
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');

@@ -16,6 +16,7 @@ import { constants as fsConstants, existsSync, mkdirSync, readFileSync, renameSy
 import { lstat, mkdir, open, opendir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerOfficeIpc } from './office.js'; // office conversions
 
 const APP_NAME = 'ASH PDF Studio';
@@ -111,9 +112,12 @@ async function atomicWrite(target, bytes) {
 }
 
 // --- Launch files (argv / second instance / macOS open-file) ----------------------------------
-let mainWindow = null;
-let rendererReady = false; // true once the page has collected getLaunchFiles()
-const pendingFiles = [];
+// Every app window shares one session, one app:// protocol, one set of IPC handlers and the same file
+// grants (all windows are the same trusted page, so per-window grants would add no isolation).
+// Per window: `ready` (the page has collected getLaunchFiles()) and `pending` (files waiting for that).
+const appWindows = new Map(); // BrowserWindow -> { ready: boolean, pending: string[] }
+let mainWindow = null; // the last-focused app window (target for files from the OS; office.js reads it)
+const launchFiles = []; // files that arrived before the first window exists
 
 function pdfPathsFromArgv(argv, cwd) {
   // Packaged: argv = [exe, ...args]; dev: argv = [electron, '.', ...args]. Chromium may add --flags.
@@ -130,39 +134,57 @@ function pdfPathsFromArgv(argv, cwd) {
   return found;
 }
 
-async function deliverFiles(paths) {
+async function deliverFiles(win, paths) {
   for (const p of paths) grant(p);
-  if (!rendererReady || !mainWindow) {
-    pendingFiles.push(...paths);
+  const state = appWindows.get(win);
+  if (!state) return;
+  if (!state.ready) {
+    state.pending.push(...paths);
     return;
   }
   for (const p of paths) {
     try {
-      mainWindow.webContents.send('app:openFile', await describeFile(p));
+      if (!win.isDestroyed()) win.webContents.send('app:openFile', await describeFile(p));
     } catch (err) {
       console.error('open-file: cannot read', p, err.message);
     }
   }
 }
 
-function focusWindow() {
-  if (!mainWindow) return;
-  if (mainWindow.isMinimized()) mainWindow.restore();
-  mainWindow.show();
-  mainWindow.focus();
+function focusWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
 }
 
-pendingFiles.push(...pdfPathsFromArgv(process.argv, process.cwd()));
-pendingFiles.forEach(grant);
+// Files from the OS (double-click while running, macOS open-file): tabs in the last-focused window,
+// or a new window when the user setting `open.target` is 'window'.
+function openFromOs(paths) {
+  if (!app.isReady()) {
+    paths.forEach(grant);
+    launchFiles.push(...paths);
+    return;
+  }
+  if (!mainWindow || (paths.length && settings.renderer?.['open.target'] === 'window')) {
+    paths.forEach(grant);
+    createAppWindow(paths);
+    return;
+  }
+  focusWindow(mainWindow);
+  deliverFiles(mainWindow, paths);
+}
+
+launchFiles.push(...pdfPathsFromArgv(process.argv, process.cwd()));
+launchFiles.forEach(grant);
 
 app.on('second-instance', (_event, argv, workingDirectory) => {
-  focusWindow();
-  deliverFiles(pdfPathsFromArgv(argv, workingDirectory));
+  openFromOs(pdfPathsFromArgv(argv, workingDirectory));
 });
 
 app.on('open-file', (event, p) => {
   event.preventDefault();
-  if (typeof p === 'string' && extname(p).toLowerCase() === '.pdf') deliverFiles([p]);
+  if (typeof p === 'string' && extname(p).toLowerCase() === '.pdf') openFromOs([p]);
 });
 
 // --- Window ---------------------------------------------------------------------------------
@@ -173,10 +195,17 @@ function visibleBounds(b) {
   return onScreen ? { x: b.x, y: b.y, width: Math.max(900, b.width), height: Math.max(600, b.height) } : null;
 }
 
-function createWindow() {
-  const saved = settings.window ?? {};
-  const bounds = visibleBounds(saved.bounds);
-  mainWindow = new BrowserWindow({
+// Every window is created here, with the same security settings. `files` (already granted) open as tabs
+// once the page has loaded. The first window uses the saved bounds; later ones cascade from the focused one.
+function createAppWindow(files = []) {
+  const first = appWindows.size === 0;
+  const saved = first ? settings.window ?? {} : {};
+  let bounds = visibleBounds(saved.bounds);
+  if (!first && mainWindow && !mainWindow.isDestroyed()) {
+    const b = mainWindow.getNormalBounds();
+    bounds = visibleBounds({ ...b, x: b.x + 30, y: b.y + 30 }) ?? visibleBounds(b);
+  }
+  const win = new BrowserWindow({
     width: 1280,
     height: 800,
     ...(bounds ?? {}),
@@ -196,14 +225,17 @@ function createWindow() {
       spellcheck: false,
     },
   });
-  if (saved.maximized) mainWindow.maximize();
+  const state = { ready: false, pending: [...files] };
+  appWindows.set(win, state);
+  if (!mainWindow || mainWindow.isDestroyed()) mainWindow = win;
+  if (saved.maximized) win.maximize();
 
-  const wc = mainWindow.webContents;
+  const wc = win.webContents;
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
   wc.on('will-navigate', (event, url) => { if (url !== START_URL) event.preventDefault(); });
   wc.on('will-redirect', (event) => event.preventDefault());
   wc.on('will-attach-webview', (event) => event.preventDefault());
-  wc.on('did-start-loading', () => { rendererReady = false; });
+  wc.on('did-start-loading', () => { state.ready = false; });
   if (isDev) {
     wc.on('before-input-event', (event, input) => {
       if (input.type === 'keyDown' && input.key === 'F12') {
@@ -213,23 +245,28 @@ function createWindow() {
     });
   }
   // The page <title> must not override the document title set through api.setTitle.
-  mainWindow.on('page-title-updated', (event) => event.preventDefault());
-  mainWindow.once('ready-to-show', () => mainWindow.show());
+  win.on('page-title-updated', (event) => event.preventDefault());
+  win.once('ready-to-show', () => win.show());
+  win.on('focus', () => { mainWindow = win; });
   // The renderer sets a beforeunload guard while there are unsaved changes; without this handler Electron would
   // silently refuse to close the window. Ask the user instead.
-  mainWindow.webContents.on('will-prevent-unload', (event) => {
-    const choice = dialog.showMessageBoxSync(mainWindow, {
+  wc.on('will-prevent-unload', (event) => {
+    const choice = dialog.showMessageBoxSync(win, {
       type: 'warning', buttons: ['Keep working', 'Discard changes and close'], defaultId: 0, cancelId: 0, noLink: true,
       title: 'Unsaved changes', message: 'There are unsaved changes.', detail: 'If you close now, they will be lost.',
     });
     if (choice === 1) event.preventDefault(); // preventDefault = ignore the guard and unload
   });
-  mainWindow.on('close', () => {
-    settings.window = { bounds: mainWindow.getNormalBounds(), maximized: mainWindow.isMaximized() };
+  win.on('close', () => {
+    settings.window = { bounds: win.getNormalBounds(), maximized: win.isMaximized() };
     saveSettings();
   });
-  mainWindow.on('closed', () => { mainWindow = null; });
-  mainWindow.loadURL(START_URL);
+  win.on('closed', () => {
+    appWindows.delete(win);
+    if (mainWindow === win) mainWindow = [...appWindows.keys()].at(-1) ?? null;
+  });
+  win.loadURL(START_URL);
+  return win;
 }
 
 // --- app:// protocol: serve renderer/ and src/ only ------------------------------------------
@@ -267,12 +304,16 @@ async function serveAppFile(request) {
 // --- IPC ------------------------------------------------------------------------------------
 // Every handler first checks the sender is our own top-level page.
 function fromApp(event) {
-  return !!mainWindow && event.sender === mainWindow.webContents && event.senderFrame?.url === START_URL;
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return !!win && appWindows.has(win) && event.sender === win.webContents && event.senderFrame?.url === START_URL;
 }
+// The window whose page made the current handle() call (survives awaits), for dialog parents etc.
+const ipcCaller = new AsyncLocalStorage();
+const callerWindow = () => ipcCaller.getStore() ?? mainWindow;
 function handle(channel, fn) {
   ipcMain.handle(channel, (event, ...args) => {
     if (!fromApp(event)) throw new Error(`${channel}: rejected sender`);
-    return fn(...args);
+    return ipcCaller.run(BrowserWindow.fromWebContents(event.sender), () => fn(...args));
   });
 }
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -402,7 +443,7 @@ async function cacheSet(key, value) {
 }
 function registerAdvancedSearchIpc() {
   handle('dialog:openFolder', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+    const { canceled, filePaths } = await dialog.showOpenDialog(callerWindow(), { properties: ['openDirectory'] });
     if (canceled || !filePaths[0]) return null;
     grantedFolders.add(pathKey(await realpath(filePaths[0])));
     return { path: filePaths[0] };
@@ -421,7 +462,7 @@ function registerIpc() {
   registerAdvancedSearchIpc();
   handle('dialog:open', async (opts = {}) => {
     if (!isPlainObject(opts)) throw new TypeError('dialog:open options must be an object');
-    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    const { canceled, filePaths } = await dialog.showOpenDialog(callerWindow(), {
       properties: opts.multiple ? ['openFile', 'multiSelections'] : ['openFile'],
       filters: cleanFilters(opts.filters),
     });
@@ -443,7 +484,7 @@ function registerIpc() {
     if (opts.defaultPath !== undefined && (typeof opts.defaultPath !== 'string' || opts.defaultPath.length > 1024)) {
       throw new TypeError('defaultPath must be a string');
     }
-    const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+    const { canceled, filePath } = await dialog.showSaveDialog(callerWindow(), {
       defaultPath: opts.defaultPath,
       filters: cleanFilters(opts.filters),
     });
@@ -460,8 +501,9 @@ function registerIpc() {
   });
 
   handle('app:launchFiles', async () => {
-    rendererReady = true;
-    const paths = pendingFiles.splice(0);
+    const state = appWindows.get(callerWindow());
+    state.ready = true;
+    const paths = state.pending.splice(0);
     const files = [];
     for (const p of paths) {
       try { files.push(await describeFile(p)); } catch (err) { console.error('launch file unreadable', p, err.message); }
@@ -470,14 +512,28 @@ function registerIpc() {
   });
 
   handle('app:print', () => new Promise((done) => {
-    mainWindow.webContents.print({ silent: false, printBackground: true }, (ok, reason) => done({ ok, reason: ok ? null : reason }));
+    callerWindow().webContents.print({ silent: false, printBackground: true }, (ok, reason) => done({ ok, reason: ok ? null : reason }));
   }));
 
   handle('app:version', () => app.getVersion());
 
+  handle('app:newWindow', () => { createAppWindow(); return true; });
+
+  // File dialog, then the chosen PDFs open as tabs in a new window. false when cancelled.
+  handle('app:openInNewWindow', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(callerWindow(), {
+      properties: ['openFile', 'multiSelections'],
+      filters: cleanFilters(undefined),
+    });
+    if (canceled || !filePaths.length) return false;
+    filePaths.forEach(grant);
+    createAppWindow(filePaths);
+    return true;
+  });
+
   handle('app:setTitle', (title) => {
     const t = typeof title === 'string' ? title.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 200) : '';
-    mainWindow.setTitle(t ? `${t} — ${APP_NAME}` : APP_NAME);
+    callerWindow().setTitle(t ? `${t} — ${APP_NAME}` : APP_NAME);
   });
 
   handle('shell:showItem', (p) => {
@@ -681,7 +737,7 @@ app.whenReady().then(() => {
   // ---- office conversions (electron/office.js): Word/Excel/PowerPoint <-> PDF through Microsoft Office
   registerOfficeIpc({ handle, dialog, getWindow: () => mainWindow, grant, describeFile, isPackaged: app.isPackaged });
   // ---- end office conversions
-  createWindow();
+  createAppWindow(launchFiles.splice(0));
 });
 
 app.on('window-all-closed', () => app.quit());

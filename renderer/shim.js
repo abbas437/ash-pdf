@@ -138,6 +138,8 @@ if (!window.api) {
       document.title = s ? `${s} — ${APP_NAME}` : APP_NAME;
     },
     async showItem() { return false; },
+    async newWindow() { return false; }, // windows: Electron only
+    async openInNewWindow() { return false; },
     async settingsGet(k) {
       const raw = localStorage.getItem(settingsKey(k));
       return raw == null ? undefined : JSON.parse(raw);
