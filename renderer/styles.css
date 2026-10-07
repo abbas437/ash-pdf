@@ -3,7 +3,7 @@
   --stone: #e9e5db; --stone-2: #f6f4ee; --ink: #16261f; --brass: #a8883f;
   --bg: var(--stone); --surface: var(--stone-2); --surface-2: #fffdf8; --text: var(--ink);
   --muted: #5d6a63; --line: #d3cdbf; --accent: var(--ink); --accent-text: #f6f4ee;
-  --hover: rgba(22, 38, 31, .07); --focus: var(--brass); --viewer-bg: #dcd7cb;
+  --hover: rgba(22, 38, 31, .07); --sig-paper: #fffdf8; --sig-danger: #9b2c1f; --focus: var(--brass); --viewer-bg: #dcd7cb;
   --page-shadow: 0 1px 2px rgba(22,38,31,.18), 0 4px 14px rgba(22,38,31,.10);
   --hl: rgba(255, 214, 0, .45); --hl-current: rgba(242, 130, 20, .6);
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
@@ -12,7 +12,7 @@
 }
 [data-theme="dark"] {
   --bg: #17201c; --surface: #1f2a25; --surface-2: #26332d; --text: #e9e5db; --muted: #a3ada7;
-  --line: #34433c; --accent: #c9a95a; --accent-text: #16261f; --hover: rgba(233,229,219,.08);
+  --line: #34433c; --accent: #c9a95a; --accent-text: #16261f; --hover: rgba(233,229,219,.08); --sig-paper: #ece7da; --sig-danger: #f0907f;
   --viewer-bg: #121916; --page-shadow: 0 2px 12px rgba(0,0,0,.5);
   color-scheme: dark;
 }
@@ -270,6 +270,40 @@ body.img-armed .viewer-host .page { cursor: copy; }
 .sig-dialog .row { display: flex; gap: 8px; align-items: center; }
 .sig-name { flex: 1; }
 .sig-status { margin: 0; min-height: 1.2em; font-size: 12.5px; color: var(--muted); }
+/* Signature library manager (ui/signatures.js) */
+.dialog.sigman-wrap { max-width: min(780px, 94vw); width: 740px; }
+.sigman, .sigman-create, .sigman-pane, .sigman-pw { display: flex; flex-direction: column; gap: 10px; }
+.sigman-list { list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.sigman-item { display: grid; grid-template-columns: 170px 1fr auto; gap: 12px; align-items: center; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+.sigman-item:last-child { border-bottom: 0; }
+.sigman-item:hover { background: var(--hover); }
+.sigman-empty { padding: 18px; color: var(--muted); text-align: center; }
+.sigman-paper { display: grid; place-items: center; background: var(--sig-paper); border: 1px solid var(--line); border-radius: 6px; }
+.sigman-thumb { height: 58px; padding: 4px; }
+.sigman-thumb img { max-width: 100%; max-height: 50px; }
+.sigman-locked { align-self: stretch; justify-self: stretch; display: grid; place-items: center; border-radius: 4px; background: var(--surface); color: var(--muted); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; }
+.sigman-fields { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sigman-fields .row, .sigman-create .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sigman-default { font-size: 12px; font-weight: 600; color: var(--text); padding: 3px 8px; border-radius: 999px; border: 1px solid var(--accent); }
+.sigman-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; max-width: 300px; }
+.sigman-actions .btn, .sigman-fields .btn { padding: 4px 9px; }
+.sigman-actions .btn:disabled { opacity: .45; }
+.sigman-actions .btn.danger { color: var(--sig-danger); }
+.sigman-add { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--muted); }
+.sigman-hint { margin: 0; font-size: 12.5px; color: var(--muted); }
+.sigman-tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); }
+.sigman-tab { padding: 6px 14px; border: 1px solid transparent; border-bottom: 0; border-radius: 6px 6px 0 0; background: none; color: var(--muted); }
+.sigman-tab:hover { background: var(--hover); }
+.sigman-tab[aria-selected="true"] { background: var(--surface-2); color: var(--text); border-color: var(--line); box-shadow: inset 0 2px 0 var(--accent); }
+.sigman-pane .sig-pad { width: 100% !important; height: auto !important; aspect-ratio: 3 / 1; }
+.sigman-type-preview { width: 100%; height: auto; }
+.sigman-pane .sigman-paper { min-height: 120px; padding: 6px; }
+.sigman-checker { background-color: var(--sig-paper); background-image: linear-gradient(45deg, var(--hover) 25%, transparent 25%, transparent 75%, var(--hover) 75%), linear-gradient(45deg, var(--hover) 25%, transparent 25%, transparent 75%, var(--hover) 75%); background-size: 16px 16px; background-position: 0 0, 8px 8px; }
+.sigman-img-preview { max-width: 100%; max-height: 200px; }
+.sigman-grid { display: grid; grid-template-columns: 1fr 160px auto; gap: 10px; align-items: end; }
+.sigman-bw-label { padding-bottom: 6px; color: var(--text); }
+.sigman .sig-note, .sigman-create .sig-note { padding: 8px 10px; border-left: 3px solid var(--accent); background: var(--surface-2); border-radius: 4px; }
+.dialog.sigman-pw-wrap { width: 380px; }
 /* Text tool (ui/tools-text.js) */
 .text-edit-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; z-index: 2; }
 .text-edit-layer[data-view-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
