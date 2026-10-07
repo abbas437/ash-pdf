@@ -252,7 +252,9 @@ and `update` may re-point an `/IRT` as described above.
 ### `flattenAnnotations(pdfBytes, {pages, ids}?) → Promise<Uint8Array>`
 Burns markup annotations (the subtypes above, ours or foreign; `pages` = page indices, `ids` = ids as
 `readAnnotations` reports them; both default to all) into the page content and removes them with
-their popups and replies, then drops unreachable objects. Each one's `/AP /N` (or the `/AS` state of an
+their deps (`source.deps`: popup, `/Text` reply thread, Review state); their `/RT /Group` members are
+burned in too and removed (one unit, §12.5.6.2); other annotations in reply to them (non-`Text`
+replies, `Marked`/older states) stay. Then unreachable objects are dropped. Each one's `/AP /N` (or the `/AS` state of an
 `/N` dictionary) is drawn with `q A cm /X Do Q`, where A maps the form's `/BBox` transformed by its
 `/Matrix` onto `/Rect` (PDF 32000 §12.5.5). Hidden/NoView annotations and ones without an appearance
 are removed without drawing; `/CA` is not re-applied (our appearances already carry the opacity).

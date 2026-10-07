@@ -8,7 +8,9 @@
 // Then, each in a new tab: two foreign annotations on page 3 survive Delete page 1 + Save byte for
 // byte (not rewritten as edited); a save racing the reload that re-imports a flattened annotation
 // (Flatten, page Undo) leaves the mirror in step, so the next save writes no duplicate; Save burns a
-// whiteout and Undo/Redo afterwards neither dirty the tab nor bring the whiteout back to burn again.
+// whiteout and Undo/Redo afterwards neither dirty the tab nor bring the whiteout back to burn again;
+// Flatten, page Undo, page Redo, Save leaves no markup and the square burned in once; deleting the
+// imported square without saving and then Flatten does not burn it back in.
 // Prints "ANNOTS-IMPORT OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
@@ -72,6 +74,13 @@ async function inspect(bytes) {
     else other.push(`${ref}:${sub}:${d.toString()}`);
   }
   return { squares, other: other.sort(), markup: squares.length + other.filter((o) => !/:\/(Link|Widget|Popup):/.test(o)).length };
+}
+
+/** Number of appearances Flatten burned into page 1 (its /ASHFlat* XObjects). */
+async function burned(bytes) {
+  const doc = await PDFDocument.load(bytes);
+  const xo = doc.getPage(0).node.Resources()?.lookup(PDFName.of('XObject'));
+  return xo instanceof PDFDict ? xo.keys().filter((k) => /^\/ASHFlat/.test(String(k))).length : 0;
 }
 
 const server = createServer(async (req, res) => {
@@ -258,6 +267,44 @@ try {
   check(await ev('return !tab.objects.some((o) => o.type === "whiteout");'), 'redo brought the burned whiteout back');
   const w2 = await save();
   check(Buffer.compare(w1, w2) === 0, 'the second save changed the file (whiteout burned again)');
+
+  const flattenVia = async (button) => {
+    await page.click('.menu-btn:text-is("Document")');
+    await page.click('.menu-item[data-id="flatten-annotations"]');
+    await page.waitForSelector('.dialog');
+    const hint = await page.$('.dialog .pt-flat-skip');
+    await page.click(`.dialog button[data-value="${button}"]`);
+    await page.waitForSelector('.dialog', { state: 'detached' });
+    await ev('await new Promise((r) => setTimeout(r, 800));'); // the op (or its no-op) and the reload settle
+    return !!hint;
+  };
+
+  step = 'flatten, page undo, page redo, save: burned in once';
+  await openPdf('redo.pdf', pdf, 1);
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.length === 1; }, null, { timeout: 10_000 });
+  await flattenVia('ok');
+  check(await ev('return tab.bytesUndo?.length === 1 && tab.objects.length === 0;'), 'flatten did not apply');
+  await ev('await app.pageTools.undo(tab);');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.length === 1; }, null, { timeout: 10_000 });
+  await ev('await app.pageTools.redo(tab); await new Promise((r) => setTimeout(r, 500));');
+  check(await ev('return tab.bytesRedo.length === 0 && tab.bytesUndo.length === 1;'), 'redo did not apply');
+  const redoOut = await save(true);
+  const ri = await inspect(redoOut);
+  check(ri.markup === 0, `after flatten/undo/redo/save: ${ri.markup} markup annotations in the file, expected 0`);
+  check(await burned(redoOut) === 1, `after flatten/undo/redo/save: the square is burned in ${await burned(redoOut)} times, expected 1`);
+  check(await ev('return tab.objects.length === 0;'), 'after redo the flattened square is still an overlay object');
+  await noDialog();
+
+  step = 'delete the imported square unsaved, then Flatten does not burn it back';
+  await openPdf('del.pdf', pdf, 1);
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.length === 1; }, null, { timeout: 10_000 });
+  await ev('an.remove(tab, tab.objects[0].id);');
+  check(await flattenVia('ok'), 'the Flatten dialog does not say the deleted annotation is skipped');
+  const delFlat = await save(true);
+  const di = await inspect(delFlat);
+  check(di.markup === 0, `after delete + flatten + save: ${di.markup} markup annotations, expected 0`);
+  check(await burned(delFlat) === 0, 'Flatten burned in the annotation the user had deleted');
+  await noDialog();
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('ANNOTS-IMPORT OK');

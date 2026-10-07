@@ -657,6 +657,7 @@ export async function setAuthor(name) {
 // ---------------------------------------------------------------- file mirror
 const syncs = new WeakMap();   // tab -> Map<id, {source, snap}>
 const pending = new WeakMap(); // tab -> what the last beforeSave wrote, committed by beforeSave.saved
+const flattened = new WeakMap(); // Flatten output bytes -> Set of mirror ids burned into them (page redo)
 const syncOf = (tab) => { let m = syncs.get(tab); if (!m) syncs.set(tab, (m = new Map())); return m; };
 /** Stable JSON of an object's state (key order and `source` ignored); typed arrays are hashed. */
 function stable(v) {
@@ -667,15 +668,19 @@ function stable(v) {
 }
 const imported = ({ source, ...o }) => o;
 
-/** Bring the mirror in step with `read` (readAnnotations(tab.bytes).objects). No undo step. */
-function reconcile(tab, read) {
+/** Bring the mirror in step with `read` (readAnnotations(bytes).objects). No undo step. */
+function reconcile(tab, read, bytes) {
   const sync = syncOf(tab), count = new Map();
   for (const r of read) count.set(r.id, (count.get(r.id) ?? 0) + 1);
   const present = new Map(read.filter((r) => count.get(r.id) === 1).map((r) => [r.id, r])); // duplicate ids: left alone
   let touched = false;
   for (const [id, s] of sync) {
     const r = present.get(id);
-    if (!r) { sync.delete(id); continue; } // not in these bytes (page undo past a save): an unsaved object again
+    if (!r) { // not in these bytes (page undo past a save): an unsaved object again
+      if (flattened.get(bytes)?.has(id) && dropMirror(tab, id, s)) touched = true; // page redo of a Flatten: burned in
+      sync.delete(id);
+      continue;
+    }
     s.source = r.source;
     const o = getObject(tab, id), fresh = imported(r), snap = stable(fresh);
     if (o && stable(o) === s.snap && snap !== s.snap) { // unedited mirror: follow the file (rotate, resize, ...)
@@ -707,7 +712,7 @@ async function viewBytes(tab) {
     const { readAnnotations, writeAnnotations } = await import('../../src/core/index.js');
     const { objects } = await readAnnotations(bytes);
     if (tab.bytes !== bytes) return bytes; // superseded: the newer reload reconciles
-    reconcile(tab, objects);
+    reconcile(tab, objects, bytes);
     const sync = syncOf(tab), remove = [...new Set(objects.map((r) => r.id))].filter((id) => sync.has(id));
     return remove.length ? await writeAnnotations(bytes, { remove }) : bytes;
   } catch (err) {
@@ -716,21 +721,40 @@ async function viewBytes(tab) {
   }
 }
 
+/** Drop the object of mirror `id` if it is unedited (its annotation is page content now). */
+function dropMirror(tab, id, s) {
+  const o = getObject(tab, id);
+  if (!o || stable(o) !== s.snap) return false;
+  tab.objects = tab.objects.filter((x) => x !== o);
+  selOf(tab).delete(id);
+  return true;
+}
+
+/**
+ * Mirrors whose annotation in tab.bytes is not what the user sees: edited or deleted since the last
+ * save. Flatten skips them (it would burn the file's state); Save first includes them.
+ */
+export function unsavedMirrors(tab) {
+  return [...syncOf(tab)].filter(([id, s]) => { const o = getObject(tab, id); return !o || stable(o) !== s.snap; }).map(([id]) => id);
+}
+
 /**
  * Document > Flatten annotations: `flatBytes` (about to become tab.bytes) no longer has some
  * mirrored annotations. Unedited mirrors are dropped (now page content); edited ones become unsaved
- * objects. Page undo brings the annotations back and the next reload re-imports them.
+ * objects. Page undo brings the annotations back and the next reload re-imports them; page redo
+ * brings `flatBytes` back and reconcile drops them again (recorded here).
  */
 export async function dropFlattened(tab, flatBytes) {
   const { readAnnotations } = await import('../../src/core/index.js');
   const left = new Set((await readAnnotations(flatBytes)).objects.map((r) => r.id));
-  const sync = syncOf(tab);
+  const sync = syncOf(tab), gone = new Set();
   for (const [id, s] of sync) {
     if (left.has(id)) continue;
-    const o = getObject(tab, id);
-    if (o && stable(o) === s.snap) { tab.objects = tab.objects.filter((x) => x !== o); selOf(tab).delete(id); }
+    gone.add(id);
+    dropMirror(tab, id, s);
     sync.delete(id);
   }
+  flattened.set(flatBytes, gone);
 }
 
 async function beforeSave(tab, bytes = tab.bytes) {

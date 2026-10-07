@@ -354,6 +354,27 @@ describe('dependents of a markup (replies, states, /RT /Group)', () => {
     });
   }
 
+  test('flatten burns the markup and its /RT /Group member, drops popup + Text replies, keeps other replies', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    const ctx = doc.context;
+    const t = (x) => PDFHexString.fromText(x);
+    const ap = (rgb) => ctx.register(ctx.stream(`${rgb} rg 0 0 100 100 re f`, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 100, 100] }));
+    const sq = ctx.nextRef();
+    const pop = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Popup', Rect: [300, 600, 400, 700], Parent: sq, NM: t('pop') }));
+    ctx.assign(sq, ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [100, 600, 200, 700], NM: t('sq'), Popup: pop, AP: { N: ap('1 0 0') } }));
+    const grp = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [100, 400, 200, 500], NM: t('grp'), IRT: sq, RT: 'Group', AP: { N: ap('0 0 1') } }));
+    const rep = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Text', Rect: [100, 600, 120, 620], NM: t('rep'), IRT: sq, Contents: t('first') }));
+    const nested = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Text', Rect: [100, 600, 120, 620], NM: t('nested'), IRT: rep, Contents: t('second') }));
+    const xr = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Circle', Rect: [300, 100, 350, 150], NM: t('xr'), IRT: sq }));
+    page.node.set(PDFName.of('Annots'), ctx.obj([sq, pop, grp, rep, nested, xr]));
+    const out = await flattenAnnotations(await doc.save());
+    assert.deepEqual(annotDicts(await PDFDocument.load(out)).map(nmOf), ['xr'], 'only the non-Text reply stays');
+    const px = await renderPage(out);
+    assert.ok(isColor(px.sample(150, 792 - 650), RED), 'markup burned in');
+    assert.ok(isColor(px.sample(150, 792 - 450), [0, 0, 255]), 'group member burned in');
+  });
+
   test('remove deletes the markup, its imported replies/status and its /RT /Group members only', async () => {
     const { bytes } = await threadFixture();
     const out = await writeAnnotations(bytes, { remove: ['sq'] }, OPTS);
