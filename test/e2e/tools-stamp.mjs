@@ -80,28 +80,101 @@ try {
   step = 'preset stamp';
   await key('s');
   check(await ev('return app.state.tool;') === 'stamp', 'S did not pick the Stamp tool');
-  const presets = await page.$$eval('.opt-stamp-text option', (os) => os.map((o) => o.textContent));
-  check(presets.includes('REVISE AND RESUBMIT') && presets.includes('APPROVED AS NOTED') && presets.at(-1) === 'Custom text…', `presets ${presets}`);
-  await page.selectOption('.opt-stamp-text', 'REJECTED');
+  const pickStamp = async (cat, id) => {
+    if (!(await page.$('.stamp-palette'))) await page.click('.opt-stamp-pick');
+    await page.click(`.stamp-cat[data-cat="${cat}"]`);
+    await page.click(`.stamp-palette .stamp-item[data-id="${id}"]`);
+    await page.waitForSelector('.stamp-palette', { state: 'detached' });
+  };
+  await page.click('.opt-stamp-pick');
+  const presets = await page.$$eval('.stamp-palette .stamp-item', (os) => os.map((o) => o.title));
+  for (const t of ['APPROVED', 'NOT APPROVED', 'REVISE AND RESUBMIT', 'APPROVED AS NOTED', 'CONFIDENTIAL', 'SIGN HERE', 'WITNESS', 'PAID']) check(presets.includes(t), `standard stamps ${presets}`);
+  check(await page.$$eval('.stamp-palette .stamp-preview text', (t) => t.length) >= 18, 'palette previews not drawn');
+  // Palette legibility in both themes: stamp ink on its paper, labels on their tile (WCAG contrast >= 4.5).
+  for (const theme of ['light', 'dark']) {
+    step = `palette ${theme}`;
+    await ev('document.documentElement.dataset.theme = arg;', theme);
+    for (const cat of ['standard', 'dynamic']) {
+      await page.click(`.stamp-cat[data-cat="${cat}"]`);
+      const worst = await page.evaluate(() => {
+        const rgb = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const lum = (c) => { const [r, g, b] = rgb(c).map((v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+        const ratio = (a, b) => { const [x, y] = [lum(a), lum(b)].sort((m, n) => n - m); return (x + 0.05) / (y + 0.05); };
+        let min = 99;
+        for (const it of document.querySelectorAll('.stamp-palette .stamp-item')) {
+          const paper = getComputedStyle(it.querySelector('.stamp-preview')).backgroundColor, tile = getComputedStyle(it).backgroundColor;
+          min = Math.min(min, ratio(it.querySelector('.stamp-preview text').getAttribute('fill').replace(/^#(..)(..)(..)$/, (_, r, g, b) => `rgb(${parseInt(r, 16)},${parseInt(g, 16)},${parseInt(b, 16)})`), paper), ratio(getComputedStyle(it.querySelector('.stamp-label')).color, tile));
+        }
+        return min;
+      });
+      check(worst >= 4.5, `${theme} ${cat} palette contrast ${worst.toFixed(2)} < 4.5`);
+    }
+    const pb = await (await page.$('.stamp-palette')).boundingBox();
+    await page.screenshot({ path: join(OUT, `stamp-palette-${theme}.png`), clip: { x: pb.x - 8, y: pb.y - 50, width: pb.width + 16, height: pb.height + 58 } });
+  }
+  await ev('document.documentElement.dataset.theme = "light";');
+  step = 'preset stamp';
+  await page.click('.stamp-cat[data-cat="standard"]');
+  await page.click('.stamp-palette .stamp-item[data-id="std-rejected"]');
+  await page.waitForSelector('.stamp-palette', { state: 'detached' });
   await page.click('.opt-swatch[data-color="#d62828"]');
   await frames();
   await page.mouse.click(...await toClient(0, 300, 330));
+  await frames();
   let o = (await objs()).at(-1);
-  check(o.type === 'stamp' && o.text === 'REJECTED' && o.color === '#d62828' && o.borderWidth === 2 && o.page === 0, `preset stamp ${JSON.stringify(o)}`);
+  check(o.type === 'stamp' && o.text === 'REJECTED' && o.color === '#d62828' && o.borderWidth === 3 && o.page === 0 && !o.subtext, `preset stamp ${JSON.stringify(o)}`);
   near(o.x + o.w / 2, 300, 'click stamp centred x'); near(o.y + o.h / 2, 330, 'click stamp centred y');
   check(o.h > 20 && o.h < 40 && o.w > o.h * 3, `default stamp size ${o.w}x${o.h}`);
   check(await ev('return !!v.getOverlaySvg(tab, 0).querySelector(`[data-obj-id="${arg}"] text`);', o.id), 'stamp not rendered');
   check(JSON.stringify(await ev('return an.getSelection(tab);')) === JSON.stringify([o.id]), 'new stamp not selected');
+  check(await ev('return await window.api.settingsGet("stamps.last");') === 'std-rejected', 'last used stamp not remembered');
+
+  step = 'dynamic stamp';
+  await ev('await window.api.settingsSet("annotations.author", "A. Example");');
+  await page.click('.opt-stamp-pick');
+  await page.click('.stamp-cat[data-cat="dynamic"]');
+  await page.selectOption('.stamp-dyn-format', 'DD/MM/YYYY');
+  await page.check('.stamp-dyn-time');
+  await page.click('.stamp-palette .stamp-item[data-id="dyn-approved"]');
+  await page.mouse.click(...await toClient(0, 300, 260));
+  await page.waitForFunction(() => window.ashStudio.state.tabs[0].objects.at(-1)?.subtext);
+  o = (await objs()).at(-1);
+  const d = new Date(), p2 = (n) => String(n).padStart(2, '0');
+  check(o.text === 'APPROVED' && o.subtext.startsWith(`by A. Example · ${p2(d.getDate())}/${p2(d.getMonth() + 1)}/${d.getFullYear()} `) && /\d\d:\d\d$/.test(o.subtext), `dynamic stamp ${JSON.stringify(o)}`);
+  check(await ev('return v.getOverlaySvg(tab, 0).querySelectorAll(`[data-obj-id="${arg}"] text`).length;', o.id) === 2, 'dynamic stamp second line not drawn');
+  const dynId = o.id;
 
   step = 'custom text';
-  const dlg = page.waitForSelector('#stamp-custom');
-  await page.selectOption('.opt-stamp-text', '__custom');
+  await page.click('.opt-stamp-pick');
+  await page.click('.stamp-cat[data-cat="custom"]');
+  const dlg = page.waitForSelector('#stamp-new-text');
+  await page.click('.stamp-create');
   await (await dlg).fill('Site copy');
+  await page.selectOption('.stamp-new-colour', '#1d4ed8');
   await page.click('.dialog-buttons button[data-value="ok"]');
-  await page.waitForFunction(() => document.querySelector('.opt-stamp-text')?.value === 'SITE COPY');
+  await page.waitForSelector('.stamp-palette .stamp-item[title="SITE COPY"]');
+  const libList = await ev('return await window.api.libraryList("stamp");');
+  check(libList.length === 1 && libList[0].meta.text === 'SITE COPY' && libList[0].meta.color === '#1d4ed8', `custom stamps persist: ${JSON.stringify(libList)}`);
+  await page.click('.stamp-palette .stamp-item[title="SITE COPY"]');
+  await page.mouse.click(...await toClient(0, 300, 200));
+  await frames();
+  o = (await objs()).at(-1);
+  check(o.text === 'SITE COPY' && o.color === '#1d4ed8', `custom stamp ${JSON.stringify(o)}`);
+  step = 'custom rename/delete';
+  await page.click('.opt-stamp-pick'); await page.click('.stamp-cat[data-cat="custom"]');
+  const rn = page.waitForSelector('#stamp-new-text');
+  await page.click('.stamp-rename');
+  await (await rn).fill('Site copy 2');
+  await page.click('.dialog-buttons button[data-value="ok"]');
+  await page.waitForSelector('.stamp-palette .stamp-item[title="SITE COPY 2"]');
+  check((await ev('return await window.api.libraryList("stamp");')).length === 1, 'rename duplicated the item');
+  await page.click('.stamp-delete');
+  await page.waitForSelector('.stamp-palette .stamp-item[title="SITE COPY 2"]', { state: 'detached' });
+  check((await ev('return await window.api.libraryList("stamp");')).length === 0, 'delete left the item');
+  await page.click('.stamp-cat[data-cat="standard"]');
+  await page.click('.stamp-palette .stamp-item[data-id="std-approved"]');
 
   step = 'add date';
-  await page.selectOption('.opt-stamp-text', 'APPROVED');
   await page.click('.opt-swatch[data-color="#1b7f3b"]');
   await page.check('.opt-stamp-date');
   let n0 = (await objs()).length;
@@ -116,7 +189,7 @@ try {
   await page.uncheck('.opt-stamp-date');
 
   // ------------------------------------------------------------ geometry
-  await page.selectOption('.opt-stamp-text', 'APPROVED AS NOTED');
+  await pickStamp('standard', 'std-approved-as-noted');
   const SCEN = [
     { name: 'zoom 100%', pageIndex: 0, zoom: 1, rot: 0, a: [40, 40], b: [240, 90] },
     { name: 'zoom 150%', pageIndex: 0, zoom: 1.5, rot: 0, a: [40, 110], b: [260, 160] },
@@ -239,7 +312,13 @@ try {
   check((await PDFDocument.load(out)).getPageCount() === 3, 'saved page count');
 
   step = 'verify output';
-  const stamps = final.filter((x) => x.type === 'stamp');
+  const stamps = final.filter((x) => x.type === 'stamp' && !x.subtext);
+  const saved = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  const ann = await ev(`const d = await v.pdfjs.getDocument({ data: new Uint8Array(arg) }).promise; const a = await (await d.getPage(1)).getAnnotations(); await d.loadingTask.destroy();
+    return a.filter((x) => x.subtype === 'Stamp').map((x) => ({ id: x.id, has: !!x.hasAppearance, c: x.contentsObj?.str }));`, Array.from(saved));
+  check(ann.length >= 3 && ann.every((x) => x.has), `saved Stamp annotations ${JSON.stringify(ann)}`);
+  const rd = (await (await import('../../src/core/annots.js')).readAnnotations(saved)).objects.find((x) => x.id === dynId);
+  check(rd?.subtext === final.find((x) => x.id === dynId).subtext, `dynamic subtext not saved: ${JSON.stringify(rd)}`);
   const img = { x: pngObj.x, y: pngObj.y, w: pngObj.w, h: pngObj.h };
   const res = await ev(`
     const d = await v.pdfjs.getDocument({ data: new Uint8Array(arg.out) }).promise, found = [];

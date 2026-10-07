@@ -171,7 +171,7 @@ space (above). Colours are `'#rrggbb'` (or `'#rgb'`); `null`/`'none'` means no p
 | `whiteout` | `x,y,w,h,color('#ffffff')` — opaque fill |
 | `image` | `x,y,w,h,bytes,mime('image/png'│'image/jpeg'),opacity,rotation` — stretched to the box; identical `bytes` objects are embedded once |
 | `callout` | `x,y,w,h,text,tx,ty,stroke('#ff0000'),fill('#ffffff'),strokeWidth(1),fontSize(10),color(=stroke),padding(4),dash` — boxed text plus a leader line from the nearest box edge point to the tip `(tx,ty)` (no line when the tip is inside the box) |
-| `stamp` | `x,y,w,h,text,color('#c00000'),rotation,borderWidth(3),opacity` — single-line Helvetica-Bold text, auto-sized to fit, centred, inside an outline |
+| `stamp` | `x,y,w,h,text,subtext,color('#c00000'),rotation,borderWidth(3),opacity` — Helvetica-Bold text, auto-sized to fit, centred, inside an outline; optional `subtext` is a smaller second line (dynamic stamps; layout `stampLayout` in `stamps.js`, kept in `/ASHStudio` when saved as an annotation) |
 
 There is deliberately no revision-cloud shape; use dotted `rect`/`ellipse` + `text`/`callout`.
 

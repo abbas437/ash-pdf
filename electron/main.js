@@ -455,7 +455,7 @@ function registerIpc() {
 // userData dir (the portable data dir in portable mode) as library/<kind>/<id>.bin (image bytes;
 // AES-GCM ciphertext when the item is password-locked, done in the renderer) and <id>.json (meta).
 // Add a kind (e.g. 'stamp') to LIBRARY_KINDS to reuse the storage.
-const LIBRARY_KINDS = new Set(['signature']);
+const LIBRARY_KINDS = new Set(['signature', 'stamp']);
 const LIBRARY_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const LIBRARY_MAX_BYTES = 5 * 1024 * 1024;
 function libraryFile(kind, id, ext) {
