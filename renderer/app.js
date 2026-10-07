@@ -7,7 +7,8 @@ import { icon } from './ui/icons.js';
 import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, dialogOpen } from './ui/dialogs.js';
 import { viewer } from './ui/viewer.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
-import { initSidebar, registerSidebarTab, showSidebarTab, thumbs } from './ui/sidebar.js';
+import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
+import { initSplitView } from './ui/splitview.js';
 import { initSearch, search } from './ui/search.js';
 import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
@@ -56,6 +57,7 @@ viewerHost.append(welcome);
 root.append(h('header.titlebar', {}, menubar, tabstrip), toolbar, optionsBar, banner, workArea, statusbar);
 viewer.mount(viewerHost);
 initSidebar(workArea);
+initSidebarResize((w) => api.settingsSet('ui.sidebarWidth', w).catch(() => {}));
 initViewExtras();
 initSearch(viewerHost);
 
@@ -302,7 +304,7 @@ buildToolbar(toolbar, [
   [btn('prev', 'Previous page (Page Up)', withTab(viewer.prevPage), { id: 'btn-prev' }), btn('next', 'Next page (Page Down)', withTab(viewer.nextPage), { id: 'btn-next' }), h('span.page-box', {}, pageInput, pageTotal)],
   [btn('zoomOut', 'Zoom out (Ctrl+-)', withTab((t) => viewer.zoomOut(t)), { id: 'btn-zoomout' }), zoomSelect, btn('zoomIn', 'Zoom in (Ctrl+=)', withTab((t) => viewer.zoomIn(t)), { id: 'btn-zoomin' })],
   [btn('rotateLeft', 'Rotate view left', withTab((t) => viewer.rotateView(t, -90)), { id: 'btn-rotl' }), btn('rotateRight', 'Rotate view right', withTab((t) => viewer.rotateView(t, 90)), { id: 'btn-rotr' })],
-  [findBtn, btn('sidebar', 'Toggle sidebar', () => { state.sidebarOpen = !state.sidebarOpen; }, { id: 'btn-sidebar' }), themeBtn],
+  [findBtn, btn('sidebar', 'Show / hide sidebar (Ctrl+B)', () => { state.sidebarOpen = !state.sidebarOpen; }, { id: 'btn-sidebar' }), themeBtn],
 ], optionsBar);
 // The Select tool is the default, always-available tool.
 registerTool({ id: 'select', label: 'Select', icon: 'select', shortcut: 'V', cursor: 'auto' });
@@ -373,7 +375,7 @@ M('View', { separator: true });
 M('View', { id: 'rotl', label: 'Rotate view left', action: withTab((t) => viewer.rotateView(t, -90)), enabled: hasDoc });
 M('View', { id: 'rotr', label: 'Rotate view right', action: withTab((t) => viewer.rotateView(t, 90)), enabled: hasDoc });
 M('View', { separator: true });
-M('View', { id: 'sidebar', label: 'Toggle sidebar', action: () => { state.sidebarOpen = !state.sidebarOpen; } });
+M('View', { id: 'sidebar', label: 'Show sidebar', shortcut: 'Ctrl+B', action: () => { state.sidebarOpen = !state.sidebarOpen; } });
 M('View', { id: 'theme', label: 'Toggle light / dark theme', action: () => setTheme(state.theme === 'dark' ? 'light' : 'dark') });
 M('Tools', { id: 'select', label: 'Select', shortcut: 'V', action: () => setTool('select') });
 initForms({ registerMenuItem });
@@ -401,6 +403,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && k === 'p') return run(() => tab && printTab(tab));
   if (ctrl && k === 'w') return run(() => tab && closeTab(tab));
   if (ctrl && k === 'f') return run(() => tab && bus.emit('search:open', {}));
+  if ((ctrl && k === 'b' && !e.shiftKey && !e.altKey && !isTyping(e.target)) || e.key === 'F4') return run(() => { state.sidebarOpen = !state.sidebarOpen; });
   if (ctrl && e.key === 'Tab') return run(() => {
     if (state.tabs.length < 2) return;
     const i = state.tabs.indexOf(tab);
@@ -465,11 +468,13 @@ initExports(app); // File > Export to Excel, Export page as image
 initAdvancedSearch(app);
 initCopyText(app);
 initHandTool();
+initSplitView({ host: viewerHost, activate, registerMenuItem });
 
 (async () => {
   try {
     await setTheme((await api.settingsGet('theme')) ?? 'light', false);
   } catch { await setTheme('light', false); }
+  try { const w = await api.settingsGet('ui.sidebarWidth'); if (w) setSidebarWidth(w); } catch { /* keep the default width */ }
   refresh();
   // Return nothing: contextBridge would copy the resolved tab object graph back to the preload (renderer OOM).
   api.onOpenFile((file) => { openFileObject(file); });
