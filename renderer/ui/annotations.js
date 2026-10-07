@@ -24,10 +24,13 @@
 //   annotations.applyStyle(tab, changedKeys)  -> applies state.toolStyle keys to the selection
 //   annotations.toPage(tab, pageIndex, clientX, clientY) -> {x, y} in that page's points
 //
-// Save: a beforeSave hook flattens tab.objects into the bytes being written. tab.bytes is NOT
-// replaced by the flattened output (the hook is `transient`), so the objects stay editable and the
-// next save flattens again from the unflattened bytes. Limitation: a saved file shows the
-// objects as page content; reopening it does not make them editable again.
+// Save: a beforeSave hook writes tab.objects into the bytes being written: whiteout objects are
+// burned into the page content (flattenObjects), every other object becomes a real PDF annotation
+// (writeAnnotations, author = setting `annotations.author`). tab.bytes is NOT replaced by the output
+// (the hook is `transient`), so the objects stay editable and the next save rebuilds from bytes that
+// never contain them: nothing is written twice. Limitation: reopening a saved file does not make
+// its annotations editable overlay objects again.
+//   annotations.getAuthor() -> Promise<string> / annotations.setAuthor(name)  ('' restores the default)
 import { bus } from '../bus.js';
 import { state, activeTab, markDirty } from '../state.js';
 import { viewer } from './viewer.js';
@@ -612,7 +615,7 @@ function buildChrome() {
     tools.before(h('div.tb-group', { role: 'group', 'aria-label': 'History' }, undoBtn, redoBtn), h('span.tb-sep', { role: 'separator' }));
   }
   const bar = document.querySelector('footer.statusbar');
-  if (bar && !statusEl) { statusEl = h('span.st-annots', { hidden: true, title: 'Annotations are burned into the page content when you save; they stay editable until the tab is closed.' }); bar.append(statusEl); }
+  if (bar && !statusEl) { statusEl = h('span.st-annots', { hidden: true, title: 'Annotations are saved as PDF annotations (whiteout is burned into the page); they stay editable until the tab is closed.' }); bar.append(statusEl); }
   updateChrome();
 }
 function updateChrome() {
@@ -623,20 +626,37 @@ function updateChrome() {
   if (statusEl) {
     const n = tab?.objects.length ?? 0;
     statusEl.hidden = !n;
-    statusEl.textContent = n ? `${n} annotation${n === 1 ? '' : 's'} (flattened on save)` : '';
+    statusEl.textContent = n ? `${n} annotation${n === 1 ? '' : 's'} (written on save)` : '';
   }
 }
 
 // ---------------------------------------------------------------- save hook
+export const AUTHOR_KEY = 'annotations.author';
+export const DEFAULT_AUTHOR = 'ASH PDF Studio';
+export async function getAuthor() {
+  const v = await window.api.settingsGet(AUTHOR_KEY).catch(() => undefined);
+  return typeof v === 'string' && v.trim() ? v : DEFAULT_AUTHOR;
+}
+export async function setAuthor(name) {
+  const v = String(name ?? '').trim();
+  await window.api.settingsSet(AUTHOR_KEY, v && v !== DEFAULT_AUTHOR ? v : undefined);
+}
+
 async function beforeSave(tab, bytes = tab.bytes) {
   ensureTab(tab);
   if (!tab.objects.length) return undefined;
-  const { flattenObjects } = await import('../../src/core/index.js');
-  return flattenObjects(bytes, tab.objects.map(clone));
+  const { flattenObjects, writeAnnotations } = await import('../../src/core/index.js');
+  const objs = tab.objects.map(clone);
+  // writeAnnotations refuses whiteout (BURN_IN_ONLY): it must hide page content, so burn it in.
+  const burn = objs.filter((o) => o.type === 'whiteout');
+  const add = objs.filter((o) => o.type !== 'whiteout');
+  let out = burn.length ? await flattenObjects(bytes, burn) : bytes;
+  if (add.length) out = await writeAnnotations(out, { add }, { author: await getAuthor() });
+  return out;
 }
 beforeSave.id = 'annotations';
-// Only the written bytes are flattened; tab.bytes stays unflattened so the objects remain
-// editable and a second save never flattens them twice (saveTab honours `transient`).
+// Only the written bytes change; tab.bytes never contains the objects, so they remain editable
+// and a second save never writes them twice (saveTab honours `transient`).
 beforeSave.transient = true;
 /** Keep the hook last (after forms and any other bytes-producing hook). */
 function placeHook() {
@@ -681,4 +701,5 @@ export const annotations = {
   registerObjectType, applyStyle, toPage, render: renderAll, renderPreview,
   /** Internal for tools: add several objects as one undo step, returns their ids. */
   addMany,
+  getAuthor, setAuthor,
 };
