@@ -18,11 +18,13 @@ their own licences. Their full notices ship next to the executable as `LICENSE.e
 | @pdf-lib/fontkit | 1.1.1 | MIT |
 | @pdf-lib/standard-fonts | 1.0.0 | MIT |
 | @pdf-lib/upng | 1.0.1 | MIT |
+| fflate | 0.8.3 | MIT |
 | minisearch | 7.2.0 | MIT |
 | pako | 1.0.11 | (MIT AND Zlib) |
 | pdf-lib | 1.17.1 | MIT |
 | pdfjs-dist | 6.4.299 | Apache-2.0 |
 | tslib | 1.14.1 | 0BSD |
+| write-excel-file | 4.1.1 | MIT |
 
 **Bundled components.** These ship inside the packages above (pdf.js data files and WebAssembly
 decoders, libraries compiled into the fontkit build, and PDFium with the libraries compiled into
@@ -573,6 +575,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## fflate 0.8.3
+
+Licence: MIT  
+Source: https://github.com/101arrowz/fflate
+
+From `LICENSE`:
+
+```text
+MIT License
+
+Copyright (c) 2026 Arjun Barrett
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## minisearch 7.2.0
 
 Licence: MIT  
@@ -858,6 +891,37 @@ INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+```
+
+## write-excel-file 4.1.1
+
+Licence: MIT  
+Source: https://gitlab.com/catamphetamine/write-excel-file
+
+From `LICENSE`:
+
+```text
+MIT License
+
+Copyright (c) 2018 gitlab.com/catamphetamine
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ## Adobe CMaps (bundled)
