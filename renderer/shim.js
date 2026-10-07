@@ -73,6 +73,9 @@ if (!window.api) {
   const folders = new Map(); // folder -> [{path, name, size, mtimeMs}]
   const cache = new Map();
   let nextFolder = null;
+  // ---- clipboard and external links: recorded for tests (window.__ashShim.copied / .opened).
+  const copied = [];
+  const opened = [];
   window.__ashShim = Object.freeze({
     addFolder(folder, list) {
       folders.set(folder, list.map((f) => {
@@ -83,6 +86,7 @@ if (!window.api) {
       nextFolder = folder;
     },
     cacheKeys: () => [...cache.keys()],
+    copied, opened,
   });
   const library = new Map(); // `${kind}/${id}` -> {meta, bytes}
   const libKey = (kind, id) => {
@@ -153,6 +157,18 @@ if (!window.api) {
     async cacheSet(key, value) {
       if (typeof value !== 'string') throw new TypeError('cache value must be a string');
       cache.set(String(key), value);
+      return true;
+    },
+    async copyText(text) {
+      if (typeof text !== 'string') throw new TypeError('copyText: text must be a string');
+      if (text.length > 10 * 1024 * 1024) throw new RangeError('copyText: text too large (10 MB max)');
+      copied.push(text);
+      return true;
+    },
+    async openExternal(url) {
+      const u = new URL(String(url));
+      if (!['http:', 'https:', 'mailto:'].includes(u.protocol)) throw new Error(`openExternal: ${u.protocol} links are not opened`);
+      opened.push(u.href);
       return true;
     },
     async libraryList(kind) {
