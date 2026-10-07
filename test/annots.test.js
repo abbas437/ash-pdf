@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, PDFName, PDFArray, PDFHexString } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFArray, PDFHexString, PDFString } from 'pdf-lib';
 import { writeAnnotations, readAnnotations, flattenAnnotations } from '../src/core/annots.js';
 import { makePdf, makeGeometryFixture, makeImage, near, pdfjsDoc, renderPage, isColor } from './helpers.js';
 
@@ -294,5 +294,94 @@ describe('writeAnnotations edge cases', () => {
     assert.equal(back.length, 1);
     near(back[0].w, 10, 0.01, 'updated width');
     assert.equal(await annotCount(await writeAnnotations(src, { remove: ['d'] }, OPTS)), 0);
+  });
+});
+
+// ---------------------------------------------------------------- dependents and stable ids
+
+const nmOf = (d) => d.lookup(PDFName.of('NM'))?.decodeText();
+const irtOf = (doc, d) => { const r = d.get(PDFName.of('IRT')); return r ? nmOf(doc.context.lookup(r)) : undefined; };
+
+/** Foreign markup 'sq' with a /Group member, a reply thread (rep <- nested), a Review state and Marked states. */
+async function threadFixture() {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  doc.addPage([612, 792]);
+  const ctx = doc.context;
+  const t = (s) => PDFHexString.fromText(s);
+  const sq = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [100, 600, 200, 700], C: [1, 0, 0], NM: t('sq') }));
+  const grp = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [120, 620, 180, 680], C: [0, 0, 1], NM: t('grp'), IRT: sq, RT: 'Group' }));
+  const rep = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Text', Rect: [100, 600, 120, 620], NM: t('rep'), IRT: sq, Contents: t('first') }));
+  const nested = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Text', Rect: [100, 600, 120, 620], NM: t('nested'), IRT: rep, Contents: t('second') }));
+  const rv = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Text', Rect: [100, 600, 120, 620], NM: t('rv'), IRT: sq, State: PDFString.of('Accepted'), StateModel: PDFString.of('Review') }));
+  const mk = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Text', Rect: [100, 600, 120, 620], NM: t('mk'), IRT: sq, State: PDFString.of('Marked'), StateModel: PDFString.of('Marked') }));
+  const mk2 = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Text', Rect: [100, 600, 120, 620], NM: t('mk2'), IRT: rep, State: PDFString.of('Marked'), StateModel: PDFString.of('Marked') }));
+  page.node.set(PDFName.of('Annots'), ctx.obj([sq, grp, rep, nested, rv, mk, mk2]));
+  return { bytes: await doc.save(), refs: { sq, grp, rep, nested, rv } };
+}
+
+describe('dependents of a markup (replies, states, /RT /Group)', () => {
+  test('readAnnotations nests the thread, takes the Review state and lists deps and group', async () => {
+    const { bytes, refs } = await threadFixture();
+    const { objects, skipped } = await readAnnotations(bytes);
+    assert.equal(objects.length, 1);
+    const [o] = objects;
+    assert.deepEqual(o.replies.map((r) => [r.id, r.text, r.inReplyTo ?? null]), [['rep', 'first', null], ['nested', 'second', 'rep']]);
+    assert.equal(o.status, 'accepted');
+    const key = (r) => `${r.objectNumber} 0`;
+    assert.deepEqual([...o.source.deps].sort(), [refs.rep, refs.nested, refs.rv].map(key).sort());
+    assert.deepEqual(o.source.group, [key(refs.grp)]);
+    assert.deepEqual(skipped.map((s) => s.id).sort(), ['grp', 'mk', 'mk2']);
+  });
+
+  for (const page of [0, 1]) {
+    test(`update (page ${page}) keeps the group member, Marked states and the nested thread`, async () => {
+      const { bytes } = await threadFixture();
+      const [o] = (await readAnnotations(bytes)).objects;
+      const out = await writeAnnotations(bytes, { update: [{ ...o, page, x: o.x + 10 }] }, OPTS);
+      const doc = await PDFDocument.load(out);
+      const all = [...annotDicts(doc, 0), ...annotDicts(doc, 1)];
+      const by = new Map(all.map((d) => [nmOf(d), d]));
+      for (const id of ['sq', 'grp', 'rep', 'nested', 'mk', 'mk2', 'sq-status']) assert.ok(by.has(id), `${id} present`);
+      assert.equal(irtOf(doc, by.get('grp')), 'sq', 'group member still /IRT the markup');
+      assert.equal(irtOf(doc, by.get('mk')), 'sq', 'Marked state still on the markup');
+      assert.equal(irtOf(doc, by.get('nested')), 'rep', 'reply of a reply keeps its parent reply');
+      assert.equal(irtOf(doc, by.get('mk2')), 'rep', 'Marked state on a reply follows the re-created reply');
+      assert.ok(!by.has('rv'), 'imported Review state rewritten');
+      const [back] = (await readAnnotations(out)).objects;
+      assert.deepEqual(back.replies.map((r) => [r.id, r.inReplyTo ?? null]), [['rep', null], ['nested', 'rep']]);
+      assert.equal(back.status, 'accepted');
+    });
+  }
+
+  test('remove deletes the markup, its imported replies/status and its /RT /Group members only', async () => {
+    const { bytes } = await threadFixture();
+    const out = await writeAnnotations(bytes, { remove: ['sq'] }, OPTS);
+    const doc = await PDFDocument.load(out);
+    assert.deepEqual(annotDicts(doc).map(nmOf).sort(), ['mk', 'mk2']);
+  });
+});
+
+describe('ids of direct annotation dicts without /NM', () => {
+  async function directFixture() {
+    const doc = await PDFDocument.create();
+    const ctx = doc.context;
+    const p0 = doc.addPage([612, 792]);
+    const p1 = doc.addPage([612, 792]);
+    p0.node.set(PDFName.of('Annots'), ctx.obj([ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [10, 10, 50, 50], C: [1, 0, 0] })]));
+    const x = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [300, 300, 350, 350], NM: PDFHexString.fromText('x') }));
+    p1.node.set(PDFName.of('Annots'), ctx.obj([x, ctx.obj({ Type: 'Annot', Subtype: 'Circle', Rect: [100, 100, 200, 150], C: [0, 0, 1] })]));
+    return doc.save();
+  }
+  const idOf = async (bytes, type) => (await readAnnotations(bytes)).objects.find((o) => o.type === type).id;
+
+  test('stay the same after an earlier annotation is removed and after pages are reordered or deleted', async () => {
+    const { reorderPages, deletePages } = await import('../src/core/pdfOps.js');
+    const src = await directFixture();
+    const circle = await idOf(src, 'ellipse');
+    assert.ok(!/^p\d+-a\d+$/.test(circle), `content-based id, got ${circle}`);
+    assert.equal(await idOf(await writeAnnotations(src, { remove: ['x'] }, OPTS), 'ellipse'), circle, 'after removing an earlier annotation');
+    assert.equal(await idOf(await reorderPages(src, [1, 0]), 'ellipse'), circle, 'after reordering pages');
+    assert.equal(await idOf(await deletePages(src, [0]), 'ellipse'), circle, 'after deleting an earlier page');
   });
 });
