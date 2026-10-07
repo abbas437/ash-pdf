@@ -54,7 +54,7 @@ for (let i = 0; i < 500; i++) {
 let step = 'launch';
 const app = await electron.launch({
   executablePath: electronBin, args: ['--disable-gpu', root, pdfPath], cwd: root,
-  env: { ...process.env, PORTABLE_EXECUTABLE_DIR: tmp, ASH_SEARCH_MAX_ENTRIES: String(TEST_BUDGET), ASH_TEST_FAKE_SAFESTORAGE: '1' },
+  env: { ...process.env, PORTABLE_EXECUTABLE_DIR: tmp, ASH_SEARCH_MAX_ENTRIES: String(TEST_BUDGET), ASH_TEST_FAKE_SAFESTORAGE: '1', ASH_TEST_FAKE_OFFICE: '1' },
 });
 try {
   const problems = [];
