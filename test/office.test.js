@@ -144,7 +144,7 @@ async function fakeIpc(mode, { input, out, sent = [] }) {
 test('office:toPdf: Office gets a copy in a temp folder (short ASCII name, original extension), removed afterwards', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'ash-office-test-'));
   try {
-    const input = join(dir, 'Ünïcödé report; & "v2".XLSX');
+    const input = join(dir, 'Ünïcödé report; & (v2) [final].XLSX'); // no " : * ? < > |, which Windows file names cannot hold
     await writeFile(input, 'workbook bytes');
     const out = join(dir, 'out.pdf');
     const sent = [];
