@@ -285,6 +285,40 @@ export function watermarkDialog(tab = activeTab()) {
   }, tab);
 }
 
+// ---------------------------------------------------------------- Background…
+export function backgroundDialog(tab = activeTab()) {
+  return markDialog({
+    kind: 'background', title: 'Background…', settingsKey: 'marks.background',
+    build: (s) => {
+      let image = null, changed = () => {};
+      const src = select('pm-bg-source', [['color', 'Colour'], ['image', 'Image (PNG or JPEG)']], s.source ?? 'color');
+      const color = h('input.input.pm-color', { type: 'color', id: 'pm-bg-color', value: s.color ?? '#fff6d5', 'aria-label': 'Background colour' });
+      const pick = h('button.btn', { type: 'button', id: 'pm-bg-pick' }, 'Choose image…');
+      const picked = h('span.pt-hint', {}, 'No image chosen');
+      pick.addEventListener('click', () => pickImage().then((im) => { if (im) { image = im; picked.textContent = im.name; changed(); } }).catch(() => {}));
+      const colorRow = field('Colour', color);
+      const imageRow = h('div.pt-row', {}, pick, picked);
+      const opacity = input({ type: 'number', min: '5', max: '100', value: String(s.opacity ?? 100), id: 'pm-bg-opacity' });
+      const sync = () => { colorRow.hidden = src.value !== 'color'; imageRow.hidden = src.value !== 'image'; };
+      src.addEventListener('change', sync); sync();
+      return {
+        onChange: (fn) => { changed = fn; },
+        get missing() { return 'Choose an image for the background.'; },
+        el: h('div.pt-form', {}, h('div.pm-grid2', {}, field('Background', src), field('Opacity (%)', opacity)), colorRow, imageRow,
+          h('small.pt-hint', {}, 'The background is drawn behind the page content.')),
+        read: () => ({ source: src.value, color: color.value, opacity: num(opacity, 100) }),
+        opts: (st, ctx) => {
+          if (ctx.preview != null && !ctx.indices.includes(ctx.preview)) return null;
+          const what = st.source === 'image' ? (image ? { image: image.bytes } : null) : { color: st.color };
+          if (!what) return null;
+          return { ...what, opacity: Math.min(1, Math.max(0.05, st.opacity / 100)), pages: ctx.preview == null ? ctx.indices : [0] };
+        },
+      };
+    },
+    apply: async (c, bytes, o) => ({ bytes: await c.addBackground(bytes, o) }),
+  }, tab);
+}
+
 // ---------------------------------------------------------------- Bates Numbering…
 export function batesDialog(tab = activeTab()) {
   return markDialog({
@@ -333,10 +367,11 @@ export function initPageMarks({ registerMenuItem: M }) {
   item({ id: 'marks-header-footer', label: 'Header & Footer…', action: withTab(headerFooterDialog) });
   item({ id: 'marks-page-numbers', label: 'Page Numbers…', action: withTab(pageNumbersDialog) });
   item({ id: 'marks-watermark', label: 'Watermark…', action: withTab(watermarkDialog) });
+  item({ id: 'marks-background', label: 'Background…', action: withTab(backgroundDialog) });
   item({ id: 'marks-bates', label: 'Bates Numbering…', action: withTab(batesDialog) });
   M('Document', { separator: true });
   for (const [kind, label] of [['headerFooter', 'Remove header & footer'], ['watermark', 'Remove watermark'], ['background', 'Remove background'], ['bates', 'Remove Bates numbers']]) {
     item({ id: `marks-remove-${kind}`, label, action: withTab((t) => removeMarks(t, kind)) }, (t) => has(t, kind));
   }
-  return { headerFooterDialog, pageNumbersDialog, watermarkDialog, batesDialog, removeMarks, refreshMarks };
+  return { headerFooterDialog, pageNumbersDialog, watermarkDialog, backgroundDialog, batesDialog, removeMarks, refreshMarks };
 }
