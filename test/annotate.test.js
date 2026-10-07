@@ -137,7 +137,7 @@ describe('flattenObjects styles and object types', () => {
   });
 
   test('unknown object type throws a TypeError naming the type', async () => {
-    await assert.rejects(flatten(await makePdf(1), [{ id: 'x', page: 0, type: 'cloud', x: 0, y: 0, w: 1, h: 1 }]), (e) => e instanceof TypeError && /cloud/.test(e.message));
+    await assert.rejects(flatten(await makePdf(1), [{ id: 'x', page: 0, type: 'hologram', x: 0, y: 0, w: 1, h: 1 }]), (e) => e instanceof TypeError && /hologram/.test(e.message));
   });
 
   test('object on a non-existent page throws RangeError', async () => {
@@ -216,6 +216,7 @@ describe('flattenObjects draws every overlay type the app creates', () => {
     text: { x: 40, y: 40, w: 150, h: 20, text: 'Text' },
     rect: { x: 40, y: 80, w: 60, h: 30, stroke: '#ff0000' },
     ellipse: { x: 120, y: 80, w: 60, h: 30, stroke: '#ff0000' },
+    cloud: { x: 200, y: 80, w: 60, h: 40, stroke: '#ff0000', fill: '#0000ff', arcSize: 10 },
     line: { x1: 40, y1: 130, x2: 140, y2: 130 },
     arrow: { x1: 40, y1: 150, x2: 140, y2: 150 },
     polyline: { points: [[40, 170], [90, 180], [140, 170]] },
@@ -241,6 +242,7 @@ describe('flattenObjects draws every overlay type the app creates', () => {
     const out = await flatten(await makePdf(1), objs);
     const r = await renderPage(out);
     assert.ok(isColor(r.sample(350, 197), BLUE, 60), 'textHighlight painted');
+    assert.ok(isColor(r.sample(230, 100), BLUE, 60), 'cloud fill painted');
     assert.ok(isColor(r.sample(310, 46.5), [255, 212, 0], 60), 'note icon painted');
     assert.ok(isColor(r.sample(350, 112), [0, 160, 0], 70), 'underline painted');
     assert.ok(isColor(r.sample(350, 137), [224, 0, 0], 70), 'strikeout painted');

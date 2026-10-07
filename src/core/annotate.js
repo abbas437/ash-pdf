@@ -15,6 +15,7 @@ import {
 import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreError } from './internal.js';
 import { calloutArrowHead } from './arrowhead.js';
 import { stampLayout } from './stamps.js';
+import { cloudPath } from './cloud.js';
 
 // ---------------------------------------------------------------- fonts & text
 
@@ -342,6 +343,19 @@ class PagePainter {
         }
         break;
       }
+      case 'cloud': {
+        requireBox(o);
+        const stroke = parseColor(o.stroke, '#000000');
+        const fill = parseColor(o.fill, null);
+        const sw = stroke ? num(o.strokeWidth, 1) : 0;
+        const opacity = opacityOf(o.opacity);
+        this.svg(cloudPath(o), {
+          color: fill || undefined, opacity: fill ? opacity : undefined,
+          borderColor: stroke || undefined, borderWidth: sw, borderOpacity: stroke ? opacity : undefined,
+          borderDashArray: stroke ? dashArray(o.dash, sw) : undefined,
+        });
+        break;
+      }
       case 'line':
       case 'arrow': {
         for (const k of ['x1', 'y1', 'x2', 'y2']) {
@@ -494,7 +508,7 @@ class PagePainter {
 }
 
 /** Every overlay object type flattenObjects (and so writeAnnotations' appearances) can draw. */
-export const KNOWN_TYPES = new Set(['text', 'rect', 'ellipse', 'line', 'arrow', 'polyline', 'ink', 'highlight', 'whiteout', 'image', 'callout', 'stamp',
+export const KNOWN_TYPES = new Set(['text', 'rect', 'ellipse', 'cloud', 'line', 'arrow', 'polyline', 'ink', 'highlight', 'whiteout', 'image', 'callout', 'stamp',
   'note', ...TEXT_MARKUPS]);
 
 /**

@@ -43,6 +43,7 @@ import { viewer } from './viewer.js';
 import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
+import { cloudPath } from '../../src/core/cloud.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -124,7 +125,7 @@ const shapeStyle = (o, s, keys) => {
   if (keys.includes('strokeWidth')) p.strokeWidth = s.strokeWidth;
   if (keys.includes('dash')) p.dash = s.dash;
   if (keys.includes('opacity')) p.opacity = s.opacity;
-  if (keys.includes('fill') && (o.type === 'rect' || o.type === 'ellipse')) p.fill = s.fill ?? null;
+  if (keys.includes('fill') && (o.type === 'rect' || o.type === 'ellipse' || o.type === 'cloud')) p.fill = s.fill ?? null;
   return p;
 };
 function segDist(px, py, x1, y1, x2, y2) {
@@ -193,6 +194,7 @@ const polyType = {
 function registerBuiltins() {
   registerObjectType('rect', boxType((o, p) => svgEl('rect', { x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.fill), ...strokeAttrs(o) }, p), { style: shapeStyle }));
   registerObjectType('ellipse', boxType((o, p) => svgEl('ellipse', { cx: o.x + o.w / 2, cy: o.y + o.h / 2, rx: o.w / 2, ry: o.h / 2, fill: paint(o.fill), ...strokeAttrs(o) }, p), { style: shapeStyle }));
+  registerObjectType('cloud', boxType((o, p) => svgEl('path', { d: cloudPath(o), fill: paint(o.fill), 'stroke-linejoin': 'round', ...strokeAttrs(o) }, p), { style: shapeStyle }));
   registerObjectType('line', lineType(false));
   registerObjectType('arrow', lineType(true));
   registerObjectType('polyline', polyType);
