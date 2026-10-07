@@ -32,7 +32,18 @@ jobs:
           fi
           exit $code
       - run: npm run vendor
-      - run: npm run dist
+      - name: Build installer and portable exe
+        shell: bash
+        run: |
+          set +e
+          npm run dist > dist-out.txt 2>&1
+          code=$?
+          cat dist-out.txt
+          if [ $code -ne 0 ]; then
+            msg=$(tail -c 3500 dist-out.txt | tr -d '\r' | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+            echo "::error title=electron-builder failed::$msg"
+          fi
+          exit $code
       - name: SHA256SUMS.txt
         shell: pwsh
         working-directory: dist
