@@ -123,8 +123,10 @@ try {
   let note = (await objs()).at(-1);
   check(note.type === 'note' && note.note === 'Check duct size' && !(await page.$('.mk-popup')), `note: ${JSON.stringify(note)}`);
   await ev('return app.setTheme("dark", false);');
-  await page.click('[data-tool="select"]');
-  await page.mouse.dblclick(nc[0], nc[1]);
+  await page.click('[data-tool="select"]'); await frames();
+  // Re-measure: the options bar differs per tool, so the page may have moved since the note was placed.
+  const nc2 = await ev('const c = v.pageToClient(tab, 0, 300, 300); return [c.clientX, c.clientY];');
+  await page.mouse.dblclick(nc2[0], nc2[1]);
   await page.waitForSelector('.mk-popup textarea');
   check(await page.inputValue('.mk-popup textarea') === 'Check duct size', 'reopened note text');
   check(await legible() >= 4.5, `dark popup contrast ${await legible()}`);
@@ -156,6 +158,19 @@ try {
   check(sub('Text').some((a) => a.contentsObj?.str === 'Check duct size'), 'Text note contents');
   check(sub('Square').some((a) => a.contentsObj?.str === 'Clash with cable tray'), 'rectangle /Contents');
   doc.close();
+
+  step = 'edit after save';
+  // Saved objects mirror the file's annotations: still editable, and a second save updates them in place.
+  const kindsOf = (list) => list.map((o) => o.type).sort().join();
+  check(kindsOf(await objs()) === 'note,rect,strikeout,textHighlight,textHighlight,underline' && !(await ev('return tab.dirty;')), `objects after save: ${kindsOf(await objs())}`);
+  await ev('an.update(tab, arg, { note: "Check duct size (revised)" });', note.id);
+  check(await ev('return await app.saveTab(tab, true);'), 'second saveTab returned false');
+  const doc2 = await pdfjsDoc(Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));')));
+  const an2 = [...await (await doc2.getPage(1)).getAnnotations(), ...await (await doc2.getPage(2)).getAnnotations()].filter((a) => a.subtype !== 'Popup');
+  doc2.close();
+  check(an2.map((a) => a.subtype).sort().join() === 'Highlight,Highlight,Square,StrikeOut,Text,Underline', `second save annotations: ${an2.map((a) => a.subtype)}`);
+  check(an2.find((a) => a.subtype === 'Text').contentsObj?.str === 'Check duct size (revised)', 'edited note not saved');
+  check(kindsOf(await objs()) === 'note,rect,strikeout,textHighlight,textHighlight,underline', `objects after second save: ${kindsOf(await objs())}`);
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('MARKUP OK');
