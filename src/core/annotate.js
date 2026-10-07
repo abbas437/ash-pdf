@@ -156,6 +156,56 @@ function requireBox(o) {
 
 // ---------------------------------------------------------------- painter
 
+/** Default colours of the note and text-markup types (shared with annots.js). */
+export const DEFAULT_COLOR = { note: '#ffd400', underline: '#00a000', strikeout: '#e00000', squiggly: '#00a000', textHighlight: '#ffff00' };
+const TEXT_MARKUPS = new Set(['underline', 'strikeout', 'squiggly', 'textHighlight']);
+const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
+
+/** Note icon / text markup (quads) in visible y-up space; `svg(d, opts)` draws a y-down path. */
+function drawNoteOrMarkup(svg, o) {
+  const color = parseColor(o.color, DEFAULT_COLOR[o.type]) || rgb(0, 0, 0);
+  const opacity = Math.min(1, Math.max(0, num(o.opacity, 1)));
+  const P = (x, y) => `${r4(x)} ${r4(y)}`;
+  if (o.type === 'note') {
+    if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) throw new TypeError(`note object ${o.id ?? ''} needs numeric x and y`);
+    const sx = num(o.w, 20) / 20;
+    const sy = num(o.h, 20) / 20;
+    const p = (x, y) => P(o.x + x * sx, o.y + y * sy);
+    svg(`M ${p(2, 1)} L ${p(18, 1)} L ${p(19, 2)} L ${p(19, 14)} L ${p(18, 15)} L ${p(9, 15)} L ${p(4, 19)} L ${p(5, 15)} L ${p(2, 15)} L ${p(1, 14)} L ${p(1, 2)} Z`,
+      { color, borderColor: rgb(0.2, 0.2, 0.2), borderWidth: 0.75, opacity, borderOpacity: opacity });
+    svg([5, 8, 11].map((y) => `M ${p(4, y)} L ${p(16, y)}`).join(' '), { borderColor: rgb(0.2, 0.2, 0.2), borderWidth: 1, borderOpacity: opacity });
+    return;
+  }
+  if (!Array.isArray(o.quads) || !o.quads.length || o.quads.some((q) => !Array.isArray(q) || q.length !== 8 || !q.every(Number.isFinite))) {
+    throw new TypeError(`${o.type} object ${o.id ?? ''} needs quads: [[x1,y1,...,x4,y4], ...]`);
+  }
+  for (const q of o.quads) {
+    const [tlx, tly, trx, try_, blx, bly, brx, bry] = q;
+    const hgt = Math.hypot(tlx - blx, tly - bly) || 1;
+    const ux = (tlx - blx) / hgt; // unit vector from bottom edge toward top edge
+    const uy = (tly - bly) / hgt;
+    const t = num(o.strokeWidth, Math.max(0.5, hgt / 14));
+    if (o.type === 'textHighlight') {
+      svg(`M ${P(tlx, tly)} L ${P(trx, try_)} L ${P(brx, bry)} L ${P(blx, bly)} Z`, { color, opacity, blendMode: BlendMode.Multiply });
+    } else if (o.type === 'underline') {
+      svg(`M ${P(blx + (ux * t) / 2, bly + (uy * t) / 2)} L ${P(brx + (ux * t) / 2, bry + (uy * t) / 2)}`, { borderColor: color, borderWidth: t, borderOpacity: opacity });
+    } else if (o.type === 'strikeout') {
+      svg(`M ${P((tlx + blx) / 2, (tly + bly) / 2)} L ${P((trx + brx) / 2, (try_ + bry) / 2)}`, { borderColor: color, borderWidth: t, borderOpacity: opacity });
+    } else {
+      const len = Math.hypot(brx - blx, bry - bly) || 1;
+      const vx = (brx - blx) / len;
+      const vy = (bry - bly) / len;
+      const step = hgt / 6;
+      let d = '';
+      for (let s = 0, i = 0; s <= len; s += step, i++) {
+        const up = i % 2 ? step : 0;
+        d += `${i ? 'L' : 'M'} ${P(blx + vx * s + ux * (up + t / 2), bly + vy * s + uy * (up + t / 2))} `;
+      }
+      svg(d, { borderColor: color, borderWidth: t, borderOpacity: opacity });
+    }
+  }
+}
+
 /**
  * Draws one page's objects. All pdf-lib draw calls receive "visible y-up"
  * coordinates; a single cm (visibleUpMatrix) maps them onto the page.
@@ -430,24 +480,40 @@ class PagePainter {
         });
         break;
       }
+      case 'note':
+      case 'underline':
+      case 'strikeout':
+      case 'squiggly':
+      case 'textHighlight':
+        drawNoteOrMarkup((d, opts) => this.svg(d, opts), o);
+        break;
       default:
         throw new TypeError(`Unknown overlay object type "${o.type}"`);
     }
   }
 }
 
-const KNOWN_TYPES = new Set(['text', 'rect', 'ellipse', 'line', 'arrow', 'polyline', 'ink', 'highlight', 'whiteout', 'image', 'callout', 'stamp']);
+/** Every overlay object type flattenObjects (and so writeAnnotations' appearances) can draw. */
+export const KNOWN_TYPES = new Set(['text', 'rect', 'ellipse', 'line', 'arrow', 'polyline', 'ink', 'highlight', 'whiteout', 'image', 'callout', 'stamp',
+  'note', ...TEXT_MARKUPS]);
 
 /**
  * Burn overlay objects into the page content. Objects are drawn in array
  * order (z-order: later objects on top), after the page's existing content.
- * `opts` is reserved for future options.
+ * `opts.skipUnknown`: leave out objects of an unknown type with a console warning instead of
+ * throwing (print and snapshot previews; saving keeps the error).
  */
-// eslint-disable-next-line no-unused-vars
-export async function flattenObjects(pdfBytes, objects, opts = {}) {
+export async function flattenObjects(pdfBytes, objects, { skipUnknown = false } = {}) {
   if (!Array.isArray(objects)) throw new TypeError('objects must be an array');
   const doc = await loadPdf(pdfBytes);
   const n = doc.getPageCount();
+  if (skipUnknown) {
+    objects = objects.filter((o) => {
+      if (!o || typeof o !== 'object' || KNOWN_TYPES.has(o.type)) return true;
+      console.warn(`flattenObjects: skipped overlay object ${o.id ?? ''} of unknown type "${o.type}"`);
+      return false;
+    });
+  }
   for (const o of objects) {
     if (!o || typeof o !== 'object') throw new TypeError('Each overlay object must be an object');
     if (!KNOWN_TYPES.has(o.type)) throw new TypeError(`Unknown overlay object type "${o.type}"`);

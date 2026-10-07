@@ -194,6 +194,57 @@ try {
   expect('pdfium selfTest', JSON.stringify({ ...st, objects: undefined }),
     !st.error && st.pageCount === 2 && st.text === 'PDFium self-test 4711' && st.originalIsPrefix && st.outLength > st.inLength);
 
+  step = 'print with unsaved text markup and note objects';
+  // Stub the system print in the main process: record what the print container holds while the
+  // renderer waits on api.print(), and print the same view to PDF (proves it renders printable pages).
+  await app.evaluate(({ BrowserWindow }) => {
+    const wc = BrowserWindow.getAllWindows()[0].webContents;
+    globalThis.__printed = [];
+    wc.print = (opts, done) => {
+      (async () => {
+        const imgs = await wc.executeJavaScript(`(async () => Promise.all([...document.querySelectorAll('.print-container img')].map(async (img) => {
+          await img.decode();
+          const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+          const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+          const s = img.naturalWidth / 612;
+          return { w: img.naturalWidth, h: img.naturalHeight, mark: Array.from(ctx.getImageData(Math.round(350 * s), Math.round(407 * s), 1, 1).data) };
+        })))()`);
+        const pdf = await wc.printToPDF({ printBackground: true });
+        globalThis.__printed.push({ opts, imgs, pdf: Buffer.from(pdf).toString('base64') });
+        done(true, '');
+      })().catch((e) => { globalThis.__printed.push({ error: e.message }); done(false, e.message); });
+    };
+  });
+  await win.evaluate(() => {
+    const t = window.ashStudio.state.tabs.find((x) => x.name === 'sample.pdf');
+    t.objects = [...(t.objects ?? []),
+      { id: 'pr-th', page: 0, type: 'textHighlight', quads: [[300, 400, 400, 400, 300, 414, 400, 414]], color: '#0000ff', opacity: 1 },
+      { id: 'pr-note', page: 1, type: 'note', x: 300, y: 100, color: '#ffd400', note: 'Printed note' },
+      { id: 'pr-u', page: 2, type: 'underline', quads: [[72, 80, 300, 80, 72, 94, 300, 94]], color: '#00a000' }];
+  });
+  await win.click('.menu-btn:text-is("File")');
+  await win.click('.menu [data-id="print"]');
+  await win.waitForSelector('.vx-print-dialog');
+  await win.click('.vx-print-dialog .btn.primary');
+  // Either the stubbed print runs, or the renderer shows its "Could not print" error dialog.
+  let printed = null;
+  for (let i = 0; i < 300 && !printed; i++) {
+    const err = await win.evaluate(() => [...document.querySelectorAll('.dialog.error')].map((d) => d.textContent).join(' / '));
+    if (err) throw new Error(`print failed in the renderer: ${err}`);
+    printed = await app.evaluate(() => globalThis.__printed[0] ?? null);
+    if (!printed) await new Promise((res) => setTimeout(res, 100));
+  }
+  expect('webContents.print called', JSON.stringify(printed), printed && !printed.error && printed.opts?.silent === false && printed.opts?.printBackground === true);
+  expect('print container page images', JSON.stringify(printed.imgs.map(({ w, h }) => [w, h])),
+    printed.imgs.length === 3 && printed.imgs.every(({ w, h }) => w === 1275 && h === 1650));
+  const [mr, mg, mb] = printed.imgs[0].mark;
+  expect('textHighlight burnt into the printed page', String(printed.imgs[0].mark), mr < 60 && mg < 60 && mb > 190);
+  const printedPdf = await PDFDocument.load(Buffer.from(printed.pdf, 'base64'));
+  expect('printToPDF page count', printedPdf.getPageCount(), printedPdf.getPageCount() === 3);
+  await win.waitForSelector('.print-container', { state: 'detached', timeout: 10000 });
+  const dialogs = await win.evaluate(() => [...document.querySelectorAll('.dialog')].map((d) => d.textContent).join(' / '));
+  expect('no dialog after printing', dialogs, dialogs === '');
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');

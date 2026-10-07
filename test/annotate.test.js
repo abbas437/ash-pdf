@@ -191,3 +191,79 @@ describe('measureText', () => {
     assert.throws(() => measureText('x', { font: 'Comic' }), TypeError);
   });
 });
+
+// Every overlay type the app can create (renderer/ui registerObjectType calls; tools-markup.js
+// registers the TEXT_TYPES keys in a loop) must burn in: print and snapshot use flattenObjects.
+async function registeredObjectTypes() {
+  const { readdir, readFile } = await import('node:fs/promises');
+  const dir = new URL('../renderer/ui/', import.meta.url);
+  const types = new Set();
+  for (const f of (await readdir(dir)).filter((n) => n.endsWith('.js'))) {
+    const src = await readFile(new URL(f, dir), 'utf8');
+    for (const m of src.matchAll(/registerObjectType\(\s*'([A-Za-z]+)'/g)) types.add(m[1]);
+    if (/registerObjectType\(t,/.test(src)) {
+      const body = src.match(/const TEXT_TYPES = \{([\s\S]*?)\n\};/)[1];
+      for (const m of body.matchAll(/^\s+([A-Za-z]+):/gm)) types.add(m[1]);
+    }
+  }
+  return types;
+}
+
+describe('flattenObjects draws every overlay type the app creates', () => {
+  const img = makeImage('png');
+  const quad = (y) => [[300, y, 400, y, 300, y + 14, 400, y + 14]];
+  const SAMPLES = {
+    text: { x: 40, y: 40, w: 150, h: 20, text: 'Text' },
+    rect: { x: 40, y: 80, w: 60, h: 30, stroke: '#ff0000' },
+    ellipse: { x: 120, y: 80, w: 60, h: 30, stroke: '#ff0000' },
+    line: { x1: 40, y1: 130, x2: 140, y2: 130 },
+    arrow: { x1: 40, y1: 150, x2: 140, y2: 150 },
+    polyline: { points: [[40, 170], [90, 180], [140, 170]] },
+    ink: { points: [[40, 190], [90, 200], [140, 190]] },
+    highlight: { x: 40, y: 210, w: 100, h: 14, color: '#ffff00' },
+    whiteout: { x: 40, y: 230, w: 50, h: 10 },
+    image: { x: 40, y: 250, w: 40, h: 20, bytes: img, mime: 'image/png' },
+    callout: { x: 40, y: 290, w: 120, h: 30, tx: 200, ty: 330, text: 'Callout' },
+    stamp: { x: 40, y: 340, w: 120, h: 40, text: 'APPROVED', subtext: 'by A. Reviewer', color: '#c00000' },
+    note: { x: 300, y: 40, color: '#ffd400', note: 'Sticky' },
+    underline: { quads: quad(100), color: '#00a000', strokeWidth: 4 },
+    strikeout: { quads: quad(130), color: '#e00000', strokeWidth: 4 },
+    squiggly: { quads: quad(160), color: '#00a000' },
+    textHighlight: { quads: quad(190), color: '#0000ff', opacity: 1 },
+  };
+
+  test('every registered type is accepted, and notes/markups are painted', async () => {
+    const types = await registeredObjectTypes();
+    for (const t of ['note', 'underline', 'strikeout', 'squiggly', 'textHighlight', 'stamp', 'image']) assert.ok(types.has(t), `registered types found: ${[...types]}`);
+    const missing = [...types].filter((t) => !SAMPLES[t]);
+    assert.deepEqual(missing, [], 'every registered type has a sample here');
+    const objs = [...types].map((t, i) => ({ id: `o${i}`, page: 0, type: t, ...SAMPLES[t] }));
+    const out = await flatten(await makePdf(1), objs);
+    const r = await renderPage(out);
+    assert.ok(isColor(r.sample(350, 197), BLUE, 60), 'textHighlight painted');
+    assert.ok(isColor(r.sample(310, 46.5), [255, 212, 0], 60), 'note icon painted');
+    assert.ok(isColor(r.sample(350, 112), [0, 160, 0], 70), 'underline painted');
+    assert.ok(isColor(r.sample(350, 137), [224, 0, 0], 70), 'strikeout painted');
+  });
+
+  test('unknown type: throws by default, skipped with a warning when skipUnknown', async () => {
+    const src = await makePdf(1);
+    const objs = [{ id: 'a', page: 0, type: 'hologram', x: 1, y: 1, w: 5, h: 5 }, { id: 'b', page: 0, type: 'rect', x: 10, y: 10, w: 20, h: 20, fill: '#ff0000' }];
+    await assert.rejects(flatten(src, objs), { name: 'TypeError', message: /Unknown overlay object type "hologram"/ });
+    const warn = console.warn;
+    const warned = [];
+    console.warn = (...a) => warned.push(a.join(' '));
+    try {
+      const r = await renderPage(await flatten(src, objs, { skipUnknown: true }));
+      assert.ok(isColor(r.sample(20, 20), RED), 'known objects still drawn');
+    } finally {
+      console.warn = warn;
+    }
+    assert.equal(warned.length, 1);
+    assert.match(warned[0], /hologram/);
+  });
+
+  test('a text markup without quads is a TypeError', async () => {
+    await assert.rejects(flatten(await makePdf(1), [{ id: 'u', page: 0, type: 'underline' }]), { name: 'TypeError', message: /needs quads/ });
+  });
+});
