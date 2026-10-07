@@ -533,28 +533,55 @@ async function renderPage(tab, i) {
   bus.emit('page:rendered', { tab, pageIndex: i, container: pageEl, viewport: vp, scale });
 }
 
+// Links follow only in the Select and Hand tools; drawing tools draw over them (styles.css: body.links-off).
+const LINK_TOOLS = new Set(['select', 'hand']);
+bus.on('tool:changed', ({ tool }) => document.body.classList.toggle('links-off', !LINK_TOOLS.has(tool)));
+let linkStatusEl = null;
+/** Status-bar text for the link under the pointer ('' clears it). */
+function setLinkStatus(text) {
+  if (!linkStatusEl) {
+    const bar = document.querySelector('footer.statusbar');
+    if (!bar || !text) return;
+    linkStatusEl = bar.appendChild(h('span.st-link', { hidden: true }));
+  }
+  linkStatusEl.textContent = text;
+  linkStatusEl.hidden = !text;
+}
+
 async function renderLinks(tab, i, vp) {
   const ps = tab.view.ps[i];
   ps.linkLayer.replaceChildren();
   let annots = [];
   try { annots = await tab.pages[i].getAnnotations({ intent: 'display' }); } catch { return; }
   for (const a of annots) {
-    if (a.subtype !== 'Link' || (!a.url && !a.dest && !a.action)) continue;
+    // pdf.js drops url for schemes it does not trust (javascript: …) but keeps unsafeUrl: the link
+    // still gets the dialog, and main refuses to open it.
+    const url = a.url ?? a.unsafeUrl;
+    if (a.subtype !== 'Link' || (!url && !a.dest && !a.action)) continue;
     // pdf.js 6 has no PageViewport.convertToViewportRectangle.
     const [x1, y1] = vp.convertToViewportPoint(a.rect[0], a.rect[1]), [x2, y2] = vp.convertToViewportPoint(a.rect[2], a.rect[3]);
     const left = Math.min(x1, x2), top = Math.min(y1, y2);
+    const tip = url || 'Go to a place in this document';
     const link = h('a.pdf-link', {
       href: '#',
-      title: a.url ? a.url : 'Go to destination',
-      'aria-label': a.url ? `External link: ${a.url}` : 'Internal link',
+      draggable: 'false',
+      title: tip,
+      'aria-label': url ? `External link: ${url}` : 'Internal link',
       style: {
         left: `${(left / vp.width) * 100}%`, top: `${(top / vp.height) * 100}%`,
         width: `${(Math.abs(x2 - x1) / vp.width) * 100}%`, height: `${(Math.abs(y2 - y1) / vp.height) * 100}%`,
       },
     });
+    // A pointerdown the active tool claimed (Select on an annotation object, a pan) is not a link click.
+    let down = null;
+    link.addEventListener('pointerdown', (e) => { down = e; });
+    link.addEventListener('mouseenter', () => setLinkStatus(tip));
+    link.addEventListener('mouseleave', () => setLinkStatus(''));
     link.addEventListener('click', (e) => {
       e.preventDefault();
-      if (a.url) showExternalLink(a.url);
+      if (down?.defaultPrevented || !LINK_TOOLS.has(state.tool)) return;
+      setLinkStatus('');
+      if (url) showExternalLink(url);
       else if (a.dest) goToDest(tab, a.dest);
       else if (a.action === 'NextPage') viewer.nextPage(tab);
       else if (a.action === 'PrevPage') viewer.prevPage(tab);

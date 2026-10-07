@@ -82,6 +82,16 @@ kbd { font: inherit; color: var(--muted); font-size: 11px; }
 .pdf-link { position: absolute; pointer-events: auto; border-radius: 2px; }
 .pdf-link:hover, .pdf-link:focus-visible { background: rgba(168, 136, 63, .18); }
 .page-overlay { position: absolute; inset: 0; z-index: 3; pointer-events: none; }
+/* Links follow only in the Select and Hand tools (viewer.js toggles body.links-off). */
+body.links-off .viewer-host .pdf-link { pointer-events: none; }
+/* Hand tool (tools-hand.js): drag pans; text is not selectable, links stay clickable. */
+body.hand-pan .viewer-host { user-select: none; -webkit-user-select: none; }
+body.hand-pan .viewer-host .textLayer { pointer-events: none; }
+body.hand-pan .viewer-host .viewer-scroll, body.hand-pan .viewer-host .page { cursor: grab !important; }
+body.hand-pan .viewer-host .pdf-link { cursor: pointer; }
+body.hand-panning, body.hand-panning * { cursor: grabbing !important; }
+.st-link { margin-left: auto; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.link-dialog .url-field { display: block; width: 100%; min-width: 420px; box-sizing: border-box; margin: 4px 0; }
 .overlay-svg { position: absolute; left: 0; top: 0; overflow: visible; transform-origin: 0 0; }
 .overlay-svg[data-view-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
 .overlay-svg[data-view-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
