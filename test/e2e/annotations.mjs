@@ -234,12 +234,16 @@ try {
   // ------------------------------------------------------------ save twice
   step = 'save';
   const count = (await objs()).length;
+  const whiteouts = await ev('return tab.objects.filter((o) => o.type === "whiteout").length;');
   check(await ev('window.__orig = tab.bytes; return await app.saveTab(tab, true);'), 'first saveTab returned false');
   const out1 = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
-  check(await ev('return tab.bytes === window.__orig && tab.objects.length === arg && !tab.dirty;', count), 'save changed tab.bytes / objects / dirty');
+  // Since annotations are saved as real PDF annotations, a save makes the written file the new baseline
+  // (tab.bytes) and burns whiteout into the page, so whiteout objects leave tab.objects.
+  const st = await ev('return { same: tab.bytes === window.__orig, n: tab.objects.length, dirty: !!tab.dirty, types: tab.objects.map((o) => o.type) };');
+  check(!st.same && st.n === count - whiteouts && !st.dirty, `save: expected new baseline, ${count - whiteouts} objects, clean; got ${JSON.stringify(st)} (before: ${count}, whiteouts ${whiteouts})`);
   check(await ev('return await app.saveTab(tab, false);'), 'second saveTab returned false');
   const out2 = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
-  check(await ev('return tab.bytes === window.__orig;'), 'second save changed tab.bytes');
+  check(out2.length === out1.length && out2.every((b, i) => b === out1[i]), 'second save without changes wrote different bytes');
   const d1 = await PDFDocument.load(out1), d2 = await PDFDocument.load(out2);
   check(d2.getPageCount() === 3, `saved page count ${d2.getPageCount()}`);
   const objCount = (d) => d.context.enumerateIndirectObjects().length;
@@ -276,7 +280,7 @@ try {
   const after = await objs();
   const expected = before.filter((o) => o.page !== 1).map((o) => [o.id, o.page === 2 ? 1 : 0]);
   check(JSON.stringify(after.map((o) => [o.id, o.page])) === JSON.stringify(expected), 'remap dropped/renumbered objects wrongly');
-  check(after.length === before.length - 7 && after.some((o) => o.page === 1), 'remap counts');
+  check(after.length === before.length - before.filter((o) => o.page === 1).length && before.filter((o) => o.page === 1).length >= 6 && after.some((o) => o.page === 1), 'remap counts');
   check(await ev('return tab.undo.length === 0 && document.getElementById("btn-undo").disabled;'), 'remap did not reset history');
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
