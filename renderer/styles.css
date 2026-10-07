@@ -387,3 +387,16 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
   .print-fit .print-page img { max-height: 100vh; object-fit: contain; }
   .print-actual .print-page img { width: auto; max-width: none; }
 }
+
+/* Text markups, sticky notes and the comment popup (ui/tools-markup.js) */
+.ann-textHighlight path:first-child { mix-blend-mode: multiply; }
+.mk-popup { position: fixed; z-index: 60; width: 260px; box-sizing: border-box; padding: 8px; display: flex; flex-direction: column; gap: 6px;
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-top: 3px solid var(--brass); border-radius: 6px; box-shadow: var(--page-shadow); font: 12px/1.35 system-ui, sans-serif; }
+.mk-popup-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }
+.mk-popup-author { font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mk-popup-text { resize: vertical; min-height: 64px; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 5px; }
+.mk-popup-text:focus { outline: 2px solid var(--focus); outline-offset: -1px; }
+.mk-popup-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.mk-popup-btn { font: inherit; padding: 3px 10px; border-radius: 4px; border: 1px solid var(--line); background: var(--surface); color: var(--text); cursor: pointer; }
+.mk-popup-btn:hover { background: var(--hover); }
+.mk-popup-btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
