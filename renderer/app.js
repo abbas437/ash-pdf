@@ -17,6 +17,7 @@ import { initStampTools } from './ui/tools-stamp.js';
 import { initForms } from './ui/forms.js';
 import { initPageTools, idle as pageOpsIdle } from './ui/pagetools.js';
 import { initAdvancedSearch } from './ui/advsearch.js';
+import { initPageMarks } from './ui/pagemarks.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -374,6 +375,7 @@ M('View', { id: 'sidebar', label: 'Toggle sidebar', action: () => { state.sideba
 M('View', { id: 'theme', label: 'Toggle light / dark theme', action: () => setTheme(state.theme === 'dark' ? 'light' : 'dark') });
 M('Tools', { id: 'select', label: 'Select', shortcut: 'V', action: () => setTool('select') });
 initForms({ registerMenuItem });
+const pageMarks = initPageMarks({ registerMenuItem }); // Document menu: must be registered before Help
 M('Help', { id: 'keys', label: 'Keyboard shortcuts', action: showShortcuts });
 M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => showDialog({ title: 'About ASH PDF Studio', body: `Version ${await api.version()}. Free and open source (MIT). Uses pdf.js (Apache-2.0) and pdf-lib (MIT).` }) });
 
@@ -448,6 +450,7 @@ initTextTools(app);
 initCalloutTools(app);
 initStampTools(app);
 app.annotations = annotations;
+app.pageMarks = pageMarks;
 initPageTools(app);
 initAdvancedSearch(app);
 
