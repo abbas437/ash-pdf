@@ -202,6 +202,15 @@ function createWindow() {
   // The page <title> must not override the document title set through api.setTitle.
   mainWindow.on('page-title-updated', (event) => event.preventDefault());
   mainWindow.once('ready-to-show', () => mainWindow.show());
+  // The renderer sets a beforeunload guard while there are unsaved changes; without this handler Electron would
+  // silently refuse to close the window. Ask the user instead.
+  mainWindow.webContents.on('will-prevent-unload', (event) => {
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning', buttons: ['Keep working', 'Discard changes and close'], defaultId: 0, cancelId: 0, noLink: true,
+      title: 'Unsaved changes', message: 'There are unsaved changes.', detail: 'If you close now, they will be lost.',
+    });
+    if (choice === 1) event.preventDefault(); // preventDefault = ignore the guard and unload
+  });
   mainWindow.on('close', () => {
     settings.window = { bounds: mainWindow.getNormalBounds(), maximized: mainWindow.isMaximized() };
     saveSettings();

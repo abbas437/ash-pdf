@@ -416,7 +416,7 @@ window.addEventListener('drop', async (e) => {
   if (!files.length && e.dataTransfer?.files?.length) toast('Only PDF files can be opened');
   for (const f of files) await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
 });
-window.addEventListener('beforeunload', (e) => { if (!api.isElectron && state.tabs.some((t) => t.dirty)) e.preventDefault(); });
+window.addEventListener('beforeunload', (e) => { if (state.tabs.some((t) => t.dirty)) { e.preventDefault(); e.returnValue = ''; } });
 
 bus.on('tab:dirtyChanged', refresh);
 
