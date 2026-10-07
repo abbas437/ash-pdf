@@ -23,7 +23,7 @@
 //   annotations.toPage(tab, pageIndex, clientX, clientY) -> {x, y} in that page's points
 //
 // Save: a beforeSave hook flattens tab.objects into the bytes being written. tab.bytes is NOT
-// replaced by the flattened output (the hook restores it), so the objects stay editable and the
+// replaced by the flattened output (the hook is `transient`), so the objects stay editable and the
 // next save flattens again from the unflattened bytes. Limitation: a saved file shows the
 // objects as page content; reopening it does not make them editable again.
 import { bus } from '../bus.js';
@@ -491,7 +491,14 @@ function hover(e, tab) {
   const sc = viewer.getScrollEl(tab);
   if (!hit || !sc) return;
   const hd = handleAt(tab, hit.pageIndex, hit.x, hit.y);
-  sc.style.cursor = hd ? 'crosshair' : objectAt(tab, hit.pageIndex, hit.x, hit.y) ? 'move' : '';
+  sc.style.cursor = hd ? handleCursor(hd.handle, tab.viewRotation) : objectAt(tab, hit.pageIndex, hit.x, hit.y) ? 'move' : '';
+}
+/** Resize cursor for a handle as it appears on screen (view rotation 90/270 swaps the axes). */
+function handleCursor(id, rot = 0) {
+  if (id === 'p1' || id === 'p2') return 'move';
+  const c = { n: 'ns', s: 'ns', e: 'ew', w: 'ew', nw: 'nwse', se: 'nwse', ne: 'nesw', sw: 'nesw' }[id];
+  const swap = { ns: 'ew', ew: 'ns', nwse: 'nesw', nesw: 'nwse' };
+  return `${rot % 180 ? swap[c] : c}-resize`;
 }
 
 // ---------------------------------------------------------------- style, clipboard, keyboard
@@ -595,18 +602,16 @@ function updateChrome() {
 }
 
 // ---------------------------------------------------------------- save hook
-async function beforeSave(tab) {
+async function beforeSave(tab, bytes = tab.bytes) {
   ensureTab(tab);
   if (!tab.objects.length) return undefined;
-  const base = tab.bytes;
   const { flattenObjects } = await import('../../src/core/index.js');
-  const out = await flattenObjects(base, tab.objects.map(clone));
-  // saveTab() assigns the returned bytes to tab.bytes; put the unflattened bytes back right after
-  // so the objects stay editable and the next save never flattens them twice.
-  setTimeout(() => { if (tab.bytes === out) tab.bytes = base; }, 0);
-  return out;
+  return flattenObjects(bytes, tab.objects.map(clone));
 }
 beforeSave.id = 'annotations';
+// Only the written bytes are flattened; tab.bytes stays unflattened so the objects remain
+// editable and a second save never flattens them twice (saveTab honours `transient`).
+beforeSave.transient = true;
 /** Keep the hook last (after forms and any other bytes-producing hook). */
 function placeHook() {
   const hooks = state.hooks.beforeSave;

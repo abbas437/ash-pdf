@@ -166,8 +166,9 @@ export async function saveTab(tab = activeTab(), asNew = false) {
   try {
     let bytes = tab.bytes;
     for (const hook of state.hooks.beforeSave) {
-      const out = await hook(tab);
-      if (out instanceof Uint8Array) { bytes = out; tab.bytes = out; }
+      // hook(tab, bytesSoFar); a hook flagged `transient` changes only the written bytes, not tab.bytes.
+      const out = await hook(tab, bytes);
+      if (out instanceof Uint8Array) { bytes = out; if (!hook.transient) tab.bytes = out; }
     }
     let res;
     if (!asNew && tab.path && !String(tab.path).startsWith('dropped:')) res = await api.writeFile(tab.path, bytes);

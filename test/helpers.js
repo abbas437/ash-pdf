@@ -4,7 +4,8 @@ import { createCanvas } from '@napi-rs/canvas';
 import { fileURLToPath } from 'node:url';
 
 const pdfjsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
-const STANDARD_FONTS = fileURLToPath(new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url));
+// pdf.js wants forward slashes and a trailing slash (Windows paths use backslashes).
+const STANDARD_FONTS = fileURLToPath(new URL('../node_modules/pdfjs-dist/standard_fonts/', import.meta.url)).replace(/\\/g, '/');
 
 /** Simple doc with `n` pages of given size; page i gets a label. */
 export async function makePdf(n = 3, size = [612, 792]) {
