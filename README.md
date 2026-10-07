@@ -48,7 +48,7 @@ npm run licenses      # regenerate THIRD-PARTY-NOTICES.md; fails on a disallowed
 npm run dist          # Windows installer + portable exe into dist/ (run on Windows)
 ```
 
-`npm run icon` regenerates `build/icon.png` (needs `sharp`; see `scripts/make-icon.js`).
+`build/icon.png` is the ASH brand icon (512x512); electron-builder derives the Windows .ico from it.
 
 ## How releases are built
 
@@ -67,7 +67,7 @@ A second job (`smoke`, Ubuntu) runs `npm ci`, `vendor` and the unit tests.
 | `electron/preload.js` | Exposes `window.api` (CommonJS: sandboxed preloads cannot be ES modules). |
 | `renderer/` | The UI: `index.html`, `app.js`, `styles.css`, `shim.js`, generated `vendor/`. |
 | `src/core/` | PDF operations library (see `docs/CORE-API.md`). |
-| `scripts/` | `vendor.js`, `licenses.js`, `make-icon.js`, `smoke-browser.mjs`. |
+| `scripts/` | `vendor.js`, `licenses.js`, `smoke-browser.mjs`. |
 | `build/` | Icon and NSIS installer hooks (`installer.nsh`). |
 
 ## Renderer contract
@@ -148,3 +148,5 @@ Apache-2.0, pdf-lib and fontkit MIT; Electron and Chromium notices ship with the
 in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), and [docs/COPYRIGHT-REVIEW.md](docs/COPYRIGHT-REVIEW.md)
 records the copyright and trademark review. "PDF" is used only as the name of the ISO 32000 file format;
 this project is not affiliated with Adobe.
+
+The ASH logo and icon are trademarks of ASH Technical & Project Management Services and are not covered by the MIT licence of this repository. You may not use them for other products.
