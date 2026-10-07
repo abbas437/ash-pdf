@@ -25,6 +25,7 @@ import { initPageMarks } from './ui/pagemarks.js';
 import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextras.js';
 import { pdfium } from './pdfium/client.js';
 import { initOffice } from './ui/office.js';
+import { initExports } from './ui/exports.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
 
 const api = window.api;
@@ -451,6 +452,7 @@ app.annotations = annotations;
 app.pageMarks = pageMarks;
 initPageTools(app);
 initOffice(app); // File > Export to Word, Create PDF from Office file
+initExports(app); // File > Export to Excel, Export page as image
 initAdvancedSearch(app);
 initCopyText(app);
 

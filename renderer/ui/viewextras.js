@@ -167,7 +167,7 @@ export async function printPages(tab, { indices, copies = 1, scaling = 'fit', an
 // the core flattenObjects, which draws every type the app creates (notes and text markups with
 // the same code as their saved appearances, annots.js). A type it does not know is left out with a
 // console warning rather than failing the print. The caller destroys `tmp` when done.
-async function flattenedCopy(tab) {
+export async function flattenedCopy(tab) {
   const { flattenObjects } = await import('../../src/core/index.js');
   const bytes = await flattenObjects(tab.bytes.slice(), tab.objects.map((o) => structuredClone(o)), { skipUnknown: true });
   const V = new URL('./vendor/pdfjs/', document.baseURI).href; // same resources as viewer.js
