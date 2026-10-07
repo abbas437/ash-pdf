@@ -2,7 +2,7 @@
 // author, date, comment, replies and review status. Edits (comment, reply, status, delete) go
 // through the annotations API, one undo step each; src/core/annots.js writes them to the file
 // (/Contents, /IRT replies, review state). Pure helpers live in comments-lib.js.
-//   initComments(app) registers the tab ('comments') and its menu-less toolbar (filters, Export…).
+//   initComments(app) registers the tab ('comments') and its menu-less toolbar (search, sort, filters, Export…).
 import { bus } from '../bus.js';
 import { activeTab } from '../state.js';
 import { h } from './dom.js';
@@ -12,14 +12,14 @@ import { showDialog, showError } from './dialogs.js';
 import { registerSidebarTab, refreshSidebarTab, showSidebarTab } from './sidebar.js';
 import { annotations, getAuthor } from './annotations.js';
 import { markupTools } from './tools-markup.js';
-import { STATUSES, STATUS_LABELS, typeLabel, toEntries, filterEntries, groupByPage, distinct, toCsv } from './comments-lib.js';
+import { STATUSES, STATUS_LABELS, SORTS, typeLabel, toEntries, filterEntries, searchEntries, sortEntries, groupByPage, distinct, toCsv } from './comments-lib.js';
 
 const TAB = 'comments';
 const TYPE_ICON = {
   rect: 'shapes', ellipse: 'shapes', line: 'shapes', arrow: 'shapes', ink: 'draw', highlight: 'highlight', textHighlight: 'highlight',
   text: 'text', underline: 'text', strikeout: 'text', squiggly: 'text', callout: 'callout', stamp: 'stamp', image: 'image', whiteout: 'whiteout', note: 'comment',
 };
-const filters = { type: '', author: '', status: '' };
+const filters = { type: '', author: '', status: '', query: '', sort: 'page' };
 let gen = 0;
 
 export function initComments() {
@@ -38,27 +38,36 @@ async function render(container, tab) {
   const all = await entriesOf(tab);
   if (my !== gen) return;
   const scroll = container.querySelector('.cm-list')?.scrollTop ?? 0;
-  const shown = filterEntries(all, filters);
+  const searching = document.activeElement?.matches?.('.cm-search') ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  const shown = sortEntries(searchEntries(filterEntries(all, filters), filters.query), filters.sort);
+  const byPage = filters.sort === 'page';
   const select = (key, label, values, name = (v) => v) => h('select.cm-filter', { 'aria-label': `Filter by ${label}`, dataset: { filter: key }, onchange: (e) => { filters[key] = e.target.value; refreshSidebarTab(TAB); } },
     h('option', { value: '' }, label === 'status' ? 'All statuses' : `All ${label}s`), values.map((v) => h('option', { value: v, selected: v === filters[key] }, name(v))));
   const bar = h('div.cm-toolbar', {},
+    h('input.cm-search', { type: 'search', placeholder: 'Search comments', 'aria-label': 'Search comments, replies and authors', value: filters.query,
+      oninput: (e) => { filters.query = e.target.value; refreshSidebarTab(TAB); } }),
+    h('select.cm-filter.cm-sort', { 'aria-label': 'Sort by', title: 'Sort by', onchange: (e) => { filters.sort = e.target.value; refreshSidebarTab(TAB); } },
+      Object.entries(SORTS).map(([v, label]) => h('option', { value: v, selected: v === filters.sort }, `Sort: ${label}`))),
     select('type', 'type', distinct(all, 'type'), typeLabel),
     select('author', 'author', distinct(all, 'author')),
     select('status', 'status', STATUSES, (s) => STATUS_LABELS[s]),
-    h('button.btn.cm-export', { type: 'button', disabled: !shown.length, onclick: () => exportCsv(tab, groupByPage(shown).flatMap((g) => g.items)) }, 'Export…'));
+    h('button.btn.cm-export', { type: 'button', disabled: !shown.length, onclick: () => exportCsv(tab, shown) }, 'Export…'));
   const sel = new Set(annotations.getSelection(tab));
   const list = h('div.cm-list', { role: 'list', 'aria-label': 'Comments' });
   if (!all.length) list.append(h('p.sb-empty', {}, 'No comments or markups'));
-  else if (!shown.length) list.append(h('p.sb-empty', {}, 'No comments match the filters'));
-  for (const g of groupByPage(shown)) {
-    list.append(h('h3.cm-page', {}, `Page ${g.page + 1}`, h('span.cm-count', {}, String(g.items.length))));
-    for (const e of g.items) list.append(item(tab, e, sel.has(e.id)));
-  }
+  else if (!shown.length) list.append(h('p.sb-empty', {}, filters.query.trim() ? 'No comments match the search' : 'No comments match the filters'));
+  if (byPage) {
+    for (const g of groupByPage(shown)) {
+      list.append(h('h3.cm-page', {}, `Page ${g.page + 1}`, h('span.cm-count', {}, String(g.items.length))));
+      for (const e of g.items) list.append(item(tab, e, sel.has(e.id), false));
+    }
+  } else for (const e of shown) list.append(item(tab, e, sel.has(e.id), true));
   container.replaceChildren(bar, list);
   list.scrollTop = scroll;
+  if (searching) { const box = bar.querySelector('.cm-search'); box.focus(); box.setSelectionRange(...searching); }
 }
 
-function item(tab, e, selected) {
+function item(tab, e, selected, showPage) {
   const ro = !!tab.readOnly;
   const act = (label, fn, cls = '') => h(`button.cm-act${cls}`, { type: 'button', disabled: ro, dataset: { act: label.toLowerCase() }, onclick: (ev) => { ev.stopPropagation(); fn(); } }, label);
   const status = h('select.cm-status', { 'aria-label': 'Status', disabled: ro, onclick: (ev) => ev.stopPropagation(), onchange: async (ev) => {
@@ -71,7 +80,7 @@ function item(tab, e, selected) {
       h('span.cm-icon', { title: typeLabel(e.type), html: icon(TYPE_ICON[e.type] ?? 'info', 16) }),
       h('span.cm-author', { title: e.author || 'Unknown' }, e.author || 'Unknown'),
       e.status !== 'none' ? h(`span.cm-badge.cm-${e.status}`, {}, STATUS_LABELS[e.status]) : null),
-    h('div.cm-type', {}, `${typeLabel(e.type)} · `, h('span.cm-date', {}, e.date ? new Date(e.date).toLocaleString() : 'Not saved')),
+    h('div.cm-type', {}, `${showPage ? `Page ${e.page + 1} · ` : ''}${typeLabel(e.type)} · `, h('span.cm-date', {}, e.date ? new Date(e.date).toLocaleString() : 'Not saved')),
     e.text ? h('div.cm-text', {}, e.text) : h('div.cm-text.cm-none', {}, 'No comment'),
     e.replies.length ? h('ul.cm-replies', { 'aria-label': `${e.replies.length} repl${e.replies.length === 1 ? 'y' : 'ies'}` },
       e.replies.map((r) => h('li.cm-reply', {}, h('div.cm-author', {}, r.author || 'Unknown'), r.date ? h('div.cm-date', {}, new Date(r.date).toLocaleString()) : null, h('div.cm-text', {}, r.text)))) : null,

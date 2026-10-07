@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { commentText, toEntries, filterEntries, groupByPage, distinct, csvCell, toCsv } from '../renderer/ui/comments-lib.js';
+import { commentText, toEntries, filterEntries, searchEntries, sortEntries, groupByPage, distinct, csvCell, toCsv } from '../renderer/ui/comments-lib.js';
 
 const objs = [
   { id: 'a', type: 'rect', page: 1, note: 'Clash', author: 'Ahmad', modified: '2026-10-01T08:00:00.000Z', status: 'accepted', replies: [{ id: 'r1', author: 'Lee', date: null, text: 'Fixed' }] },
@@ -50,4 +50,24 @@ test('toCsv: BOM, header, rows with joined replies', () => {
   assert.equal(csv, '﻿page,type,author,date,status,comment,replies\r\n'
     + '2,Rectangle,Ahmad,2026-10-01T08:00:00.000Z,Accepted,Clash,Lee: Fixed\r\n'
     + `3,Sticky note,Me,,None,"'=HYPERLINK(""x"")",A: one | B: two\r\n`);
+});
+
+test('searchEntries: comment text, reply text and author, case-insensitive', () => {
+  const e = toEntries(objs, 'Me');
+  assert.deepEqual(searchEntries(e, 'clash').map((x) => x.id), ['a']);
+  assert.deepEqual(searchEntries(e, 'FIXED').map((x) => x.id), ['a']);
+  assert.deepEqual(searchEntries(e, 'lee').map((x) => x.id), ['c']);
+  assert.deepEqual(searchEntries(e, ' approved ').map((x) => x.id), ['d']);
+  assert.deepEqual(searchEntries(e, '  ').length, 4);
+  assert.deepEqual(searchEntries(e, 'nothing'), []);
+});
+
+test('sortEntries: page, date newest first (undated first), author A-Z', () => {
+  const e = toEntries(objs, 'me');
+  assert.deepEqual(sortEntries(e, 'page').map((x) => x.id), ['b', 'd', 'a', 'c']);
+  assert.deepEqual(sortEntries(e, 'date').map((x) => x.id), ['b', 'd', 'a', 'c']);
+  assert.deepEqual(sortEntries(toEntries(objs.slice(0, 1).concat(objs[2])), 'date').map((x) => x.id), ['a', 'c']);
+  assert.deepEqual(sortEntries(toEntries([objs[2], objs[0]]), 'date').map((x) => x.id), ['a', 'c']);
+  assert.deepEqual(sortEntries(e, 'author').map((x) => x.id), ['a', 'c', 'b', 'd']);
+  assert.deepEqual(e.map((x) => x.id), ['a', 'b', 'c', 'd'], 'input left unsorted');
 });

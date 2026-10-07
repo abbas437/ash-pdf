@@ -1,5 +1,5 @@
 // Page tools: thumbnail context menu, drag-and-drop reordering, page/document dialogs
-// (merge, split, crop, properties, images to PDF, insert pages) and the per-tab
+// (merge, split, crop, properties, images to PDF, insert pages, replace pages) and the per-tab
 // page-operation undo stack (tab.bytesUndo / tab.bytesRedo, 20 entries each).
 //
 // Every change to the document follows the page protocol other modules rely on:
@@ -638,6 +638,53 @@ export async function insertFromDialog(tab = activeTab()) {
   }));
 }
 
+// ---------------------------------------------------------------- Replace pages…
+/** Pages at..at+count-1 are replaced (→ null, their annotations dropped); the rest keep their index. */
+export const replaceMap = (n, at, count) => new Map(range(n).map((i) => [i, i >= at && i < at + count ? null : i]));
+export async function replaceDialog(tab = activeTab()) {
+  if (!editable(tab)) return;
+  const n = tab.numPages;
+  let src = null;
+  const err = errEl();
+  const chosen = h('span.pt-file-name', { id: 'pt-rp-file' }, 'No file chosen');
+  const pick = h('button.btn', { type: 'button', id: 'pt-rp-pick' }, 'Choose PDF…');
+  pick.addEventListener('click', () => {
+    pickPdfs(false).then(([f]) => { if (f) { src = f; chosen.textContent = `${f.name} (${pagesLabel(f)})`; setErr(err, null); } })
+      .catch((e) => setErr(err, e.message));
+  });
+  const pages = h('input.input', { type: 'text', id: 'pt-rp-pages', placeholder: 'All pages' });
+  const start = h('input.input', { type: 'number', min: '1', max: String(n), value: String(thumbs.selection?.size ? Math.min(...thumbs.selection) + 1 : 1), id: 'pt-rp-at' });
+  const form = h('div.pt-form', {}, h('div.pt-row', {}, pick, chosen),
+    field('Source pages', pages, 'Leave empty for all pages, or enter ranges such as 1-3,5.'),
+    field('Replace starting at page', start, `The same number of pages is replaced from this page on (1-${n}).`), err);
+  let idx = null, at = null;
+  const c = await core();
+  const v = await showDialog({
+    title: 'Replace pages', body: form, className: 'pt-dialog', initialFocus: '#pt-rp-pick',
+    buttons: [CANCEL, { label: 'Replace', value: 'ok', primary: true, validate: () => {
+      if (!src) return setErr(err, 'Choose the PDF with the replacement pages.', pick);
+      try { idx = pages.value.trim() ? c.parseRanges(pages.value, src.pages) : range(src.pages); } catch (e) { return setErr(err, `Source pages: ${e.message}`, pages); }
+      at = num(start) - 1;
+      if (!Number.isInteger(at) || at < 0 || at + idx.length > n) {
+        return setErr(err, idx.length > n ? `${idx.length} pages chosen but this document has ${n}.` : `Enter a start page from 1 to ${n - idx.length + 1} (${idx.length} page${idx.length === 1 ? '' : 's'} replaced).`, start);
+      }
+      return setErr(err, null);
+    } }],
+  });
+  if (v !== 'ok') return;
+  const hit = (tab.objects ?? []).filter((o) => o.page >= at && o.page < at + idx.length).length;
+  if (hit) {
+    const last = at + idx.length;
+    const ok = await showDialog({ title: 'Replace pages', body: `${hit} annotation${hit === 1 ? ' is' : 's are'} on ${last - at === 1 ? `page ${at + 1}` : `pages ${at + 1}-${last}`} and will be removed with the replaced pages.`,
+      buttons: [CANCEL, { label: 'Replace', value: 'ok', primary: true, danger: true }] });
+    if (ok !== 'ok') return;
+  }
+  return runOp(tab, 'Replace pages', async (bytes, cnt, cc) => {
+    if (at + idx.length > cnt) throw new RangeError('The document changed: the pages to replace are no longer there.');
+    return { bytes: await cc.replacePages(bytes, src.bytes, idx, at), map: replaceMap(cnt, at, idx.length), select: range(idx.length, at) };
+  });
+}
+
 // ---------------------------------------------------------------- Flatten annotations…
 // Burns the annotations in tab.bytes (those already saved in the file) into the page content as one
 // page-op undo step and drops their unedited overlay mirrors (annotations.dropFlattened); objects not
@@ -809,6 +856,7 @@ export function initPageTools(appApi) {
   M('Edit', { id: 'annots-author', label: 'Author name…', action: () => authorDialog() });
   M('Tools', { separator: true });
   item('Tools', { id: 'insert-pages', label: 'Insert pages from PDF…', action: withTab(insertFromDialog) });
+  item('Tools', { id: 'replace-pages', label: 'Replace pages…', action: withTab(replaceDialog) });
   item('Tools', { id: 'interleave-pages', label: 'Interleave pages from PDF…', action: withTab(interleaveDialog) });
   item('Tools', { id: 'reverse-pages', label: 'Reverse page order…', action: withTab(reverseDialog) }, (t) => t.numPages > 1);
   item('Tools', { id: 'crop', label: 'Crop pages…', action: withTab(cropDialog) });
@@ -816,5 +864,5 @@ export function initPageTools(appApi) {
   item('Tools', { id: 'edit-properties', label: 'Edit properties…', action: withTab(propertiesDialog) });
   M('Document', { separator: true });
   item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
-  app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
+  app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
 }
