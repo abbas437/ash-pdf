@@ -194,6 +194,25 @@ try {
   expect('pdfium selfTest', JSON.stringify({ ...st, objects: undefined }),
     !st.error && st.pageCount === 2 && st.text === 'PDFium self-test 4711' && st.originalIsPrefix && st.outLength > st.inLength);
 
+  step = 'copyText puts text on the system clipboard';
+  r = await call('copyText', 'ASH copy 4711');
+  expect('copyText', r, r === 'ok:true');
+  const clip = await app.evaluate(({ clipboard }) => clipboard.readText());
+  expect('clipboard.readText', clip, clip === 'ASH copy 4711');
+  r = await call('copyText', 42);
+  expect('copyText non-string', r, r.startsWith('rejected:'));
+  step = 'openExternal: only http(s)/mailto reach shell.openExternal';
+  await app.evaluate(({ shell }) => { globalThis.__opened = []; shell.openExternal = async (u) => { globalThis.__opened.push(u); }; });
+  for (const bad of ['file:///etc/passwd', 'javascript:alert(1)', 'ms-settings:privacy']) {
+    r = await call('openExternal', bad);
+    expect(`openExternal ${bad}`, r, r.startsWith('rejected:'));
+  }
+  expect('shell.openExternal after rejected urls', JSON.stringify(await app.evaluate(() => globalThis.__opened)), (await app.evaluate(() => globalThis.__opened)).length === 0);
+  r = await call('openExternal', 'https://example.com/a?b=1');
+  expect('openExternal https', r, r === 'ok:true');
+  const opened = await app.evaluate(() => globalThis.__opened);
+  expect('shell.openExternal https', JSON.stringify(opened), JSON.stringify(opened) === '["https://example.com/a?b=1"]');
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');

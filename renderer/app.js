@@ -24,6 +24,7 @@ import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
 import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextras.js';
 import { pdfium } from './pdfium/client.js';
+import { initCopyText, copySelection } from './ui/copytext.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -351,7 +352,7 @@ M('File', { id: 'print', label: 'Print…', shortcut: 'Ctrl+P', action: withTab(
 M('File', { id: 'properties', label: 'Document properties', action: withTab(showProperties), enabled: hasDoc });
 M('File', { separator: true });
 M('File', { id: 'close', label: 'Close tab', shortcut: 'Ctrl+W', action: () => closeTab(), enabled: hasDoc });
-M('Edit', { id: 'copy', label: 'Copy', shortcut: 'Ctrl+C', action: () => document.execCommand('copy') });
+M('Edit', { id: 'copy', label: 'Copy', shortcut: 'Ctrl+C', action: () => copySelection() });
 M('Edit', { id: 'find', label: 'Find…', shortcut: 'Ctrl+F', action: () => bus.emit('search:open', {}), enabled: hasDoc });
 M('View', { id: 'zoomin', label: 'Zoom in', shortcut: 'Ctrl+=', action: withTab((t) => viewer.zoomIn(t)), enabled: hasDoc });
 M('View', { id: 'zoomout', label: 'Zoom out', shortcut: 'Ctrl+-', action: withTab((t) => viewer.zoomOut(t)), enabled: hasDoc });
@@ -449,6 +450,7 @@ app.annotations = annotations;
 app.pageMarks = pageMarks;
 initPageTools(app);
 initAdvancedSearch(app);
+initCopyText(app);
 
 (async () => {
   try {

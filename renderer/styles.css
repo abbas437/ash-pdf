@@ -492,3 +492,6 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .stamp-dyn { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 :root { --stamp-paper: #ffffff; }
 [data-theme="dark"] { --stamp-paper: #f6f4ee; }
+
+/* ---- page text context menu (ui/copytext.js) */
+.menu.context-menu { z-index: 1000; min-width: 160px; top: auto; }

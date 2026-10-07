@@ -633,6 +633,36 @@ function registerLibraryIpc() {
 }
 // ---- end signature library -------------------------------------------------------------------
 
+// ---- clipboard and external links
+// api.copyText: the renderer cannot use navigator.clipboard or execCommand('copy') (every
+// permission check is denied, clipboard-sanitized-write included), so text goes through here.
+// api.openExternal: only http:, https: and mailto: URLs reach the system browser / mail client.
+import { clipboard } from 'electron';
+const MAX_CLIPBOARD_CHARS = 10 * 1024 * 1024;
+const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
+function externalUrl(raw) {
+  if (typeof raw !== 'string' || raw.length > 8192) throw new TypeError('openExternal: url must be a string');
+  let u;
+  try { u = new URL(raw); } catch { throw new TypeError('openExternal: not a valid URL'); }
+  if (!EXTERNAL_SCHEMES.has(u.protocol)) throw new Error(`openExternal: ${u.protocol} links are not opened`);
+  return u.href;
+}
+app.whenReady().then(() => {
+  ipcMain.handle('clipboard:writeText', (event, text) => {
+    if (!fromApp(event)) throw new Error('clipboard:writeText: not allowed');
+    if (typeof text !== 'string') throw new TypeError('copyText: text must be a string');
+    if (text.length > MAX_CLIPBOARD_CHARS) throw new RangeError('copyText: text too large (10 MB max)');
+    clipboard.writeText(text);
+    return true;
+  });
+  ipcMain.handle('shell:openExternal', async (event, raw) => {
+    if (!fromApp(event)) throw new Error('shell:openExternal: not allowed');
+    await shell.openExternal(externalUrl(raw));
+    return true;
+  });
+});
+// ---- end clipboard and external links
+
 // --- Lifecycle ------------------------------------------------------------------------------
 app.on('web-contents-created', (_event, contents) => {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
