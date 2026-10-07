@@ -346,7 +346,13 @@ function remapPages(tab, map) {
   ensureTab(tab);
   const before = tab.objects.length;
   tab.objects = tab.objects.filter((o) => !map.has(o.page) || map.get(o.page) != null);
-  for (const o of tab.objects) if (map.has(o.page)) o.page = map.get(o.page);
+  const sync = syncOf(tab);
+  for (const o of tab.objects) {
+    if (!map.has(o.page)) continue;
+    const s = sync.get(o.id), unedited = s && stable(o) === s.snap;
+    o.page = map.get(o.page);
+    if (unedited) s.snap = stable(o); // the file's copy moves with its page: still unedited
+  }
   // Snapshots in the history refer to old page indices: page operations reset the history.
   tab.undo.length = 0;
   tab.redo.length = 0;
@@ -743,7 +749,7 @@ async function beforeSave(tab, bytes = tab.bytes) {
   const { flattenObjects, writeAnnotations } = await import('../../src/core/index.js');
   let out = burn.length ? await flattenObjects(bytes, burn) : bytes;
   if (add.length || update.length || remove.length) out = await writeAnnotations(out, { add, update, remove }, { author: await getAuthor() });
-  pending.set(tab, { base: tab.bytes, out, snaps: new Map(rest.map((o) => [o.id, stable(o)])), burned: new Set(burn.map((o) => o.id)) });
+  pending.set(tab, { base: tab.bytes, out, snaps: new Map(rest.map((o) => [o.id, stable(o)])), remove, burned: new Set(burn.map((o) => o.id)) });
   return out;
 }
 beforeSave.id = 'annotations';
@@ -756,11 +762,19 @@ beforeSave.saved = (tab, clean) => {
   if (!p || !clean || tab.bytes !== p.base) return; // stay as before: the next save rebuilds from tab.bytes
   tab.bytes = p.out;
   const sync = syncOf(tab);
-  for (const id of [...sync.keys()]) if (!p.snaps.has(id)) sync.delete(id);
+  for (const id of p.remove) sync.delete(id); // ids reconcile added since beforeSave are kept
   for (const [id, snap] of p.snaps) sync.set(id, { source: sync.get(id)?.source ?? { nm: id }, snap });
   if (p.burned.size) {
     tab.objects = tab.objects.filter((o) => !p.burned.has(o.id));
     for (const id of p.burned) selOf(tab).delete(id);
+    // The history must not bring a burned object back (it would be burned a second time).
+    const purge = (cmd) => {
+      if (cmd.kind === 'batch') cmd.cmds = cmd.cmds.filter(purge);
+      else if (cmd.items) cmd.items = cmd.items.filter((it) => !p.burned.has(it.obj.id));
+      else if (cmd.changes) cmd.changes = cmd.changes.filter((c) => !p.burned.has(c.id));
+      return (cmd.cmds ?? cmd.items ?? cmd.changes ?? [1]).length > 0;
+    };
+    for (const h of [tab.undo, tab.redo]) h.splice(0, h.length, ...h.filter(purge));
     bus.emit('tab:bytesChanged', { tab }); // the whiteout is in the page now
   }
   updateChrome();

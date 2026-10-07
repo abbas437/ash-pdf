@@ -5,13 +5,17 @@
 // only by the overlay (canvas pixels), is moved, saved (1 Square at the new place, Link and field
 // untouched), saved again unchanged (same bytes), deleted (0 Squares); a new rect saved twice is not
 // duplicated; Document > Flatten annotations… with Save first leaves no markup and undo restores it.
+// Then, each in a new tab: two foreign annotations on page 3 survive Delete page 1 + Save byte for
+// byte (not rewritten as edited); a save racing the reload that re-imports a flattened annotation
+// (Flatten, page Undo) leaves the mirror in step, so the next save writes no duplicate; Save burns a
+// whiteout and Undo/Redo afterwards neither dirty the tab nor bring the whiteout back to burn again.
 // Prints "ANNOTS-IMPORT OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument, PDFName, PDFString } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, PDFDict, PDFArray, PDFRef, PDFRawStream } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
@@ -32,6 +36,30 @@ async function makePdf() {
   f.setText('Ahmad');
   f.addToPage(p, { x: 300, y: 400, width: 150, height: 24 });
   return Buffer.from(await doc.save());
+}
+/** Three pages; page 3 has a foreign /Square and /Circle (no /NM), each with its own appearance. */
+async function makeThreePagePdf() {
+  const doc = await PDFDocument.create();
+  for (let k = 0; k < 3; k++) doc.addPage([612, H]);
+  const ctx = doc.context, p = doc.getPage(2);
+  const ap = (ops) => ctx.register(ctx.stream(ops, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 100, 60] }));
+  const sq = ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [100, 500, 200, 560], C: [1, 0, 0], BS: { W: 3 }, F: 4, T: PDFString.of('Other App'), AP: { N: ap('1 0 0 RG 3 w 1.5 1.5 97 57 re S') } });
+  const ci = ctx.obj({ Type: 'Annot', Subtype: 'Circle', Rect: [300, 400, 400, 460], C: [0, 0, 1], BS: { W: 2 }, F: 4, T: PDFString.of('Other App'), AP: { N: ap('0 0 1 RG 2 w 1 30 m 1 60 99 60 99 30 c S') } });
+  p.node.set(PDFName.of('Annots'), ctx.obj([ctx.register(sq), ctx.register(ci)]));
+  return Buffer.from(await doc.save());
+}
+/** Contents of the markup annotation dictionaries on page `pageIndex`, refs resolved (not /P), sorted. */
+async function markupDicts(bytes, pageIndex) {
+  const doc = await PDFDocument.load(bytes), ctx = doc.context;
+  const deep = (v, seen) => {
+    if (v instanceof PDFRef) return seen.has(String(v)) ? '<cycle>' : deep(ctx.lookup(v), new Set([...seen, String(v)]));
+    if (v instanceof PDFRawStream) return `${deep(v.dict, seen)}stream:${Buffer.from(v.contents).toString('hex')}`;
+    if (v instanceof PDFDict) return `<<${[...v.entries()].filter(([k]) => String(k) !== '/P').map(([k, x]) => `${k} ${deep(x, seen)}`).sort().join(' ')}>>`;
+    if (v instanceof PDFArray) return `[${v.asArray().map((x) => deep(x, seen)).join(' ')}]`;
+    return String(v);
+  };
+  const annots = doc.getPage(pageIndex).node.Annots()?.asArray() ?? [];
+  return annots.map((r) => ctx.lookup(r)).filter((d) => /^\/(Square|Circle)$/.test(String(d.get(PDFName.of('Subtype'))))).map((d) => deep(d, new Set())).sort();
 }
 /** {squares: [{x,y,w,h}], other: ['Link:<dict>', 'Widget:<dict>']} of page 1, via pdf-lib in node. */
 async function inspect(bytes) {
@@ -156,6 +184,80 @@ try {
   await waitRendered();
   await frames();
   check(await canvasInk({ x: 51, y: 505, w: 4, h: 30 }) === 0, 'after undo the restored rect is drawn on the canvas too');
+
+  // Opens `buffer` in a new tab (made active) and waits for its first page to render.
+  const openPdf = async (name, buffer, pages) => {
+    const ch = page.waitForEvent('filechooser');
+    await page.click('#btn-open');
+    await (await ch).setFiles({ name, mimeType: 'application/pdf', buffer });
+    await page.waitForFunction(([n, k]) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId);
+      return t?.name === n && t.numPages === k && a.viewer.getOverlaySvg(t, 0); }, [name, pages], { timeout: 10_000 });
+    await waitRendered();
+  };
+  const noDialog = async () => check(!(await page.$('.dialog')), `unexpected dialog: ${await page.textContent('.dialog').catch(() => '')}`);
+
+  step = 'delete page 1: unedited imports are not rewritten';
+  const three = await makeThreePagePdf();
+  const origDicts = await markupDicts(three, 2);
+  check(origDicts.length === 2, `fixture: ${origDicts.length} markup annotations on page 3`);
+  await openPdf('three.pdf', three, 3);
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.length === 2; }, null, { timeout: 10_000 });
+  await ev('await app.pageTools.deletePages(tab, [0], { confirm: false });');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.numPages === 2 && t.objects.every((o) => o.page === 1); }, null, { timeout: 10_000 });
+  await ev('await new Promise((r) => setTimeout(r, 300));'); // let the reload reconcile
+  const delOut = await save(true);
+  const delDicts = await markupDicts(delOut, 1);
+  check(delDicts.length === 2, `after delete page + save: ${delDicts.length} markup annotations on (new) page 2, expected 2`);
+  check(JSON.stringify(delDicts) === JSON.stringify(origDicts), `delete page 1 + save rewrote unedited annotations:\n${delDicts.join('\n')}\nvs\n${origDicts.join('\n')}`);
+  await noDialog();
+
+  step = 'save racing the reload after Flatten + page undo';
+  await openPdf('race.pdf', pdf, 1);
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.length === 1; }, null, { timeout: 10_000 });
+  await ev('an.add(tab, { type: "rect", page: 0, x: 50, y: 500, w: 80, h: 40, stroke: "#0000ff", strokeWidth: 2 });');
+  await page.click('.menu-btn:text-is("Document")');
+  await page.click('.menu-item[data-id="flatten-annotations"]');
+  await page.waitForSelector('.dialog');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t?.bytesUndo?.length === 1 && t.objects.length === 1; }, null, { timeout: 10_000 });
+  await ev('await new Promise((r) => setTimeout(r, 300));');
+  // Hold the next readAnnotations (the page undo's reload) and the save's writeAnnotations at their
+  // PDFDocument.load, so beforeSave snapshots before the reload re-imports the square, which lands
+  // before the save completes.
+  await ev(`const { PDFDocument: D } = await import('pdf-lib');
+    const orig = D.load; window.__arm = { readAnnotations: true, writeAnnotations: false }; window.__gate = {};
+    D.load = async function (...a) {
+      const st = new Error().stack;
+      for (const fn of ['readAnnotations', 'writeAnnotations']) if (window.__arm[fn] && st.includes(fn)) {
+        window.__arm[fn] = false; await new Promise((r) => { window.__gate[fn] = r; });
+      }
+      return orig.apply(this, a);
+    };`);
+  await ev('app.pageTools.undo(tab);');
+  await page.waitForFunction(() => !!window.__gate.readAnnotations, null, { timeout: 10_000 });
+  await ev('window.__arm.writeAnnotations = true; window.__save = app.saveTab(tab);');
+  await page.waitForFunction(() => !!window.__gate.writeAnnotations, null, { timeout: 10_000 });
+  await ev('window.__gate.readAnnotations();');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.length === 2; }, null, { timeout: 10_000 });
+  await ev('window.__gate.writeAnnotations();');
+  check(await ev('return await window.__save;'), 'first save (racing the reload) failed');
+  await noDialog();
+  const race2 = await inspect(await save());
+  await noDialog();
+  check(race2.squares.length === 2, `after the second save: ${race2.squares.length} Squares, expected 2`);
+  check(await ev('return !tab.dirty && tab.objects.length === 2;'), 'after the second save: dirty or objects changed');
+
+  step = 'whiteout burned once despite undo/redo after save';
+  await openPdf('white.pdf', pdf, 1);
+  await ev('an.add(tab, { type: "whiteout", page: 0, x: 400, y: 300, w: 80, h: 40 });');
+  const w1 = await save(true);
+  check(await ev('return !tab.dirty && !tab.objects.some((o) => o.type === "whiteout");'), 'save did not burn the whiteout');
+  await ev('an.undo(tab);');
+  check(await ev('return !tab.dirty;'), 'undo after the whiteout was burned marked the tab dirty');
+  await ev('an.redo(tab);');
+  check(await ev('return !tab.objects.some((o) => o.type === "whiteout");'), 'redo brought the burned whiteout back');
+  const w2 = await save();
+  check(Buffer.compare(w1, w2) === 0, 'the second save changed the file (whiteout burned again)');
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('ANNOTS-IMPORT OK');
