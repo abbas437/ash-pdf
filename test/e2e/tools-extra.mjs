@@ -2,7 +2,8 @@
 // End-to-end test of the Cloud shape (Shapes tool, key O; renderer/ui/tools-shapes.js) in Chromium
 // via playwright-core: draws a revision cloud with real mouse events, checks the overlay path,
 // saves through app.saveTab and checks the output is a /Square annotation with a cloudy /BE that
-// reads back as a cloud. Prints "TOOLS-EXTRA OK".
+// reads back as a cloud; places a circle and a rect stamp (corner pixels empty vs inked), saves,
+// reloads and checks the circle survives. Prints "TOOLS-EXTRA OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -99,6 +100,63 @@ try {
   check(annot.lookup(PDFName.of('BE'), PDFDict)?.lookup(PDFName.of('S'))?.asString() === '/C', 'saved cloud lacks /BE /S /C');
   const { objects } = await readAnnotations(out);
   check(objects.length === 1 && objects[0].type === 'cloud', `read back: ${JSON.stringify(objects.map((o) => o.type))}`);
+
+  // ------------------------------------------------------------ round stamps: circle vs rect, save, reload
+  step = 'circle stamp';
+  await key('s');
+  await frames();
+  check(await ev('return app.state.tool;') === 'stamp', 'S did not select the Stamp tool');
+  await page.click('.opt-stamp-shape[data-shape="circle"]');
+  check(await page.$('.opt-stamp-shape[data-shape="circle"][aria-pressed="true"]'), 'circle shape button not pressed');
+  await page.mouse.click(...await toClient(0, 180, 420));
+  await frames();
+  await ev('an.select(tab, []);');
+  await page.click('.opt-stamp-shape[data-shape="rect"]');
+  await page.mouse.click(...await toClient(0, 420, 420));
+  await frames();
+  await ev('an.select(tab, []);');
+  await frames();
+  const stamps = (await objs()).filter((o) => o.type === 'stamp');
+  check(stamps.length === 2 && stamps[0].shape === 'circle' && !stamps[1].shape, `stamps: ${JSON.stringify(stamps.map((o) => o.shape))}`);
+  check(Math.abs(stamps[0].w - stamps[0].h) < 0.01, 'circle stamp box is not square');
+  // Count stamp-coloured pixels in a 6x6 px window just inside each stamp's top-left and top-right corners.
+  const cornerInk = async (o) => {
+    const [x0, y0] = await toClient(0, o.x, o.y), [x1] = await toClient(0, o.x + o.w, o.y);
+    const shot = await page.screenshot({ clip: { x: x0, y: y0, width: x1 - x0, height: 8 } });
+    return ev(`const bmp = await createImageBitmap(new Blob([new Uint8Array(arg)], { type: 'image/png' }));
+      const c = new OffscreenCanvas(bmp.width, bmp.height), g = c.getContext('2d'); g.drawImage(bmp, 0, 0);
+      let n = 0; for (const x0 of [0, bmp.width - 6]) { const d = g.getImageData(x0, 0, 6, 6).data; for (let i = 0; i < d.length; i += 4) if (d[i + 1] - d[i] > 40 && d[i + 1] - d[i + 2] > 40) n++; }
+      return n;`, Array.from(shot));
+  };
+  const ink = async () => { const os2 = (await objs()).filter((o) => o.type === 'stamp'); return [await cornerInk(os2[0]), await cornerInk(os2[1])]; };
+  let [circInk, rectInk] = await ink();
+  check(circInk === 0 && rectInk > 6, `corner pixels before save: circle ${circInk}, rect ${rectInk}`);
+
+  step = 'round stamp save';
+  check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false (stamps)');
+  const out2 = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  const back = (await readAnnotations(out2)).objects.filter((o) => o.type === 'stamp');
+  check(back.length === 2 && back[0].shape === 'circle' && back[1].shape === 'rect', `saved stamp shapes: ${JSON.stringify(back.map((o) => o.shape))}`);
+
+  step = 'round stamp reload';
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 10_000 });
+  const chooser2 = page.waitForEvent('filechooser');
+  await page.click('#btn-open');
+  await (await chooser2).setFiles({ name: 'stamped.pdf', mimeType: 'application/pdf', buffer: Buffer.from(out2) });
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs[0]; return t?.numPages === 2 && t.objects?.some((o) => o.type === 'stamp') && a.viewer.getOverlaySvg(t, 0); }, null, { timeout: 10_000 });
+  await ev('v.setZoom(tab, 1); an.select(tab, []);');
+  await frames();
+  const re = (await objs()).filter((o) => o.type === 'stamp');
+  check(re.length === 2 && re[0].shape === 'circle', `reloaded stamp shapes: ${JSON.stringify(re.map((o) => o.shape))}`);
+  check(await ev('return !!v.getOverlaySvg(tab, 0).querySelector(".ann-stamp[data-shape=circle] ellipse");'), 'reloaded circle stamp not drawn as rings');
+  await ev('v.scrollToPage(tab, 0);');
+  await frames();
+  [circInk, rectInk] = await ink();
+  check(circInk === 0 && rectInk > 6, `corner pixels after reload: circle ${circInk}, rect ${rectInk}`);
+  await key('s');
+  await frames();
+  check(await page.$('.opt-stamp-shape[data-shape="rect"][aria-pressed="true"]'), 'last chosen stamp shape not restored after reload');
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('TOOLS-EXTRA OK');
