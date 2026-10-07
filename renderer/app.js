@@ -348,6 +348,10 @@ async function setTheme(theme, persist = true) {
 const zoomTo = (v) => withTab((t) => viewer.setZoom(t, v));
 const M = registerMenuItem;
 M('File', { id: 'open', label: 'Open…', shortcut: 'Ctrl+O', action: () => openDialog() });
+if (api.isElectron) {
+  M('File', { id: 'newwindow', label: 'New window', shortcut: 'Ctrl+N', action: () => api.newWindow() });
+  M('File', { id: 'openwindow', label: 'Open in new window…', action: () => api.openInNewWindow() });
+}
 M('File', { id: 'save', label: 'Save', shortcut: 'Ctrl+S', action: withTab((t) => saveTab(t, false)), enabled: hasDoc });
 M('File', { id: 'saveas', label: 'Save as…', shortcut: 'Ctrl+Shift+S', action: withTab((t) => saveTab(t, true)), enabled: hasDoc });
 M('File', { separator: true });
@@ -389,6 +393,7 @@ document.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   const run = (fn) => { e.preventDefault(); fn(); };
   if (ctrl && k === 'o') return run(() => openDialog());
+  if (ctrl && k === 'n' && api.isElectron) return run(() => api.newWindow());
   if (ctrl && k === 's') return run(() => tab && saveTab(tab, e.shiftKey));
   if (ctrl && k === 'p') return run(() => tab && printTab(tab));
   if (ctrl && k === 'w') return run(() => tab && closeTab(tab));
@@ -463,7 +468,8 @@ initHandTool();
     await setTheme((await api.settingsGet('theme')) ?? 'light', false);
   } catch { await setTheme('light', false); }
   refresh();
-  api.onOpenFile((file) => openFileObject(file));
+  // Return nothing: contextBridge would copy the resolved tab object graph back to the preload (renderer OOM).
+  api.onOpenFile((file) => { openFileObject(file); });
   try {
     for (const f of (await api.getLaunchFiles()) ?? []) await openFileObject(f);
   } catch (err) {

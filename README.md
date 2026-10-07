@@ -115,11 +115,13 @@ All methods return Promises except `onOpenFile`. A *file* object is `{ path, nam
 | `saveFile({ defaultPath?, filters?, bytes })` | `{ path }` or `null` if cancelled | Shows Save As, writes atomically (temp file + rename). Browser: downloads. |
 | `writeFile(path, bytes)` | `{ path }` | Save in place; same path rule as `readFile`. |
 | `getLaunchFiles()` | `file[]` | PDFs given on the command line / "Open with". Call once at start-up. |
-| `onOpenFile(cb)` | unsubscribe function | `cb(file)` for PDFs opened later (double-click while running). |
+| `onOpenFile(cb)` | unsubscribe function | `cb(file)` for PDFs opened later (double-click while running): tabs in the last-focused window, or a new window when setting `open.target` is `'window'` (default `'tab'`). |
 | `print()` | `{ ok, reason }` | System print dialog for the current page. Browser: `window.print()`. |
 | `setTitle(text)` | — | Window title becomes `<text> — ASH PDF Studio`; empty resets it. |
 | `showItem(path)` | `boolean` | Reveal a granted file in Explorer. Browser: `false`. |
 | `settingsGet(key)` / `settingsSet(key, value)` | value / `true` | Key `/^[A-Za-z0-9_.-]{1,64}$/`, JSON value up to 64 KiB; `undefined` deletes. |
+| `newWindow()` | `true` | Opens another app window (same security settings, shared file grants). Browser: `false`. |
+| `openInNewWindow()` | `boolean` | Open dialog; the chosen PDFs open as tabs in a new window. `false` if cancelled / browser. |
 | `officeStatus()` | `{ available, reason }` | Office conversions need Microsoft Office on Windows; elsewhere `available: false`. Browser shim: not provided (items disabled). |
 | `officeExportDocx({ bytes, defaultPath? })` | `{ path }` or `null` | Save As (.docx), then Microsoft Word converts `bytes` (the current PDF) through PDF Reflow (`electron/office.js`). |
 | `officeToPdf()` | `file` or `null` | Pick a .doc/.docx/.rtf/.xls/.xlsx/.ppt/.pptx, Save As (.pdf); Word/Excel/PowerPoint export it. |

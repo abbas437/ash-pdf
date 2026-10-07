@@ -28,6 +28,9 @@ contextBridge.exposeInMainWorld('api', {
   showItem: (path) => ipcRenderer.invoke('shell:showItem', path),
   settingsGet: (key) => ipcRenderer.invoke('app:settingsGet', key),
   settingsSet: (key, value) => ipcRenderer.invoke('app:settingsSet', key, value),
+  // ---- windows
+  newWindow: () => ipcRenderer.invoke('app:newWindow'),
+  openInNewWindow: () => ipcRenderer.invoke('app:openInNewWindow'),
   // ---- clipboard and external links
   copyText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
