@@ -28,4 +28,9 @@ contextBridge.exposeInMainWorld('api', {
   showItem: (path) => ipcRenderer.invoke('shell:showItem', path),
   settingsGet: (key) => ipcRenderer.invoke('app:settingsGet', key),
   settingsSet: (key, value) => ipcRenderer.invoke('app:settingsSet', key, value),
+  // ---- advanced search
+  openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
+  listPdfs: (folder, opts) => ipcRenderer.invoke('search:listPdfs', folder, opts ?? {}),
+  cacheGet: (key) => ipcRenderer.invoke('search:cacheGet', key),
+  cacheSet: (key, value) => ipcRenderer.invoke('search:cacheSet', key, value),
 });

@@ -65,6 +65,23 @@ if (!window.api) {
     return 'ash-pdf-studio:' + k;
   };
 
+  // ---- advanced search: fake folders for tests. window.__ashShim.addFolder('/fake', [{name, bytes, mtimeMs?, dir?}])
+  // makes the next openFolder() return {path: '/fake'}; files get paths '/fake[/dir]/name'.
+  const folders = new Map(); // folder -> [{path, name, size, mtimeMs}]
+  const cache = new Map();
+  let nextFolder = null;
+  window.__ashShim = Object.freeze({
+    addFolder(folder, list) {
+      folders.set(folder, list.map((f) => {
+        const path = [folder, f.dir, f.name].filter(Boolean).join('/');
+        files.set(path, f.bytes);
+        return { path, name: f.name, size: f.bytes.length, mtimeMs: f.mtimeMs ?? 1 };
+      }));
+      nextFolder = folder;
+    },
+    cacheKeys: () => [...cache.keys()],
+  });
+
   window.api = Object.freeze({
     isElectron: false,
     async version() {
@@ -114,6 +131,17 @@ if (!window.api) {
       const key = settingsKey(k);
       if (v === undefined) localStorage.removeItem(key);
       else localStorage.setItem(key, JSON.stringify(v));
+      return true;
+    },
+    async openFolder() { return nextFolder ? { path: nextFolder } : null; },
+    async listPdfs(folder, { recursive } = {}) {
+      if (!folders.has(folder)) throw new Error('listPdfs: folder was not opened in this session');
+      return folders.get(folder).filter((f) => recursive || !f.path.slice(folder.length + 1).includes('/')).map((f) => ({ ...f }));
+    },
+    async cacheGet(key) { return cache.get(String(key)) ?? null; },
+    async cacheSet(key, value) {
+      if (typeof value !== 'string') throw new TypeError('cache value must be a string');
+      cache.set(String(key), value);
       return true;
     },
   });

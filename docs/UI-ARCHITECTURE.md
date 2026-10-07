@@ -22,6 +22,7 @@ never import each other's internals; they register with `toolbar.js` / `sidebar.
 | `renderer/ui/toolbar.js` | Toolbar, tool registry (`registerTool`, `setTool`), options bar. |
 | `renderer/ui/sidebar.js` | Sidebar tabs (`registerSidebarTab`), Thumbnails (`thumbs` API), Outline. |
 | `renderer/ui/search.js` | Find bar and search results (`search` API). |
+| `renderer/ui/advsearch.js`, `advsearch-engine.js` | Advanced search panel (Edit > Advanced Search, Ctrl+Shift+F): current/open/folder scope, MiniSearch index, CSV export; the engine is DOM-free (unit-tested in Node). |
 | `renderer/ui/annotations.js` | Annotation store, undo/redo, SVG rendering, select/move/resize, beforeSave flatten hook. |
 | `renderer/ui/tools-shapes.js` | Select, Shapes, Draw, Highlight, Whiteout tools (use the annotations API). |
 | `renderer/ui/forms.js` | AcroForm HTML control layer, forms bar, Forms tool, beforeSave fill hook. |
