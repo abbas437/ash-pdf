@@ -441,6 +441,8 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .cm-toolbar { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .cm-filter, .cm-status { font: inherit; font-size: 12px; min-width: 0; flex: 1 1 40%; padding: 3px 4px; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; }
 .cm-status { flex: 0 1 auto; }
+.cm-search { font: inherit; font-size: 12px; min-width: 0; flex: 1 1 100%; padding: 4px 6px; color: var(--text); background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; }
+.cm-search::placeholder { color: var(--muted); }
 .cm-export { flex: 1 1 40%; justify-content: center; padding: 3px 10px; font-size: 12px; }
 .cm-list { flex: 1; overflow: auto; padding: 4px 8px 12px; }
 .cm-page { display: flex; justify-content: space-between; margin: 10px 2px 4px; color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
