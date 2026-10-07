@@ -122,6 +122,9 @@ All methods return Promises except `onOpenFile`. A *file* object is `{ path, nam
 | `settingsGet(key)` / `settingsSet(key, value)` | value / `true` | Key `/^[A-Za-z0-9_.-]{1,64}$/`, JSON value up to 64 KiB; `undefined` deletes. |
 | `newWindow()` | `true` | Opens another app window (same security settings, shared file grants). Browser: `false`. |
 | `openInNewWindow()` | `boolean` | Open dialog; the chosen PDFs open as tabs in a new window. `false` if cancelled / browser. |
+| `sessionUpdate({files, active})` | `true` | Electron: the caller window's open tabs (`files: [{path, page}]`, `active`: path). Entries whose path is not granted are dropped. Main saves the windows' last state in userData/session.json on quit and adds new paths to userData/recent.json (15, newest first). |
+| `sessionInfo()` / `sessionRestore()` / `sessionDismiss()` | `{mode, offer}` / `{files, missing}` / `true` | First window only: `offer: {count, auto}` while the saved session is unanswered (`startup.mode`: `'ask'` default, `'restore'`, `'new'`; files given at start-up are never joined by an automatic restore). Restore grants and returns the existing files of the first saved window (others open in new windows) and lists the missing ones. |
+| `recentList()` / `recentOpen(path)` / `recentClear()` | `[{path, name, folder, exists}]` / file or `null` / `true` | `recentOpen` accepts only a listed path; it is granted again after a check that it still exists (`null` if missing). |
 | `officeStatus()` | `{ available, reason }` | Office conversions need Microsoft Office on Windows; elsewhere `available: false`. Browser shim: not provided (items disabled). |
 | `officeExportDocx({ bytes, defaultPath? })` | `{ path }` or `null` | Save As (.docx), then Microsoft Word converts `bytes` (the current PDF) through PDF Reflow (`electron/office.js`). |
 | `officeToPdf()` | `file` or `null` | Pick a .doc/.docx/.rtf/.xls/.xlsx/.ppt/.pptx, Save As (.pdf); Word/Excel/PowerPoint export it. |

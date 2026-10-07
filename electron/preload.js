@@ -31,6 +31,14 @@ contextBridge.exposeInMainWorld('api', {
   // ---- windows
   newWindow: () => ipcRenderer.invoke('app:newWindow'),
   openInNewWindow: () => ipcRenderer.invoke('app:openInNewWindow'),
+  // ---- session and recent files (main owns both lists)
+  sessionUpdate: (state) => ipcRenderer.invoke('app:sessionUpdate', state),
+  sessionInfo: () => ipcRenderer.invoke('app:sessionInfo'),
+  sessionRestore: () => ipcRenderer.invoke('app:sessionRestore'),
+  sessionDismiss: () => ipcRenderer.invoke('app:sessionDismiss'),
+  recentList: () => ipcRenderer.invoke('app:recentList'),
+  recentOpen: (path) => ipcRenderer.invoke('app:recentOpen', path),
+  recentClear: () => ipcRenderer.invoke('app:recentClear'),
   // ---- clipboard and external links
   copyText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
