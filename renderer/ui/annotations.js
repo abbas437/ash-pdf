@@ -12,6 +12,8 @@
 //   annotations.select(tab, ids) / getSelection(tab) -> ids[] / getObject(tab, id) / list(tab, page?)
 //   annotations.undo(tab) / redo(tab) / batch(tab, fn)  (batch: one undo step for every change in fn)
 //   annotations.newId()
+//   Groups: objects sharing a `group` string (e.g. a signature block) are selected, moved and
+//   deleted together: select() widens to every member; paste gives copies a fresh group.
 //   annotations.remapPages(tab, Map<oldIndex, newIndex|null>)  (also on bus 'pages:remapped' {tab, map})
 //   annotations.registerObjectType(type, { render(obj, svgParent) -> SVGElement,
 //       bbox(obj) -> {x,y,w,h}, handles(obj) -> [{id,x,y}], hit?(obj,x,y,tol) -> bool,
@@ -283,10 +285,15 @@ function remove(tab, ids) {
   commit(tab, { kind: 'remove', items });
   selectionChanged(tab);
 }
+/** `ids` plus every object sharing a `group` with one of them. */
+function withGroups(tab, ids) {
+  const set = new Set(ids), groups = new Set(tab.objects.filter((o) => o.group && set.has(o.id)).map((o) => o.group));
+  return groups.size ? tab.objects.filter((o) => set.has(o.id) || groups.has(o.group)).map((o) => o.id) : [...set];
+}
 function select(tab, ids) {
   const s = selOf(tab);
   s.clear();
-  for (const id of [ids ?? []].flat()) if (tab.objects.some((o) => o.id === id)) s.add(id);
+  for (const id of withGroups(tab, [ids ?? []].flat())) if (tab.objects.some((o) => o.id === id)) s.add(id);
   renderAll(tab);
   selectionChanged(tab);
 }
@@ -446,7 +453,7 @@ export const selectHandlers = {
       const o = objectAt(tab, hit.pageIndex, p.x, p.y);
       if (!o) { if (!e.shiftKey && selOf(tab).size) select(tab, []); return; }
       const s = selOf(tab);
-      if (e.shiftKey) { s.has(o.id) ? s.delete(o.id) : s.add(o.id); select(tab, [...s]); if (!s.has(o.id)) return; } else if (!s.has(o.id)) select(tab, [o.id]);
+      if (e.shiftKey) { s.has(o.id) ? withGroups(tab, [o.id]).forEach((id) => s.delete(id)) : s.add(o.id); select(tab, [...s]); if (!s.has(o.id)) return; } else if (!s.has(o.id)) select(tab, [o.id]);
       mode = 'move';
       objs = tab.objects.filter((x) => s.has(x.id));
     }
@@ -556,11 +563,12 @@ function copySel(tab) {
 }
 function paste(tab) {
   if (!clipboard.length) return;
-  const d = PASTE_OFFSET * ++pasteCount;
+  const d = PASTE_OFFSET * ++pasteCount, regroup = new Map();
   const objs = clipboard.map((o) => {
+    if (o.group && !regroup.has(o.group)) regroup.set(o.group, newId());
     const def = types.get(o.type);
     const page = o.page < tab.numPages ? o.page : tab.currentPage;
-    return { ...clone(o), ...(def?.move ? def.move(o, d, d) : {}), page };
+    return { ...clone(o), ...(def?.move ? def.move(o, d, d) : {}), page, ...(o.group ? { group: regroup.get(o.group) } : {}) };
   });
   select(tab, addMany(tab, objs));
 }
