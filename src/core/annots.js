@@ -443,10 +443,28 @@ function validate(o, pageCount) {
 
 // ---------------------------------------------------------------- scanning existing annotations
 
-/** Every annotation of every page, classified. */
+/** FNV-1a over a string, two seeds -> 16 hex digits (stable ids for direct dicts without /NM). */
+function hash16(str) {
+  let a = 0x811c9dc5;
+  let b = 0x01000193 ^ 0x5bd1e995;
+  for (let i = 0; i < str.length; i++) {
+    const c = str.charCodeAt(i);
+    a = Math.imul(a ^ c, 0x01000193) >>> 0;
+    b = Math.imul(b ^ c, 0x01000193) >>> 0;
+  }
+  return a.toString(16).padStart(8, '0') + b.toString(16).padStart(8, '0');
+}
+
+/**
+ * Every annotation of every page, classified. Each markup gets `deps` (the entries readAnnotations
+ * represents on its object and update rewrites: popup, replies, latest Review state, their popups),
+ * `replies` [{en, parent}] (parent = reply entry or null for the markup), `statusEn`, and `group`
+ * (its /RT /Group members and their popups).
+ */
 function scan(doc) {
   const all = [];
   const byRef = new Map();
+  const twins = new Map();
   doc.getPages().forEach((page, pi) => {
     const annots = page.node.Annots();
     if (!annots) return;
@@ -460,25 +478,84 @@ function scan(doc) {
         page: pi, index: i, ref, dict, subtype: nameOf(dict.lookup(N('Subtype'))), nm: readText(dict, 'NM'),
         irt: irt instanceof PDFRef ? irt : null, rt: nameOf(dict.lookup(N('RT'))) || 'R',
       };
-      en.id = en.nm || (ref ? `ref-${ref.objectNumber}-${ref.generationNumber}` : `p${pi}-a${i}`);
+      if (en.nm) en.id = en.nm;
+      else if (ref) en.id = `ref-${ref.objectNumber}-${ref.generationNumber}`;
+      else {
+        // Direct dict without /NM: content-based id, unchanged by page moves or other removals.
+        const key = [en.subtype, (readNums(dict, 'Rect') || []).join(' '), readText(dict, 'Contents') ?? '', refKey(page.ref)].join('|');
+        const h = hash16(key);
+        const n = (twins.get(h) ?? 0) + 1;
+        twins.set(h, n);
+        en.id = `d-${h}${n > 1 ? `-${n}` : ''}`;
+      }
       all.push(en);
       if (ref) byRef.set(refKey(ref), en);
     }
   });
   for (const en of all) {
-    if (en.irt) en.kind = en.subtype === 'Text' && en.rt === 'R' ? 'reply' : 'group';
+    if (en.irt) en.kind = en.rt === 'Group' ? 'group' : en.subtype === 'Text' ? 'reply' : 'xreply';
     else if (MARKUP.has(en.subtype)) en.kind = 'markup';
     else en.kind = 'other';
   }
-  const rootOf = (en) => {
-    for (let k = 0; en && en.kind === 'reply' && k < 64; k++) en = byRef.get(refKey(en.irt));
-    return en && en.kind === 'markup' ? en : null;
+  const kids = new Map();
+  const popups = new Map();
+  for (const en of all) {
+    if (en.irt) {
+      const k = refKey(en.irt);
+      if (!kids.has(k)) kids.set(k, []);
+      kids.get(k).push(en);
+    }
+    if (en.subtype === 'Popup' && en.dict.get(N('Parent')) instanceof PDFRef) {
+      const k = refKey(en.dict.get(N('Parent')));
+      if (!popups.has(k)) popups.set(k, []);
+      popups.get(k).push(en);
+    }
+  }
+  const childrenOf = (en) => (en.ref ? kids.get(refKey(en.ref)) ?? [] : []);
+  const popupsOf = (en) => {
+    const out = en.ref ? [...(popups.get(refKey(en.ref)) ?? [])] : [];
+    const p = en.dict.get(N('Popup'));
+    const x = p instanceof PDFRef ? byRef.get(refKey(p)) : null;
+    if (x && !out.includes(x)) out.push(x);
+    return out;
   };
-  for (const en of all) if (en.kind === 'reply') en.root = rootOf(en);
-  return { all, byRef, markups: all.filter((en) => en.kind === 'markup') };
+  const markups = all.filter((en) => en.kind === 'markup');
+  for (const m of markups) {
+    m.replies = [];
+    m.statusEn = null;
+    let statusDate = null;
+    const seen = new Set([m]);
+    for (let q = [m]; q.length;) {
+      const node = q.shift();
+      for (const c of childrenOf(node)) {
+        if (c.kind !== 'reply' || seen.has(c)) continue;
+        const state = readText(c.dict, 'State');
+        if (state === undefined) {
+          seen.add(c);
+          m.replies.push({ en: c, parent: node === m ? null : node });
+          q.push(c);
+        } else if (node === m && (readText(c.dict, 'StateModel') || 'Review') === 'Review') {
+          const date = readDate(c.dict, 'M') || '';
+          if (statusDate === null || date >= statusDate) [m.statusEn, statusDate] = [c, date];
+        }
+      }
+    }
+    const own = [m, ...m.replies.map((r) => r.en), ...(m.statusEn ? [m.statusEn] : [])];
+    m.deps = [...own.slice(1), ...own.flatMap(popupsOf)];
+    m.group = [];
+    for (let q = [m]; q.length;) {
+      for (const c of childrenOf(q.shift())) {
+        if (c.kind === 'group' && !m.group.includes(c)) {
+          m.group.push(c, ...popupsOf(c));
+          q.push(c);
+        }
+      }
+    }
+  }
+  return { all, byRef, markups };
 }
 
-/** Entries to delete along with `target`: its popup, and every annotation in reply to it. */
+/** Entries flattenAnnotations deletes along with `target`: its popup, and every annotation in reply to it. */
 function dependents(sc, target) {
   const out = [];
   const popup = target.dict.get(N('Popup'));
@@ -499,6 +576,16 @@ function dependents(sc, target) {
     }
   }
   return out;
+}
+
+/** Current /Annots index of an entry (by identity, so earlier removals cannot make it stale). */
+function annotIndex(doc, en) {
+  const annots = doc.getPages()[en.page].node.Annots();
+  for (let i = 0; annots && i < annots.size(); i++) {
+    const v = annots.get(i);
+    if (en.ref ? v instanceof PDFRef && refKey(v) === refKey(en.ref) : v === en.dict) return i;
+  }
+  return -1;
 }
 
 function dropFromAnnots(doc, entries) {
@@ -556,25 +643,27 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
   };
   const touched = remove.length > 0 || update.length > 0;
 
-  // 1. removals (annotation, its popup, its replies)
+  // 1. removals: the annotation, what readAnnotations put on its object (deps) and its /RT /Group
+  //    members (one unit, §12.5.6.2). Other annotations in reply to it are left as they are.
   if (remove.length) {
     const kill = new Set();
     for (const id of remove) {
       const en = find(id);
-      kill.add(en);
-      dependents(sc, en).forEach((d) => kill.add(d));
+      for (const d of [en, ...en.deps, ...en.group]) kill.add(d);
     }
     dropFromAnnots(doc, [...kill]);
     sc = scan(doc);
   }
 
-  // 2. updates: drop old popup/replies, keep slot (same object number) when the page is unchanged
+  // 2. updates: drop only the deps (popup, imported replies and status), keep the object number;
+  //    group members and other replies stay (their /IRT is re-pointed below if it named a dropped dep)
   const targets = update.map((o) => {
     const en = find(o);
-    return { o, en, created: readDate(en.dict, 'CreationDate') };
+    return { o, en, created: readDate(en.dict, 'CreationDate'), dropped: new Map(), byId: new Map() };
   });
   if (targets.length) {
-    dropFromAnnots(doc, targets.flatMap((t) => dependents(sc, t.en)));
+    for (const t of targets) for (const d of t.en.deps) if (d.ref) t.dropped.set(refKey(d.ref), d === t.en.statusEn ? `${t.o.id}-status` : d.id);
+    dropFromAnnots(doc, targets.flatMap((t) => t.en.deps));
     sc = scan(doc);
     for (const t of targets) t.en = find(t.en.ref ? { source: { ref: refKey(t.en.ref) } } : t.en.id);
   }
@@ -616,12 +705,14 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
       doc.context.assign(ref, annot);
     } else if (en && en.page === o.page) {
       ref = doc.context.register(annot);
-      page.node.Annots().set(en.index, ref);
+      page.node.Annots().set(annotIndex(doc, en), ref);
     } else {
-      if (en) dropFromAnnots(doc, [en]);
-      ref = doc.context.register(annot);
+      if (en) pages[en.page].node.Annots().remove(annotIndex(doc, en));
+      ref = en?.ref ?? doc.context.register(annot); // same object number on a page move: /IRT to it stays valid
+      if (en?.ref) doc.context.assign(ref, annot);
       page.node.addAnnot(ref);
     }
+    if (j.t) j.t.ref = ref;
     const extras = [];
     if (o.type === 'note') {
       const pv = { x: o.x + num(o.w, 20) + 4, y: o.y, w: 180, h: 120 };
@@ -633,21 +724,40 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
       Type: 'Annot', Subtype: 'Text', Rect: rect, P: page.ref, IRT: ref, F: 4, Name: 'Comment',
       AP: { N: emptyForm() }, ...(dict.C ? { C: dict.C } : {}), ...fields,
     }));
+    const written = new Map();
     for (const r of o.replies ?? []) {
       const d = r.date ? new Date(r.date) : stamp;
-      extras.push(reply({ RT: 'R', NM: text(r.id), T: text(r.author ?? who), M: pdfDate(d), CreationDate: pdfDate(d), Contents: text(r.text) }));
+      const rr = reply({ RT: 'R', NM: text(r.id), T: text(r.author ?? who), M: pdfDate(d), CreationDate: pdfDate(d), Contents: text(r.text) });
+      written.set(r.id, rr);
+      extras.push(rr);
+    }
+    for (const r of o.replies ?? []) { // nested threads: a reply to a reply keeps its /IRT to that reply
+      const to = r.inReplyTo != null ? written.get(r.inReplyTo) : null;
+      if (to && to !== written.get(r.id)) doc.context.lookup(written.get(r.id)).set(N('IRT'), to);
     }
     if (o.status !== undefined && o.status !== null) {
       const state = STATUS[o.status];
       if (!state) throw new TypeError(`Unknown status "${o.status}" (use ${Object.keys(STATUS).join(', ')})`);
       const sa = o.statusAuthor ?? who;
-      extras.push(reply({
+      const sr = reply({
         RT: 'R', NM: text(`${o.id}-status`), T: text(sa), M: pdfDate(stamp), CreationDate: pdfDate(stamp),
         Contents: text(`${state} set by ${sa}`), State: PDFString.of(state), StateModel: PDFString.of('Review'),
-      }));
+      });
+      written.set(`${o.id}-status`, sr);
+      extras.push(sr);
     }
     for (const x of extras) page.node.addAnnot(x);
+    if (j.t) j.t.byId = written;
   });
+
+  // 4. annotations left in reply to a dropped dep (e.g. a Marked state on an imported reply) now
+  //    point at its re-created copy (same id), else at the updated annotation
+  for (const t of targets) {
+    if (!t.dropped.size) continue;
+    for (const en of scan(doc).all) {
+      if (en.irt && t.dropped.has(refKey(en.irt))) en.dict.set(N('IRT'), t.byId.get(t.dropped.get(refKey(en.irt))) ?? t.ref);
+    }
+  }
   if (touched) collectGarbage(doc);
   return saveEdited(doc);
 }
@@ -938,31 +1048,22 @@ export async function readAnnotations(pdfBytes) {
       }
     }
   }
-  for (const en of sc.all) {
-    if (en.kind === 'markup') continue;
-    const parent = en.kind === 'reply' ? byEntry.get(en.root) : null;
-    if (parent) {
-      const state = readText(en.dict, 'State');
-      const model = readText(en.dict, 'StateModel') || 'Review';
-      if (state !== undefined) {
-        if (model === 'Review') {
-          const date = readDate(en.dict, 'M') || '';
-          if (!parent._statusDate || date >= parent._statusDate) {
-            parent.status = state.toLowerCase();
-            parent._statusDate = date;
-          }
-        }
-        continue;
-      }
-      (parent.replies ??= []).push({ id: en.id, author: readText(en.dict, 'T') ?? '', date: readDate(en.dict, 'M') ?? readDate(en.dict, 'CreationDate') ?? null, text: readText(en.dict, 'Contents') ?? '' });
-      continue;
+  const shown = new Set();
+  for (const [m, o] of byEntry) {
+    for (const { en, parent } of m.replies) {
+      const r = { id: en.id, author: readText(en.dict, 'T') ?? '', date: readDate(en.dict, 'M') ?? readDate(en.dict, 'CreationDate') ?? null, text: readText(en.dict, 'Contents') ?? '' };
+      if (parent) r.inReplyTo = parent.id;
+      (o.replies ??= []).push(r);
     }
-    if (en.subtype === 'Popup') {
-      const p = en.dict.get(N('Parent'));
-      if (p instanceof PDFRef && [...byEntry.keys()].some((m) => m.ref && refKey(m.ref) === refKey(p))) continue;
-    }
-    skip(en, en.kind === 'group' ? 'grouped annotation (RT /Group)' : en.kind === 'reply' ? 'reply to an unsupported annotation' : 'not a supported markup type');
+    if (m.statusEn) o.status = readText(m.statusEn.dict, 'State').toLowerCase();
+    o.source.deps = m.deps.filter((d) => d.ref).map((d) => refKey(d.ref));
+    o.source.group = m.group.filter((d) => d.ref).map((d) => refKey(d.ref));
+    m.deps.forEach((d) => shown.add(d));
   }
-  for (const o of objects) delete o._statusDate;
+  for (const en of sc.all) {
+    if (en.kind === 'markup' || shown.has(en)) continue;
+    const reason = { group: 'grouped annotation (RT /Group)', reply: 'reply not shown on its markup (state, or to an unsupported annotation)', xreply: 'reply that is not a Text annotation' }[en.kind];
+    skip(en, reason ?? 'not a supported markup type');
+  }
   return { objects, skipped };
 }

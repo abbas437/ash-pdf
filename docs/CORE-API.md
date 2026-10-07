@@ -210,29 +210,44 @@ Every annotation gets `/NM` = `id`, `/T` = `author` (object, else option), `/M` 
 `/CreationDate` (`created`, else the existing one on update, else `now`), `/Contents` (text
 for `text`/`callout`, otherwise `note`, stamp falls back to its text), `/C`, `/CA`, `/BS`
 (width + `/D` dash), `/F 4` (Print), `/Rect`, `/P`. `replies: [{id, author, date, text}]` →
-`/Text` annotations with `/IRT` parent, `/RT /R` and an empty appearance; `status`
+`/Text` annotations with `/IRT` parent (the reply named by `inReplyTo`, else the markup), `/RT /R`
+and an empty appearance; `status`
 (`accepted|rejected|cancelled|completed|none`) → one `/Text` reply with `/State` and
 `/StateModel (Review)`, `/NM` = `<id>-status`. Style fields the standard keys cannot carry
 (font family/bold/italic, align, padding, lineHeight, headSize, smooth, stamp text, rotation)
 are kept as JSON in the private string `/ASHStudio`; image bytes in the private stream `/ASHImage`.
 
 `update` replaces the markup annotation matched by `source.ref` (from `readAnnotations`), else by
-id; it keeps the same object number and `/Annots` slot (moves it if `page` changed) and rewrites its
-popup/replies. `remove` deletes the annotation, its popup and every annotation in reply to it, then
-unreachable objects (old appearances) are dropped from the file. Annotations not mentioned are not
-modified. Errors: `BURN_IN_ONLY` (`whiteout` — burn it with `flattenObjects`), `ANNOT_NOT_FOUND`
+id; it keeps the same object number (also when `page` changed: it moves to that page's `/Annots`) and
+`/Annots` slot. **Dependents rule.** `update` drops and rewrites only the annotation's *deps*
+(`source.deps`: its popup, the replies and the one Review state `readAnnotations` put on the object,
+and their popups); every other annotation in reply to it (`/RT /Group` members, `Marked` or older
+Review states, replies to those, non-`Text` replies) stays as it is, and one whose `/IRT` named a
+dropped dep is re-pointed to the re-written reply/status with the same id, else to the annotation.
+`remove` (the user deleted the markup) deletes the annotation, its deps and its `/RT /Group` members
+with their popups (`source.group`; a group is one unit, PDF 32000 §12.5.6.2); other annotations in
+reply to it are not touched (their `/IRT` keeps naming the removed dictionary). Then unreachable
+objects (old appearances) are dropped from the file. Annotations not mentioned are not modified. Errors: `BURN_IN_ONLY` (`whiteout` — burn it with `flattenObjects`), `ANNOT_NOT_FOUND`
 (unknown id, or a non-markup annotation such as a Link/Widget), `DUPLICATE_ID` (add with an id that
 exists), `TypeError` for malformed objects.
 
 ### `readAnnotations(pdfBytes) → Promise<{objects, skipped}>`
 Markup annotations of the subtypes above → overlay objects in visible space (rotation and
-CropBox origin handled), with `id` (= `/NM`, else `ref-<obj>-<gen>`), `author`, `created`,
-`modified` (ISO strings), `note`, colours, `opacity`, `strokeWidth`, `dash`, `replies`, `status`
-(latest Review state) and `source: {nm, ref: 'obj gen', subtype}`. A foreign `Highlight` reads as
+CropBox origin handled), with `id` (= `/NM`, else `ref-<obj>-<gen>`; a direct, non-indirect dict
+without `/NM` gets `d-<16 hex>` = hash of subtype + `/Rect` + `/Contents` + the page object's ref, with
+`-2`, `-3`... for identical twins on a page, so it survives page moves and removals of other
+annotations), `author`, `created`, `modified` (ISO strings), `note`, colours, `opacity`, `strokeWidth`,
+`dash`, `replies` (`/Text` replies without `/State`, the whole thread: `[{id, author, date, text,
+inReplyTo?}]`, `inReplyTo` = id of the reply it answers), `status` (latest `/StateModel /Review` state
+in direct reply to the markup) and `source: {nm, ref: 'obj gen', subtype, deps, group}` — `deps` =
+refs of the popup/replies/state represented on the object (rewritten by `update`, hidden with it),
+`group` = refs of its `/RT /Group` members and their popups (kept by `update`, removed by `remove`). A foreign `Highlight` reads as
 `textHighlight` (ours carry a marker and read back as `highlight`); a foreign `Stamp` reads as a
 `stamp` whose text comes from `/Name`; multi-stroke ink has `paths`. `skipped: [{page, subtype,
 ref, id, reason}]` lists everything else (Link, Widget, orphan Popup, FileAttachment, Sound, Movie,
-3D, Redact, grouped `/RT /Group` annotations, unreadable markups); `writeAnnotations` never touches them.
+3D, Redact, grouped `/RT /Group` annotations, `Marked`/older states, unreadable markups);
+`writeAnnotations` never touches them, except that `remove` deletes a removed markup's group members
+and `update` may re-point an `/IRT` as described above.
 
 ### `flattenAnnotations(pdfBytes, {pages, ids}?) → Promise<Uint8Array>`
 Burns markup annotations (the subtypes above, ours or foreign; `pages` = page indices, `ids` = ids as
