@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 // Toolbar UX e2e: tool groups, second click returns to Select, Pages and Split dropdowns (mouse and
-// keyboard, also inside More), one-row toolbar with More overflow, no "next build" placeholders, short single-line File menu items. Prints "E2E OK" on success.
+// keyboard, also inside More), one-row toolbar with More overflow, no "next build" placeholders, short single-line File menu items,
+// group colours (both themes, pressed and hovered, toggle persists), no overflow at 1280 px without labels, arrow keys
+// skip hidden buttons, opening Sign leaves More alone. Prints "E2E OK" on success.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PDFDocument } from 'pdf-lib';
+import { contrastRatio } from '../../renderer/ui/color-lib.js';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
@@ -119,6 +122,59 @@ try {
   await keys('btn-pages');
   await keys('btn-split');
 
+  step = 'labels off: nothing in More at 1280';
+  const moreCount = () => page.evaluate(() => ({ n: document.querySelectorAll('.tb-more-panel .tb-btn').length, shown: !document.querySelector('.tb-more').hidden }));
+  check((await moreCount()).n === 0 && !(await moreCount()).shown, `1280 without labels: More holds ${JSON.stringify(await moreCount())}`);
+
+  // Computed colours of a tool's icon, its button and the toolbar.
+  const colours = (sel) => page.evaluate((s) => {
+    const b = document.querySelector(s), cs = (el) => getComputedStyle(el);
+    const bg = cs(b).backgroundColor;
+    return { icon: cs(b.querySelector('svg.icon')).color, btn: bg === 'rgba(0, 0, 0, 0)' ? cs(document.querySelector('.toolbar')).backgroundColor : bg, bar: cs(document.querySelector('.toolbar')).backgroundColor, text: cs(document.querySelector('.toolbar')).color };
+  }, sel);
+  const setTheme = (t) => page.evaluate((x) => { document.documentElement.dataset.theme = x; }, t);
+  for (const theme of ['light', 'dark']) {
+    step = `group colours (${theme})`;
+    await setTheme(theme);
+    const c = await colours('.tb-btn[data-tool="highlight"]'), e = await colours('.tb-btn[data-tool="text"]');
+    check(c.icon !== e.icon, `${theme}: Comment and Edit icons share ${c.icon}`);
+    check(c.icon !== c.text, `${theme}: Comment icon is the monochrome ${c.text}`);
+    for (const x of [c, e]) check(contrastRatio(x.icon, x.bar) >= 3, `${theme}: icon ${x.icon} on ${x.bar} below 3:1`);
+    step = `pressed and hovered (${theme})`;
+    await page.hover('.tb-btn[data-tool="select"]');
+    const p = await colours('.tb-btn[data-tool="select"]');
+    check(contrastRatio(p.icon, p.btn) >= 3, `${theme}: hovered pressed Select icon ${p.icon} on ${p.btn} below 3:1`);
+    await page.mouse.move(640, 600);
+  }
+  await setTheme('light');
+
+  step = 'arrow keys skip hidden buttons';
+  await page.setViewportSize({ width: 900, height: 800 });
+  await settle(); await settle();
+  check((await moreCount()).n > 0, '900: nothing in More');
+  // From Select (past the zoom box, which keeps the arrow keys) to the end of the row and round.
+  await page.focus('.tb-btn[data-tool="select"]');
+  const total = await page.$$eval('.tb-tools button', (bs) => bs.filter((b) => b.getClientRects().length).length);
+  for (let n = 0; n < total; n++) {
+    await page.keyboard.press('ArrowRight');
+    const f = await page.evaluate(() => { const a = document.activeElement; return { shown: a.getClientRects().length > 0, label: a.getAttribute('aria-label') ?? a.textContent }; });
+    check(f.shown, `ArrowRight focused hidden "${f.label}"`);
+  }
+
+  step = 'Sign menu leaves More alone';
+  check(await inMore('btn-sign'), '900: Sign not in More');
+  await page.evaluate(() => { window.__moreMut = 0; new MutationObserver((r) => { window.__moreMut += r.length; }).observe(document.querySelector('.tb-more-panel'), { childList: true }); });
+  await page.click('.tb-more-btn');
+  await page.click('#btn-sign');
+  await page.waitForFunction(() => !document.querySelector('.sign-menu').hidden);
+  await settle(); await settle();
+  check((await page.evaluate(() => window.__moreMut)) === 0, `opening More and Sign changed the More panel (${await page.evaluate(() => window.__moreMut)} mutations)`);
+  check(await page.locator('.sign-menu').isVisible(), 'Sign menu not visible in More');
+  await page.keyboard.press('Escape');
+  await page.mouse.click(640, 600);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await settle(); await settle();
+
   step = 'one row with labels';
   const row = () => page.evaluate(() => {
     const bs = [...document.querySelectorAll('.toolbar button.tb-btn')].filter((b) => b.offsetParent && !b.closest('.tb-more-panel'));
@@ -159,6 +215,18 @@ try {
   for (const want of ['Export to Word…', 'Export to Excel…', 'Export to image…', 'Create PDF from Office…']) check(menu.some((m) => m.t === want), `File menu lacks "${want}"`);
   const h0 = menu[0].h;
   check(menu.every((m) => Math.abs(m.h - h0) <= 1), `menu items wrap: ${JSON.stringify(menu.filter((m) => Math.abs(m.h - h0) > 1))}`);
+  step = 'colours off persists';
+  check((await page.evaluate(() => JSON.parse(localStorage.getItem('ash-pdf-studio:ui.toolColors') ?? 'null'))) === null, 'ui.toolColors stored before toggling');
+  await page.keyboard.press('Escape');
+  await page.click('.menu-btn:text-is("View")');
+  await page.click('.menu-item[data-id="toolcolors"]');
+  const mono = async () => { const x = await colours('.tb-btn[data-tool="highlight"]'), y = await colours('.tb-btn[data-tool="text"]'); return x.icon === x.text && y.icon === y.text; };
+  check(await mono(), 'View > Coloured tool icons off: icons not monochrome');
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 10_000 });
+  await settle();
+  check(await page.$('.tb-btn[data-tool="highlight"]'), 'no Highlight tool after reload');
+  check(await mono(), 'Coloured tool icons off not persisted after reload');
   check(problems.length === 0, problems.join('\n'));
   console.log('E2E OK');
 } catch (err) {

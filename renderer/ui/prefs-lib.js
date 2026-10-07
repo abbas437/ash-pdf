@@ -12,6 +12,7 @@ export const PREF_DEFAULTS = Object.freeze({
   'annotations.author': '',          // '' = the built-in author name (annotations.js DEFAULT_AUTHOR)
   'stamps.shape': 'rect',
   'ui.toolLabels': false,
+  'ui.toolColors': true,             // group colours on the toolbar icons
 });
 
 export const PREF_CHOICES = Object.freeze({

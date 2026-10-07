@@ -39,7 +39,7 @@ export function buildToolbar(container, groups, optionsContainer) {
   toolsEl = h('div.tb-tools', { role: 'group', 'aria-label': 'Tools' });
   for (const [n, [key, label]] of GROUPS.entries()) {
     if (n) toolsEl.append(h('span.tb-sep', { role: 'separator', 'aria-orientation': 'vertical' }));
-    toolsEl.append(h('div.tb-group.tb-tg', { role: 'group', 'aria-label': label, dataset: { group: key } }));
+    toolsEl.append(h('div.tb-group.tb-tg', { role: 'group', 'aria-label': label, dataset: { group: key, grp: key } }));
   }
   moreBtn = h('button.tb-btn.tb-more-btn', { type: 'button', title: 'More', 'aria-label': 'More tools', 'aria-haspopup': 'true', 'aria-expanded': 'false', html: '<span class="tb-more-glyph" aria-hidden="true">\u00bb</span>' });
   morePanel = h('div.tb-more-panel', { role: 'group', 'aria-label': 'More tools', hidden: true });
@@ -59,7 +59,8 @@ export function buildToolbar(container, groups, optionsContainer) {
   container.addEventListener('keydown', (e) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
     if (e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
-    const items = [...container.querySelectorAll('button:not([disabled]), select')];
+    // Only what is shown: not the closed More panel nor a closed menu.
+    const items = [...container.querySelectorAll('button:not([disabled]), select')].filter((el) => el.getClientRects().length);
     const k = items.indexOf(document.activeElement);
     if (k < 0) return;
     e.preventDefault();
@@ -151,6 +152,7 @@ export function addToolbarItem(key, el) {
   const [gkey, , order] = groupOf(key);
   const group = toolsEl.querySelector(`[data-group="${gkey}"]`);
   el.dataset.tbItem = key;
+  el.dataset.grp = gkey; // keeps the group colour when the item moves into More
   const rank = (k) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
   const after = [...group.children].find((c) => rank(c.dataset.tbItem) > rank(key));
   group.insertBefore(el, after ?? null);
@@ -255,9 +257,11 @@ function layout() {
 const OBS = { subtree: true, childList: true, attributes: true, attributeFilter: ['data-label', 'hidden', 'class'] };
 function watchOverflow(container) {
   new ResizeObserver(scheduleLayout).observe(container);
-  // Opening or filling a dropdown menu changes no widths; relaying out then would move a menu that
-  // sits in the More panel and drop its focus.
-  observer = new MutationObserver((recs) => { if (recs.some((r) => !r.target.closest?.('.tb-dd-menu'))) scheduleLayout(); });
+  // Opening or filling a dropdown menu (Pages, Split, Sign) changes no widths; relaying out then
+  // would move a menu that sits in the More panel and drop its focus.
+  // Showing or hiding the More panel itself changes no widths either.
+  const idle = (r) => r.target.closest?.('[role="menu"]') || (r.target === morePanel && r.attributeName === 'hidden');
+  observer = new MutationObserver((recs) => { if (recs.some((r) => !idle(r))) scheduleLayout(); });
   observer.observe(container, OBS);
   observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 }

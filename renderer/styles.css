@@ -6,6 +6,8 @@
   --hover: rgba(22, 38, 31, .07); --sig-paper: #fffdf8; --sig-danger: #9b2c1f; --focus: var(--brass); --viewer-bg: #dcd7cb;
   --page-shadow: 0 1px 2px rgba(22,38,31,.18), 0 4px 14px rgba(22,38,31,.10);
   --hl: rgba(255, 214, 0, .45); --hl-current: rgba(242, 130, 20, .6);
+  /* Tool group accents (View > Coloured tool icons); each >= 3:1 on --bg (test/color.test.js). */
+  --grp-navigate: #55636b; --grp-pages: #2f5f93; --grp-view: #1d6e68; --grp-edit: #6b4c9a; --grp-comment: #8a5d0c; --grp-sign: #9e3a28;
   font-family: "Segoe UI", system-ui, -apple-system, Roboto, sans-serif;
   font-size: 13px; color: var(--text); background: var(--bg);
   color-scheme: light;
@@ -14,6 +16,7 @@
   --bg: #17201c; --surface: #1f2a25; --surface-2: #26332d; --text: #e9e5db; --muted: #a3ada7;
   --line: #34433c; --accent: #c9a95a; --accent-text: #16261f; --hover: rgba(233,229,219,.08); --sig-paper: #ece7da; --sig-danger: #f0907f;
   --viewer-bg: #121916; --page-shadow: 0 2px 12px rgba(0,0,0,.5);
+  --grp-navigate: #a3b0b8; --grp-pages: #83abdb; --grp-view: #6cc0b5; --grp-edit: #b9a2e0; --grp-comment: #dcaa55; --grp-sign: #e8907a;
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
@@ -57,10 +60,12 @@ kbd { font: inherit; color: var(--muted); font-size: 11px; }
 .tb-more-panel > .tb-btn:not(.has-text), .tool-labels .toolbar .tb-more-panel > .tb-btn:not(.has-text) { display: flex; justify-content: flex-start; gap: 8px; width: auto; height: 30px; padding: 0 8px; }
 .tb-more-panel > .tb-btn:not(.has-text)::after { content: attr(data-label); font-size: 12px; color: inherit; }
 .tb-group { display: flex; align-items: center; gap: 1px; }
-.tb-sep { width: 1px; height: 22px; background: var(--line); margin: 0 3px; }
-.tb-btn { display: grid; place-items: center; width: 28px; height: 30px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text); }
+.tb-sep { width: 1px; height: 22px; background: var(--line); margin: 0 2px; }
+.tb-btn { display: grid; place-items: center; width: 26px; height: 30px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--text); }
 .tb-btn:hover:not(:disabled) { background: var(--hover); }
 .tb-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+/* Hovering a pressed button keeps its fill (the plain hover rule used to replace it and lose contrast). */
+.tb-btn[aria-pressed="true"]:hover:not(:disabled) { background: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-text); }
 .tb-btn:disabled { opacity: .38; }
 .page-box { display: flex; align-items: center; gap: 4px; margin: 0 2px; color: var(--muted); }
 .page-input { width: 44px; text-align: center; }
@@ -594,11 +599,14 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 
 /* Toolbar dropdown buttons (Pages, Split): icon, visible label and caret; menu under the button. */
 .tb-dd { position: relative; }
-.toolbar .tb-btn.tb-dd-btn { display: flex; align-items: center; gap: 4px; width: auto; padding: 0 6px; }
+.toolbar .tb-btn.tb-dd-btn { display: flex; align-items: center; gap: 1px; width: auto; padding: 0 3px; }
 .tb-dd-label { font-size: 12px; white-space: nowrap; }
+/* Labels off: icon and caret only (the name is in the tooltip and aria-label), so tools keep their room. */
+body:not(.tool-labels) .toolbar .tb-dd-label, body:not(.tool-labels) .toolbar .sign-btn-label { display: none; }
+body:not(.tool-labels) .toolbar .tb-more-panel .tb-dd-label, body:not(.tool-labels) .toolbar .tb-more-panel .sign-btn-label { display: inline; }
 .tb-dd-caret { opacity: .7; }
 .tb-dd-btn[aria-expanded="true"]:not([aria-pressed="true"]) { background: var(--hover); border-color: var(--line); }
-.toolbar .tb-btn.tb-dd-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.toolbar .tb-btn.tb-dd-btn[aria-pressed="true"], .toolbar .tb-btn.tb-dd-btn[aria-pressed="true"]:hover { background: var(--accent); color: var(--accent-text); }
 .tb-dd-menu { top: calc(100% + 4px); min-width: 200px; color: var(--text); }
 .tb-dd-menu[hidden] { display: none; }
 .tb-dd-menu .menu-item kbd:empty { display: none; }
@@ -612,3 +620,21 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .toolbar .tb-more-panel .tb-btn.tb-dd-btn { display: flex; width: 100%; justify-content: flex-start; height: 30px; padding: 0 8px; gap: 8px; }
 .toolbar .tb-more-panel .tb-dd-label { font-size: 12px; color: inherit; }
 .tb-more-panel .tb-dd-menu { top: 0; left: auto; right: calc(100% + 8px); }
+
+/* Coloured tool icons: View > Coloured tool icons / Preferences > Toolbar ('ui.toolColors').
+   Each tool group has an accent; it colours the icons and a 2 px bar under the group. Icons and
+   labels stay the main cue. The pressed tool is filled with its group colour and its icon drawn
+   in the toolbar colour, so it reads at the same >= 3:1 as the icons themselves. */
+[data-grp="navigate"] { --grp: var(--grp-navigate); }
+[data-grp="pages"] { --grp: var(--grp-pages); }
+[data-grp="view"] { --grp: var(--grp-view); }
+[data-grp="edit"] { --grp: var(--grp-edit); }
+[data-grp="comment"] { --grp: var(--grp-comment); }
+[data-grp="sign"] { --grp: var(--grp-sign); }
+.tool-colors .toolbar [data-grp] .tb-btn:not(:disabled) .icon:not(.tb-dd-caret) { color: var(--grp); }
+.tool-colors .toolbar .tb-tg[data-grp] { position: relative; }
+.tool-colors .toolbar .tb-tg[data-grp]:not(:empty)::after { content: ''; position: absolute; left: 3px; right: 3px; bottom: -3px; height: 2px; border-radius: 1px; background: var(--grp); pointer-events: none; }
+.tool-colors .toolbar [data-grp] .tb-btn[aria-pressed="true"],
+.tool-colors .toolbar [data-grp] .tb-btn[aria-pressed="true"]:hover:not(:disabled) { background: var(--grp); color: var(--bg); }
+.tool-colors .toolbar [data-grp] .tb-btn[aria-pressed="true"] .icon:not(.tb-dd-caret) { color: var(--bg); }
+.tool-colors .toolbar [data-grp] .tb-btn[aria-pressed="true"]:hover:not(:disabled) { box-shadow: inset 0 0 0 1px var(--bg); }
