@@ -24,12 +24,18 @@
 //   annotations.applyStyle(tab, changedKeys)  -> applies state.toolStyle keys to the selection
 //   annotations.toPage(tab, pageIndex, clientX, clientY) -> {x, y} in that page's points
 //
-// Save: a beforeSave hook writes tab.objects into the bytes being written: whiteout objects are
-// burned into the page content (flattenObjects), every other object becomes a real PDF annotation
-// (writeAnnotations, author = setting `annotations.author`). tab.bytes is NOT replaced by the output
-// (the hook is `transient`), so the objects stay editable and the next save rebuilds from bytes that
-// never contain them: nothing is written twice. Limitation: reopening a saved file does not make
-// its annotations editable overlay objects again.
+// File mirror: every supported markup annotation in tab.bytes (made by any app) is an editable
+// object here. The viewer renders a VIEW COPY of tab.bytes without the mirrored annotations
+// (viewer.setViewBytes), so the overlay alone draws them; Links, Widgets and unsupported annotations
+// stay in the view copy. Per tab a Map<id, {source, snap}> records which objects mirror an
+// annotation of tab.bytes and their state there (snap = stable JSON); every reload reconciles it with
+// the bytes (new annotations are imported, unedited mirrors follow the file, missing ones become
+// unsaved objects again).
+// Save: whiteout objects are burned into the page content (flattenObjects); then writeAnnotations
+// with add = unmirrored objects, update = mirrors changed since their snap, remove = mirrored ids
+// deleted. After a successful save that no edit raced (tab.rev unchanged), tab.bytes = the written
+// bytes, every object is a mirror and whiteout objects are dropped (now part of the page). The hook
+// stays `transient` so a failed or cancelled save never leaves tab.bytes and the mirror out of step.
 //   annotations.getAuthor() -> Promise<string> / annotations.setAuthor(name)  ('' restores the default)
 import { bus } from '../bus.js';
 import { state, activeTab, markDirty } from '../state.js';
@@ -615,7 +621,7 @@ function buildChrome() {
     tools.before(h('div.tb-group', { role: 'group', 'aria-label': 'History' }, undoBtn, redoBtn), h('span.tb-sep', { role: 'separator' }));
   }
   const bar = document.querySelector('footer.statusbar');
-  if (bar && !statusEl) { statusEl = h('span.st-annots', { hidden: true, title: 'Annotations are saved as PDF annotations (whiteout is burned into the page); they stay editable until the tab is closed.' }); bar.append(statusEl); }
+  if (bar && !statusEl) { statusEl = h('span.st-annots', { hidden: true, title: 'Annotations are saved as PDF annotations (whiteout is burned into the page); annotations in the file, from any app, stay editable.' }); bar.append(statusEl); }
   updateChrome();
 }
 function updateChrome() {
@@ -642,22 +648,123 @@ export async function setAuthor(name) {
   await window.api.settingsSet(AUTHOR_KEY, v && v !== DEFAULT_AUTHOR ? v : undefined);
 }
 
+// ---------------------------------------------------------------- file mirror
+const syncs = new WeakMap();   // tab -> Map<id, {source, snap}>
+const pending = new WeakMap(); // tab -> what the last beforeSave wrote, committed by beforeSave.saved
+const syncOf = (tab) => { let m = syncs.get(tab); if (!m) syncs.set(tab, (m = new Map())); return m; };
+/** Stable JSON of an object's state (key order and `source` ignored); typed arrays are hashed. */
+function stable(v) {
+  if (ArrayBuffer.isView(v)) { let x = 2166136261; for (const b of new Uint8Array(v.buffer, v.byteOffset, v.byteLength)) x = Math.imul(x ^ b, 16777619); return `"#${v.byteLength}:${x >>> 0}"`; }
+  if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`;
+  if (v && typeof v === 'object') return `{${Object.keys(v).filter((k) => k !== 'source' && v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`;
+  return JSON.stringify(v) ?? 'null';
+}
+const imported = ({ source, ...o }) => o;
+
+/** Bring the mirror in step with `read` (readAnnotations(tab.bytes).objects). No undo step. */
+function reconcile(tab, read) {
+  const sync = syncOf(tab), count = new Map();
+  for (const r of read) count.set(r.id, (count.get(r.id) ?? 0) + 1);
+  const present = new Map(read.filter((r) => count.get(r.id) === 1).map((r) => [r.id, r])); // duplicate ids: left alone
+  let touched = false;
+  for (const [id, s] of sync) {
+    const r = present.get(id);
+    if (!r) { sync.delete(id); continue; } // not in these bytes (page undo past a save): an unsaved object again
+    s.source = r.source;
+    const o = getObject(tab, id), fresh = imported(r), snap = stable(fresh);
+    if (o && stable(o) === s.snap && snap !== s.snap) { // unedited mirror: follow the file (rotate, resize, ...)
+      for (const k of Object.keys(o)) delete o[k];
+      Object.assign(o, fresh);
+      s.snap = snap;
+      touched = true;
+    }
+  }
+  for (const [id, r] of present) {
+    if (sync.has(id)) continue;
+    const fresh = imported(r);
+    if (!getObject(tab, id)) {
+      if (!types.has(fresh.type)) continue; // no editor for it: stays in the view copy
+      tab.objects.push(fresh);
+      touched = true;
+    }
+    sync.set(id, { source: r.source, snap: stable(fresh) });
+  }
+  if (touched) { bus.emit('annotations:changed', { tab }); updateChrome(); }
+}
+
+/** viewer.setViewBytes: reconcile, then tab.bytes without the mirrored annotations. */
+async function viewBytes(tab) {
+  const bytes = tab.bytes;
+  if (tab.password != null) return bytes; // encrypted: read-only, rendered as is
+  ensureTab(tab);
+  try {
+    const { readAnnotations, writeAnnotations } = await import('../../src/core/index.js');
+    const { objects } = await readAnnotations(bytes);
+    if (tab.bytes !== bytes) return bytes; // superseded: the newer reload reconciles
+    reconcile(tab, objects);
+    const sync = syncOf(tab), remove = [...new Set(objects.map((r) => r.id))].filter((id) => sync.has(id));
+    return remove.length ? await writeAnnotations(bytes, { remove }) : bytes;
+  } catch (err) {
+    if (err?.code !== 'ENCRYPTED') console.warn('Annotations could not be read; shown as in the file', err);
+    return bytes;
+  }
+}
+
+/**
+ * Document > Flatten annotations: `flatBytes` (about to become tab.bytes) no longer has some
+ * mirrored annotations. Unedited mirrors are dropped (now page content); edited ones become unsaved
+ * objects. Page undo brings the annotations back and the next reload re-imports them.
+ */
+export async function dropFlattened(tab, flatBytes) {
+  const { readAnnotations } = await import('../../src/core/index.js');
+  const left = new Set((await readAnnotations(flatBytes)).objects.map((r) => r.id));
+  const sync = syncOf(tab);
+  for (const [id, s] of sync) {
+    if (left.has(id)) continue;
+    const o = getObject(tab, id);
+    if (o && stable(o) === s.snap) { tab.objects = tab.objects.filter((x) => x !== o); selOf(tab).delete(id); }
+    sync.delete(id);
+  }
+}
+
 async function beforeSave(tab, bytes = tab.bytes) {
   ensureTab(tab);
-  if (!tab.objects.length) return undefined;
-  const { flattenObjects, writeAnnotations } = await import('../../src/core/index.js');
+  pending.delete(tab);
+  const sync = syncOf(tab);
   const objs = tab.objects.map(clone);
   // writeAnnotations refuses whiteout (BURN_IN_ONLY): it must hide page content, so burn it in.
   const burn = objs.filter((o) => o.type === 'whiteout');
-  const add = objs.filter((o) => o.type !== 'whiteout');
+  const rest = objs.filter((o) => o.type !== 'whiteout');
+  const add = rest.filter((o) => !sync.has(o.id));
+  const update = rest.filter((o) => sync.has(o.id) && stable(o) !== sync.get(o.id).snap).map((o) => ({ ...o, source: sync.get(o.id).source }));
+  const live = new Set(rest.map((o) => o.id));
+  const remove = [...sync.keys()].filter((id) => !live.has(id));
+  if (!burn.length && !add.length && !update.length && !remove.length) return undefined;
+  const { flattenObjects, writeAnnotations } = await import('../../src/core/index.js');
   let out = burn.length ? await flattenObjects(bytes, burn) : bytes;
-  if (add.length) out = await writeAnnotations(out, { add }, { author: await getAuthor() });
+  if (add.length || update.length || remove.length) out = await writeAnnotations(out, { add, update, remove }, { author: await getAuthor() });
+  pending.set(tab, { base: tab.bytes, out, snaps: new Map(rest.map((o) => [o.id, stable(o)])), burned: new Set(burn.map((o) => o.id)) });
   return out;
 }
 beforeSave.id = 'annotations';
-// Only the written bytes change; tab.bytes never contains the objects, so they remain editable
-// and a second save never writes them twice (saveTab honours `transient`).
+// saveTab does not put the output in tab.bytes; `saved` does, once the file is written.
 beforeSave.transient = true;
+/** saveTab: the file was written; `clean` = no edit since the save started. */
+beforeSave.saved = (tab, clean) => {
+  const p = pending.get(tab);
+  pending.delete(tab);
+  if (!p || !clean || tab.bytes !== p.base) return; // stay as before: the next save rebuilds from tab.bytes
+  tab.bytes = p.out;
+  const sync = syncOf(tab);
+  for (const id of [...sync.keys()]) if (!p.snaps.has(id)) sync.delete(id);
+  for (const [id, snap] of p.snaps) sync.set(id, { source: sync.get(id)?.source ?? { nm: id }, snap });
+  if (p.burned.size) {
+    tab.objects = tab.objects.filter((o) => !p.burned.has(o.id));
+    for (const id of p.burned) selOf(tab).delete(id);
+    bus.emit('tab:bytesChanged', { tab }); // the whiteout is in the page now
+  }
+  updateChrome();
+};
 /** Keep the hook last (after forms and any other bytes-producing hook). */
 function placeHook() {
   const hooks = state.hooks.beforeSave;
@@ -673,6 +780,7 @@ export function initAnnotations() {
   inited = true;
   registerBuiltins();
   placeHook();
+  viewer.setViewBytes(viewBytes);
   buildChrome();
   document.addEventListener('keydown', onKey);
   bus.on('page:rendered', ({ tab, pageIndex }) => renderPage(tab, pageIndex));
