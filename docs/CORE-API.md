@@ -69,8 +69,8 @@ CRLF/CR → LF, TAB → one space, and **every character outside WinAnsi becomes
   in the UI must be done as a `whiteout` object covering the old text plus a new `text`
   object on top. Covered content is hidden visually but **still present** in the file
   (it is not redaction).
-* Overlay objects are burned into page content; they are not PDF annotations and are not
-  editable after saving.
+* `flattenObjects` burns overlay objects into page content (not editable afterwards);
+  `writeAnnotations` (annots.js) saves them as real PDF annotations instead.
 * `mergePdfs`, `splitPdf`, `extractPages` and `insertPagesFrom` copy pages only: bookmarks,
   document-level JavaScript, and AcroForm field linkage of the copied pages are not carried
   over (widgets stay visible but are no longer form fields).
@@ -184,6 +184,57 @@ broken by character. Omit `maxWidth` for no wrapping.
 
 ### `sanitizeText(text) → string`, `standardFontName(font, bold, italic) → string`
 Helpers described in *Text and fonts*.
+
+## annots.js — real PDF annotations
+
+### `writeAnnotations(pdfBytes, {add=[], update=[], remove=[]}, {author, now}?) → Promise<Uint8Array>`
+Writes overlay objects (same model as `flattenObjects`, visible page space) as standard
+`/Annot` dictionaries with an `/AP /N` appearance stream. The appearance is drawn by the
+`flattenObjects` code on a scratch page sized to the object's bounding box and copied in as a
+Form XObject (`/BBox [0 0 w h]`, `/Matrix` = the page's rotation), so it looks identical to a
+burned-in object on any `/Rotate` and CropBox. `remove` = annotation ids. Order: remove, update, add.
+
+| type | /Subtype | geometry keys |
+|---|---|---|
+| `rect` / `ellipse` | `Square` / `Circle` | `/Rect` = box grown by half the border width (`/C` stroke, `/IC` fill) |
+| `line` / `arrow` | `Line` | `/L`; arrow = `/LE [/None /ClosedArrow]`, `/IC` = head colour |
+| `ink` / `polyline` | `Ink` / `PolyLine` | `/InkList` / `/Vertices`; `ink` also accepts `paths: [[[x,y]...]...]` (multi-stroke) |
+| `text` | `FreeText` | `/Rect` − `/RD` = box; `/DA` font+size+text colour, `/DS`, `/Q` align |
+| `callout` | `FreeText` `/IT /FreeTextCallout` | as text, plus `/CL [tip, box point]`, `/LE /ClosedArrow`, `/C` border, `/IC` fill |
+| `stamp` / `image` | `Stamp` | `/Rect` = (rotated) box; `/Name` from the stamp text; image keeps the original bytes |
+| `highlight` (area) | `Highlight` | one quad = the box (Foxit-style area highlight); `/CA` = opacity capped at 0.5 |
+| `note` | `Text` + `/Popup` | `{x, y, icon('Comment'), color('#ffd400'), note, w(20), h(20)}`; popup closed |
+| `underline` `strikeout` `squiggly` `textHighlight` | `Underline` `StrikeOut` `Squiggly` `Highlight` | `quads: [[x1,y1,x2,y2,x3,y3,x4,y4], ...]` visible TL, TR, BL, BR → `/QuadPoints` (same order in PDF space); `color`, `opacity`, `strokeWidth` (line thickness, default quad height/14) |
+
+Every annotation gets `/NM` = `id`, `/T` = `author` (object, else option), `/M` = `now`,
+`/CreationDate` (`created`, else the existing one on update, else `now`), `/Contents` (text
+for `text`/`callout`, otherwise `note`, stamp falls back to its text), `/C`, `/CA`, `/BS`
+(width + `/D` dash), `/F 4` (Print), `/Rect`, `/P`. `replies: [{id, author, date, text}]` →
+`/Text` annotations with `/IRT` parent, `/RT /R` and an empty appearance; `status`
+(`accepted|rejected|cancelled|completed|none`) → one `/Text` reply with `/State` and
+`/StateModel (Review)`, `/NM` = `<id>-status`. Style fields the standard keys cannot carry
+(font family/bold/italic, align, padding, lineHeight, headSize, smooth, stamp text, rotation)
+are kept as JSON in the private string `/ASHStudio`; image bytes in the private stream `/ASHImage`.
+
+`update` replaces the markup annotation matched by `source.ref` (from `readAnnotations`), else by
+id; it keeps the same object number and `/Annots` slot (moves it if `page` changed) and rewrites its
+popup/replies. `remove` deletes the annotation, its popup and every annotation in reply to it, then
+unreachable objects (old appearances) are dropped from the file. Annotations not mentioned are not
+modified. Errors: `BURN_IN_ONLY` (`whiteout` — burn it with `flattenObjects`), `ANNOT_NOT_FOUND`
+(unknown id, or a non-markup annotation such as a Link/Widget), `DUPLICATE_ID` (add with an id that
+exists), `TypeError` for malformed objects.
+
+### `readAnnotations(pdfBytes) → Promise<{objects, skipped}>`
+Markup annotations of the subtypes above → overlay objects in visible space (rotation and
+CropBox origin handled), with `id` (= `/NM`, else `ref-<obj>-<gen>`), `author`, `created`,
+`modified` (ISO strings), `note`, colours, `opacity`, `strokeWidth`, `dash`, `replies`, `status`
+(latest Review state) and `source: {nm, ref: 'obj gen', subtype}`. A foreign `Highlight` reads as
+`textHighlight` (ours carry a marker and read back as `highlight`); a foreign `Stamp` reads as a
+`stamp` whose text comes from `/Name`; multi-stroke ink has `paths`. `skipped: [{page, subtype,
+ref, id, reason}]` lists everything else (Link, Widget, orphan Popup, FileAttachment, Sound, Movie,
+3D, Redact, grouped `/RT /Group` annotations, unreadable markups); `writeAnnotations` never touches them.
+
+Not yet implemented: `flattenAnnotations` (burn selected annotations' appearances into the page).
 
 ---
 
