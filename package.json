@@ -1,7 +1,7 @@
 {
   "name": "ash-pdf",
   "productName": "ASH PDF Studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ASH PDF Studio - free PDF viewer and editor for Windows",
   "type": "module",
   "main": "electron/main.js",

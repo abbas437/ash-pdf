@@ -5,12 +5,17 @@ ASH Technical & Project Management Services (ASH PMCS).
 
 ## Features
 
-- **Viewer**: fast rendering (Mozilla pdf.js), zoom, search, thumbnails, print.
-- **Annotate**: highlights, notes, shapes, free text, stamps.
-- **Page tools**: rotate, reorder, delete, insert, extract.
-- **Merge / split** documents.
+- **Viewer**: fast rendering (Mozilla pdf.js), tabs, zoom, thumbnails, bookmarks, layers panel (show/hide drawing layers), light theme by default with an optional dark theme.
+- **Search**: find in the document, plus **Advanced search** across all open documents or every PDF in a folder (with subfolders and an optional saved index): exact phrase / all words / any words, whole word, case, proximity, stemming, regular expressions, patterns (email, phone, date, URL, amount), comments and bookmarks; results grouped by file, CSV export.
+- **Annotate**: shapes, lines and arrows, freehand, area highlight, text boxes, callouts, whiteout, sticky notes, text highlight / underline / strikeout. Annotations are saved as **real PDF annotations**, so they stay editable here and in other PDF apps, and annotations made in other apps open as editable objects. Flatten annotations into the page when you want them fixed.
+- **Comments panel**: every annotation by page with author, date, replies and status (Accepted, Rejected, Cancelled, Completed); filters and CSV export.
+- **Stamps**: 20 standard stamps, dynamic stamps (name, date and time filled in), your own text stamps.
+- **Signatures**: a signature library (draw, type with handwriting fonts, import an image with background removal, paste), initials, optional password lock, place on many pages at once, signature blocks with name and date. These are visual signatures, not digital certificates.
+- **Pages**: rotate, reorder, delete, insert, duplicate, extract, crop, resize, reverse, interleave two scans, merge and split.
+- **Header & footer, page numbers, watermark, background, Bates numbering**: add, replace and remove later.
 - **Forms**: fill AcroForm fields and save.
-- **Export**: save edited PDFs, export pages as images.
+- **Print**: page ranges, odd/even, fit or actual size, copies, with or without annotations.
+- **More**: snapshot of an area (copy or save as PNG), word count, document properties, export pages as images, warning before overwriting a digitally signed PDF.
 
 ## Install or run portable
 
@@ -122,9 +127,9 @@ opened), and every permission request is denied, including `navigator.clipboard`
 
 ## Limitations
 
-- Cannot edit the existing text of a page in place (you can add text, annotations and form values).
+- Cannot edit the existing text of a page in place yet (you can add text, annotations and form values; Replace text covers simple cases).
 - No OCR: scanned pages stay images; text search only works on PDFs that contain text.
-- No digital-signature validation; signed PDFs open, but signatures are not verified, and saving changes invalidates them.
+- No digital-signature validation or certificate signing yet; signed PDFs open, signatures are not verified, and saving changes invalidates them (the app warns before overwriting).
 - Encrypted PDFs: password-protected files can be viewed after entering the password; editing and saving encrypted files is limited.
 - PDF JavaScript is not run, and XFA forms are not supported.
 - Windows x64 only for now.
