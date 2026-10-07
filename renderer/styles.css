@@ -333,3 +333,21 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .pm-preview { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 312px; flex: none; }
 .pm-canvas-wrap { display: grid; place-items: center; width: 312px; height: 392px; background: var(--viewer-bg); border: 1px solid var(--line); border-radius: 6px; }
 .pm-canvas { max-width: 300px; max-height: 380px; background: #fff; box-shadow: var(--page-shadow); }
+
+/* ---- layers tab and print dialog (ui/viewextras.js) ---- */
+.vx-layer-actions { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }
+.vx-layer-list { list-style: none; margin: 0; padding: 0 0 0 18px; }
+.vx-layer-root { padding: 6px 8px; }
+.vx-layer { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 4px; color: var(--text); cursor: pointer; }
+.vx-layer:hover { background: var(--hover); }
+.vx-layer input { accent-color: var(--accent); margin: 0; }
+.vx-layer-heading { display: block; padding: 4px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.vx-print-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; min-width: min(420px, 85vw); }
+.vx-field { display: flex; flex-direction: column; gap: 3px; }
+.vx-field > span { color: var(--muted); font-size: 12px; }
+.vx-field .input { width: 100%; box-sizing: border-box; min-width: 0; }
+.vx-error { grid-column: 1 / -1; margin: 0; min-height: 1.2em; color: var(--focus); }
+@media print {
+  .print-fit .print-page img { max-height: 100vh; object-fit: contain; }
+  .print-actual .print-page img { width: auto; max-width: none; }
+}

@@ -194,7 +194,7 @@ async function pumpThumbs() {
       canvas.width = Math.max(1, Math.floor(vp.width));
       canvas.height = Math.max(1, Math.floor(vp.height));
       try {
-        await page.render({ canvas, viewport: vp }).promise;
+        await page.render({ canvas, viewport: vp, ...viewer.optionalContent(tab) }).promise;
       } catch (err) {
         T.rendered.delete(i);
         if (gen === T.gen) console.warn(`Thumbnail ${i + 1} failed`, err);
@@ -297,6 +297,7 @@ bus.on('page:changed', ({ tab, pageIndex }) => {
 bus.on('tab:bytesChanged', ({ tab }) => { if (tab === T.tab) { T.stale = true; T.queue = []; } });
 bus.on('tab:opened', () => { if (state.sidebarTab === 'thumbs') syncTabs(); });
 bus.on('rotation:changed', ({ tab }) => { if (tab === T.tab && T.list && !T.stale) rotateThumbs(); });
+bus.on('layers:changed', ({ tab }) => { if (tab === T.tab && T.list && !T.stale) rotateThumbs(); }); // same in-place re-render
 
 // ================================================================ outline
 let outlineGen = 0;

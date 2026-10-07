@@ -18,6 +18,7 @@ import { initForms } from './ui/forms.js';
 import { initPageTools, idle as pageOpsIdle } from './ui/pagetools.js';
 import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
+import { initViewExtras, printDialog } from './ui/viewextras.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -45,6 +46,7 @@ viewerHost.append(welcome);
 root.append(h('header.titlebar', {}, menubar, tabstrip), toolbar, optionsBar, banner, workArea, statusbar);
 viewer.mount(viewerHost);
 initSidebar(workArea);
+initViewExtras();
 initSearch(viewerHost);
 
 // ---------------------------------------------------------------- menus
@@ -209,33 +211,10 @@ export async function saveTab(tab = activeTab(), asNew = false) {
   }
 }
 
+/** File > Print… / Ctrl+P: print options dialog, then the system print (ui/viewextras.js). */
 async function printTab(tab = activeTab()) {
-  if (!tab) return;
-  const host = h('div.print-container', { 'aria-hidden': 'true' });
-  document.body.append(host);
-  const urls = [];
-  try {
-    for (let i = 0; i < tab.numPages; i++) {
-      const vp = tab.pages[i].getViewport({ scale: 150 / 72 });
-      const c = document.createElement('canvas');
-      c.width = Math.floor(vp.width); c.height = Math.floor(vp.height);
-      await tab.pages[i].render({ canvas: c, viewport: vp, intent: 'print' }).promise;
-      const blob = await new Promise((r) => c.toBlob(r));
-      c.width = 0; c.height = 0;
-      const url = URL.createObjectURL(blob);
-      urls.push(url);
-      const pt = tab.pages[i].getViewport({ scale: 1 });
-      host.append(h('div.print-page', {}, h('img', { src: url, alt: '', style: { aspectRatio: `${pt.width} / ${pt.height}` } })));
-    }
-    document.body.classList.add('printing');
-    await api.print();
-  } catch (err) {
-    showError('Could not print', err);
-  } finally {
-    document.body.classList.remove('printing');
-    host.remove();
-    for (const u of urls) URL.revokeObjectURL(u);
-  }
+  if (!tab) return false;
+  return printDialog(tab);
 }
 
 async function showProperties(tab = activeTab()) {

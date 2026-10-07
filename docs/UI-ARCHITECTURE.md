@@ -102,6 +102,7 @@ Note: the header comment of `bus.js` lists only some events; this table is the f
 | `theme:changed` | `{theme}` | `app.js` | none in this tree |
 | `annotations:changed` | `{tab}` objects added/changed/removed/undone | `annotations.js` | none in this tree |
 | `annotations:selection` | `{tab, ids}` | `annotations.js` | none in this tree |
+| `layers:changed` | `{tab}` layer (optional content) visibility changed in `tab.ocConfig` | `viewextras.js` | `sidebar.js` (re-render thumbnails in place) |
 | `thumbs:rebuilt` | `{tab, count}` thumbnail list rebuilt (after any reload) | `sidebar.js` | `pagetools.js` (re-wire list, apply pending selection) |
 | `thumbs:selectionChanged` | `{tab, selection}` | `sidebar.js` | none via bus (use `thumbs.onSelect`) |
 
@@ -144,6 +145,7 @@ Page indices are 0-based throughout.
 | `getTextContent(tab, i)` | cached pdf.js text content. |
 | `reload(tab)` | re-open `tab.bytes` (called automatically on `tab:bytesChanged`). |
 | `rerender(tab)` | drop and redraw all page canvases. |
+| `optionalContent(tab)` | render params for the current layer visibility (`{optionalContentConfigPromise}` from `tab.ocConfig`, display intent, or `{}`); spread into every `page.render` that shows the page as on screen. `tab.ocConfig` is loaded with the document and keeps its visibility across reloads. |
 | `pdfjs` | the pdf.js module (e2e tests use `v.pdfjs.getDocument`). |
 
 Pages are laid out at their final size immediately; canvases and layers are rendered lazily and
