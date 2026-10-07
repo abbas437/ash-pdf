@@ -11,7 +11,7 @@ import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
-import { getAuthor, setAuthor, DEFAULT_AUTHOR } from './annotations.js';
+import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened } from './annotations.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -640,8 +640,8 @@ export async function insertFromDialog(tab = activeTab()) {
 
 // ---------------------------------------------------------------- Flatten annotations…
 // Burns the annotations in tab.bytes (those already saved in the file) into the page content as one
-// page-op undo step. Overlay objects drawn in this session are never in tab.bytes (the save hook is
-// transient), so they are not affected and stay editable.
+// page-op undo step and drops their unedited overlay mirrors (annotations.dropFlattened); objects not
+// saved yet stay editable. Page undo restores the bytes and the reload re-imports the annotations.
 export async function flattenAnnotationsDialog(tab = activeTab()) {
   if (!tab) return;
   if (tab.readOnly) { toast(RO_TIP); return; }
@@ -663,6 +663,7 @@ export async function flattenAnnotationsDialog(tab = activeTab()) {
   const ok = await runOp(tab, 'Flatten annotations', async (bytes, n) => {
     const out = await flattenAnnotations(bytes, pages ? { pages } : {});
     if (out === bytes) { none = true; return null; }
+    await dropFlattened(tab, out); // the overlay mirrors of what is now page content go
     return { bytes: out, map: new Map(range(n).map((i) => [i, i])) };
   });
   if (none) toast(pages ? 'No saved annotations on this page' : 'No saved annotations to flatten');

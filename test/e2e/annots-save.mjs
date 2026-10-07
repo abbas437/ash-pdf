@@ -132,14 +132,16 @@ try {
   step = 'save';
   check(await ev('window.__orig = tab.bytes; return await app.saveTab(tab, true);'), 'first saveTab returned false');
   const out1 = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
-  check(await ev('return tab.bytes === window.__orig && tab.objects.length === 3 && !tab.dirty;'), 'save changed tab.bytes / objects / dirty');
+  // tab.bytes = the written file; the whiteout is now page content, rect and text stay editable mirrors.
+  check(await ev('return tab.bytes !== window.__orig && tab.objects.map((o) => o.type).sort().join() === "rect,text" && !tab.dirty;'), 'save did not adopt the written bytes / drop the whiteout / clear dirty');
+  check(Buffer.compare(Buffer.from(await ev('return Array.from(tab.bytes);')), Buffer.from(out1)) === 0, 'tab.bytes differs from the written file');
   const a1 = await annotsOf(out1);
   const kinds = a1.map((a) => a.subtype).sort().join(',');
   check(kinds === 'FreeText,Square', `Square and FreeText annotations expected, got [${kinds}]`);
   check(a1.every((a) => a.title === AUTHOR), `annotation author: ${JSON.stringify(a1)}`);
   check(await ev('return await app.saveTab(tab, false);'), 'second saveTab returned false');
   const out2 = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
-  check(await ev('return tab.bytes === window.__orig;'), 'second save changed tab.bytes');
+  check(Buffer.compare(Buffer.from(out2), Buffer.from(out1)) === 0, 'second save without changes wrote different bytes');
   const a2 = await annotsOf(out2);
   check(a2.length === 2, `second save has ${a2.length} annotations, expected exactly 2`);
 
@@ -155,7 +157,7 @@ try {
   step = 'flatten';
   await ev('await app.openBytes({ name: "saved.pdf", bytes: new Uint8Array(arg) });', Array.from(out2));
   await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t?.name === 'saved.pdf' && t.numPages === 1; }, null, { timeout: 10_000 });
-  check(await ev('return tab.objects.length === 0 && !tab.dirty;'), 'reopened tab has overlay objects or is dirty');
+  check(await ev('return tab.objects.map((o) => o.type).sort().join() === "rect,text" && !tab.dirty;'), 'reopened tab does not mirror the rect and text, or is dirty');
   check((await annotsOf(await ev('return Array.from(tab.bytes);'))).length === 2, 'reopened tab does not have 2 annotations');
   await menu('Document', 'flatten-annotations');
   check(/already saved in the file/.test(await page.textContent('.dialog')), 'flatten dialog does not explain that it flattens saved annotations');
@@ -165,6 +167,7 @@ try {
   const flat = Uint8Array.from(await ev('return Array.from(tab.bytes);'));
   const a3 = await annotsOf(flat);
   check(a3.length === 0, `after flatten ${a3.length} annotations remain`);
+  check(await ev('return tab.objects.length === 0;'), 'flatten left the mirrored objects in the overlay');
   const burned = await ink(flat, 0, REGIONS);
   check(burned.rectEdge > 0 && burned.text > 0 && burned.block === 0, `flattened content not visible: ${JSON.stringify(burned)}`);
   check(await ev('return tab.dirty;'), 'flatten did not mark the tab dirty');
@@ -173,6 +176,7 @@ try {
   await ev('await app.pageTools.undo(tab);');
   const undone = await annotsOf(await ev('return Array.from(tab.bytes);'));
   check(undone.length === 2, `undo restored ${undone.length} annotations, expected 2`);
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.length === 2; }, null, { timeout: 10_000 });
 
   step = 'save first offer';
   await ev('an.add(tab, { type: "rect", page: 0, x: 400, y: 500, w: 40, h: 40, stroke: "#000000" });');
