@@ -484,6 +484,9 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .stamp-item:hover, .stamp-item:focus-visible { border-color: var(--focus); }
 .stamp-item[aria-selected="true"] { outline: 2px solid var(--focus); outline-offset: -1px; }
 .stamp-item .stamp-preview { width: 100%; height: 30px; background: var(--stamp-paper); border-radius: 3px; padding: 2px; }
+.stamp-item .stamp-preview-img { object-fit: contain; }
+.stamp-img-paper { display: grid; place-items: center; min-height: 120px; padding: 6px; background: var(--stamp-paper); border: 1px solid var(--line); border-radius: 6px; }
+.stamp-img-preview { max-width: 100%; max-height: 200px; }
 .stamp-custom { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; gap: 2px; }
 .stamp-custom .stamp-item { grid-row: span 2; }
 .stamp-dyn { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }

@@ -4,6 +4,7 @@
 //   Stamp (S): preset or custom text in an outlined box; click places a default-size stamp,
 //              drag sets the box. "Add date" places a second stamp `DATE: YYYY-MM-DD` below it.
 //   Image (I): pick a PNG/JPEG (type from the file signature), click a page to place it.
+//   Custom image stamps (library kind 'stamp', meta.kind 'image', PNG in bytes) are placed through armImage.
 //   Signatures are placed through ui/sign.js (Sign button), which arms the image tool via armImage.
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
@@ -13,7 +14,8 @@ import { registerTool, setTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, resizeBox, getAuthor } from './annotations.js';
 import { STANDARD_STAMPS, DYNAMIC_STAMPS, stampSubtext, stampLayout } from '../../src/core/stamps.js';
-import { DATE_FORMATS } from '../../src/core/siglib.js';
+import { DATE_FORMATS, removeBackground } from '../../src/core/siglib.js';
+import { loadImage } from './signatures.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const COLOURS = [['#1b7f3b', 'Green'], ['#d62828', 'Red'], ['#1d4ed8', 'Blue'], ['#d97706', 'Orange']];
@@ -177,7 +179,13 @@ function patchSelected(type, patch) {
 const allStamps = () => [...STANDARD_STAMPS, ...DYNAMIC_STAMPS, ...custom];
 async function loadCustom() {
   const list = await window.api.libraryList(LIB).catch(() => []);
+  for (const c of custom) if (c.url) URL.revokeObjectURL(c.url);
   custom = list.map(({ id, meta }) => ({ ...meta, id, custom: true })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  for (const c of custom) {
+    if (c.kind !== 'image') continue;
+    const it = await window.api.libraryGet(LIB, c.id).catch(() => null);
+    if (it?.bytes) { c.bytes = new Uint8Array(it.bytes); c.url = URL.createObjectURL(new Blob([c.bytes], { type: 'image/png' })); }
+  }
 }
 function useStamp(s) {
   opt.stamp = s; opt.text = s.text; opt.color = s.color;
@@ -185,6 +193,7 @@ function useStamp(s) {
   bus.emit('stamp:changed', { id: s.id });
 }
 function preview(s) {
+  if (s.kind === 'image') return h('img.stamp-preview.stamp-preview-img', { src: s.url ?? '', alt: '', 'aria-hidden': 'true' });
   const sub = s.dynamic ? 'by Name · Date' : '';
   const z = stampSize(s.text, STAMP_FONT_PT, sub);
   const svg = svgEl('svg', { class: 'stamp-preview', viewBox: `0 0 ${z.w} ${z.h}`, 'aria-hidden': 'true' });
@@ -209,6 +218,63 @@ async function createStampDialog(item) {
   await loadCustom();
   return custom.find((c) => c.id === id) ?? null;
 }
+/** Create / rename an image stamp: PNG or JPEG, optional near-white background removal (live preview), a name. */
+async function imageStampDialog(item) {
+  let source = null;
+  const canvas = h('canvas.stamp-img-preview', { width: '1', height: '1', 'aria-label': 'Image stamp preview' });
+  const status = h('p.opt-hint.stamp-img-status', { role: 'status' }, item ? '' : 'Choose a PNG or JPEG image.');
+  const name = h('input.input#stamp-img-name', { type: 'text', maxlength: '60', value: item?.name ?? '', 'aria-label': 'Stamp name' });
+  const remove = h('input.stamp-img-remove', { type: 'checkbox', checked: true });
+  const thr = h('input.stamp-img-threshold', { type: 'range', min: '120', max: '250', step: '1', value: '235', 'aria-label': 'Background threshold' });
+  const thrOut = h('output', {}, thr.value);
+  const draw = () => {
+    thrOut.textContent = thr.value;
+    thr.disabled = !remove.checked;
+    if (!source) return;
+    const copy = new ImageData(new Uint8ClampedArray(source.data), source.width, source.height);
+    if (remove.checked) removeBackground(copy.data, copy.width, copy.height, Number(thr.value));
+    canvas.width = copy.width; canvas.height = copy.height;
+    canvas.getContext('2d').putImageData(copy, 0, 0);
+  };
+  remove.addEventListener('change', draw); thr.addEventListener('input', draw);
+  const pickBtn = h('button.btn.stamp-img-pick', { type: 'button', onclick: async () => {
+    const f = (await window.api.openFiles({ filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }] }))?.[0];
+    if (!f) return;
+    const bytes = f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(f.bytes);
+    if (!sniffImage(bytes)) { status.textContent = 'Only PNG and JPEG images can be used.'; return; }
+    try { source = await loadImage(bytes); } catch { status.textContent = 'The image could not be read.'; return; }
+    status.textContent = '';
+    if (!name.value.trim()) name.value = String(f.name ?? '').replace(/\.[^.]+$/, '');
+    draw();
+  } }, 'Choose image…');
+  const body = item
+    ? h('div.pt-form', {}, h('label.field', {}, h('span', {}, 'Name'), name))
+    : h('div.pt-form', {}, pickBtn, status, h('div.stamp-img-paper', {}, canvas),
+      h('label.opt', {}, remove, h('span', {}, 'Remove light background')), h('label.opt', {}, h('span', {}, 'Threshold'), thr, thrOut),
+      h('label.field', {}, h('span', {}, 'Name'), name));
+  const v = await app.showDialog({
+    title: item ? 'Rename stamp' : 'Image stamp',
+    body,
+    buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: item ? 'Save' : 'Create', value: 'ok', primary: true, validate: () => !!name.value.trim() && (!!item || !!source) }],
+    initialFocus: item ? '#stamp-img-name' : '.stamp-img-pick',
+  });
+  if (v !== 'ok') return null;
+  const meta = { kind: 'image', name: name.value.trim(), order: item?.order ?? custom.length };
+  const id = item?.id ?? `st${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+  if (item) await window.api.libraryPut(LIB, id, { meta });
+  else {
+    draw();
+    const png = new Uint8Array(await (await new Promise((r) => canvas.toBlob(r, 'image/png'))).arrayBuffer());
+    await window.api.libraryPut(LIB, id, { meta, bytes: png });
+  }
+  await loadCustom();
+  return custom.find((c) => c.id === id) ?? null;
+}
+/** Choose a custom stamp: text stamps become the active stamp, image stamps arm the image tool. */
+function chooseStamp(s) {
+  if (s.kind !== 'image') { useStamp(s); return; }
+  armImage(s.bytes, { frac: 0.25, label: 'stamp' });
+}
 let palette = null;
 function closePalette() { palette?.remove(); palette = null; document.removeEventListener('pointerdown', outside, true); }
 function outside(e) { if (palette && !palette.contains(e.target) && !e.target.closest?.('.opt-stamp-pick')) closePalette(); }
@@ -218,14 +284,14 @@ async function openPalette(anchor, cat = opt.stamp.custom ? 'custom' : opt.stamp
   const grid = h('div.stamp-grid', { role: 'listbox', 'aria-label': 'Stamps' });
   const tabs = h('div.stamp-cats', { role: 'tablist' }, ...[['standard', 'Standard'], ['dynamic', 'Dynamic'], ['custom', 'Custom']].map(([c, l]) =>
     h('button.btn.stamp-cat', { type: 'button', role: 'tab', 'aria-selected': String(c === cat), dataset: { cat: c }, onclick: () => openPalette(anchor, c) }, l)));
-  const pick = (s) => h('button.stamp-item', { type: 'button', role: 'option', title: s.text, 'aria-selected': String(s.id === opt.stamp.id), dataset: { id: s.id },
-    onclick: () => { useStamp(s); closePalette(); } }, preview(s), h('span.stamp-label', {}, s.name ?? s.text));
+  const pick = (s) => h('button.stamp-item', { type: 'button', role: 'option', title: s.name ?? s.text, 'aria-selected': String(s.id === opt.stamp.id), dataset: { id: s.id },
+    onclick: () => { chooseStamp(s); closePalette(); } }, preview(s), h('span.stamp-label', {}, s.name ?? s.text));
   const list = cat === 'standard' ? STANDARD_STAMPS : cat === 'dynamic' ? DYNAMIC_STAMPS : custom;
   for (const s of list) {
     if (!s.custom) { grid.append(pick(s)); continue; }
     grid.append(h('div.stamp-custom', {}, pick(s),
-      h('button.pt-icon-btn.stamp-rename', { type: 'button', title: 'Rename', 'aria-label': `Rename ${s.text}`, onclick: async () => { const r = await createStampDialog(s); if (r && opt.stamp.id === r.id) useStamp(r); openPalette(anchor, 'custom'); } }, '✎'),
-      h('button.pt-icon-btn.stamp-delete', { type: 'button', title: 'Delete', 'aria-label': `Delete ${s.text}`, onclick: async () => { await window.api.libraryDelete(LIB, s.id); if (opt.stamp.id === s.id) useStamp(STANDARD_STAMPS[0]); openPalette(anchor, 'custom'); } }, '×')));
+      h('button.pt-icon-btn.stamp-rename', { type: 'button', title: 'Rename', 'aria-label': `Rename ${s.name ?? s.text}`, onclick: async () => { const r = await (s.kind === 'image' ? imageStampDialog(s) : createStampDialog(s)); if (r && r.kind !== 'image' && opt.stamp.id === r.id) useStamp(r); openPalette(anchor, 'custom'); } }, '✎'),
+      h('button.pt-icon-btn.stamp-delete', { type: 'button', title: 'Delete', 'aria-label': `Delete ${s.name ?? s.text}`, onclick: async () => { await window.api.libraryDelete(LIB, s.id); if (opt.stamp.id === s.id) useStamp(STANDARD_STAMPS[0]); openPalette(anchor, 'custom'); } }, '×')));
   }
   const extra = [];
   if (cat === 'dynamic') {
@@ -238,7 +304,8 @@ async function openPalette(anchor, cat = opt.stamp.custom ? 'custom' : opt.stamp
   }
   if (cat === 'custom') {
     if (!custom.length) grid.append(h('p.opt-hint', {}, 'No custom stamps yet.'));
-    extra.push(h('button.btn.stamp-create', { type: 'button', onclick: async () => { const s = await createStampDialog(); if (s) useStamp(s); openPalette(anchor, 'custom'); } }, 'Create stamp…'));
+    extra.push(h('button.btn.stamp-create', { type: 'button', onclick: async () => { const s = await createStampDialog(); if (s) useStamp(s); openPalette(anchor, 'custom'); } }, 'Create stamp…'),
+      h('button.btn.stamp-create-image', { type: 'button', onclick: async () => { const s = await imageStampDialog(); if (s) chooseStamp(s); openPalette(anchor, 'custom'); } }, 'From image…'));
   }
   palette = h('div.stamp-palette', { role: 'dialog', 'aria-label': 'Stamp palette', onkeydown: (e) => { if (e.key === 'Escape') { e.stopPropagation(); closePalette(); anchor.focus(); } } }, tabs, grid, ...extra);
   anchor.parentElement.append(palette);
@@ -338,7 +405,7 @@ export function initStampTools(a) {
   Promise.all([window.api.settingsGet(LAST_KEY).catch(() => null), window.api.settingsGet(DYN_KEY).catch(() => null), loadCustom()]).then(([last, dyn]) => {
     if (dyn && typeof dyn === 'object') Object.assign(opt.dyn, dyn);
     const s = allStamps().find((x) => x.id === last);
-    if (s) { opt.stamp = s; opt.text = s.text; opt.color = s.color; bus.emit('stamp:changed', { id: s.id }); }
+    if (s && s.kind !== 'image') { opt.stamp = s; opt.text = s.text; opt.color = s.color; bus.emit('stamp:changed', { id: s.id }); }
   });
   registerTool({ id: 'stamp', label: 'Stamp', icon: STAMP_ICON, shortcut: 'S', cursor: 'crosshair', options: [stampOptions], onPointerDown: c.onPointerDown, onPointerMove: c.onPointerMove, onPointerUp: c.onPointerUp, onDeactivate: () => { closePalette(); c.cancel(activeTab()); } });
   registerTool({ id: 'image', label: 'Image (PNG, JPEG)', icon: 'image', shortcut: 'I', cursor: 'copy', options: [imageOptions], ...imageTool });
