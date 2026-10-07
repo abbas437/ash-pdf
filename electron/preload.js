@@ -56,5 +56,12 @@ contextBridge.exposeInMainWorld('api', {
   // ---- office conversions (electron/office.js)
   officeStatus: () => ipcRenderer.invoke('office:status'),
   officeExportDocx: (opts) => ipcRenderer.invoke('office:exportDocx', opts ?? {}),
-  officeToPdf: () => ipcRenderer.invoke('office:toPdf'),
+  officeToPdf: (opts) => ipcRenderer.invoke('office:toPdf', opts ?? {}),
+  officeCancel: (jobId) => ipcRenderer.invoke('office:cancel', jobId),
+  onOfficeProgress: (cb) => {
+    if (typeof cb !== 'function') throw new TypeError('onOfficeProgress: callback required');
+    const listener = (_event, p) => cb(p);
+    ipcRenderer.on('office:progress', listener);
+    return () => ipcRenderer.removeListener('office:progress', listener);
+  },
 });
