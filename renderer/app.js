@@ -4,7 +4,7 @@ import { bus } from './bus.js';
 import { state, createTab, activeTab, markDirty } from './state.js';
 import { h, $, isTyping, formatBytes } from './ui/dom.js';
 import { icon } from './ui/icons.js';
-import { showDialog, showError, confirmDiscard, toast, dialogOpen } from './ui/dialogs.js';
+import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, dialogOpen } from './ui/dialogs.js';
 import { viewer } from './ui/viewer.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs } from './ui/sidebar.js';
@@ -103,6 +103,10 @@ const hasDoc = () => !!activeTab();
 /** Open {name, path?, bytes} in a new tab. Returns the tab or null. */
 export async function openBytes({ name, path = null, bytes }) {
   const tab = createTab({ name, path, bytes });
+  // Background check of the file as opened; saveTab asks before overwriting a signed original at this path.
+  tab.signedPath = null;
+  tab.signatureCheck = import('../src/core/index.js').then((core) => core.detectSignatures(bytes))
+    .then((r) => { if (r.signed) tab.signedPath = path; }, () => {});
   try {
     await viewer.openDocument(tab);
   } catch (err) {
@@ -166,6 +170,16 @@ export async function closeTab(tab = activeTab()) {
 export async function saveTab(tab = activeTab(), asNew = false) {
   if (!tab) return false;
   if (tab.readOnly) { await showDialog({ title: 'Read-only document', body: 'This document is encrypted: viewing and printing only (editing is not supported).' }); return false; }
+  if (!asNew && tab.path) {
+    // Saving rewrites the whole file, which breaks a digital signature on the original.
+    await tab.signatureCheck;
+    if (tab.signedPath && tab.signedPath === tab.path) {
+      const choice = await confirmSignedOverwrite(tab.name);
+      if (choice === 'copy') return saveTab(tab, true);
+      if (choice !== 'overwrite') return false;
+      tab.signedPath = null;
+    }
+  }
   try {
     let bytes = tab.bytes;
     for (const hook of state.hooks.beforeSave) {

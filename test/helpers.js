@@ -1,5 +1,5 @@
 // Test helpers: fixture builders (pdf-lib) and pdf.js inspection/rendering.
-import { PDFDocument, degrees, concatTransformationMatrix, decodePDFRawStream, PDFArray, PDFRawStream } from 'pdf-lib';
+import { PDFDocument, degrees, concatTransformationMatrix, decodePDFRawStream, PDFArray, PDFRawStream, PDFHexString, PDFName } from 'pdf-lib';
 import { createCanvas } from '@napi-rs/canvas';
 import { fileURLToPath } from 'node:url';
 
@@ -99,4 +99,28 @@ export function near(actual, expected, tol, msg) {
 
 export function isColor(px, [r, g, b], tol = 40) {
   return Math.abs(px[0] - r) <= tol && Math.abs(px[1] - g) <= tol && Math.abs(px[2] - b) <= tol;
+}
+
+/**
+ * Signed-looking PDF (no real cryptography): a /Sig value dictionary with /ByteRange and
+ * /Contents, a signature field + widget on page 1 and AcroForm /SigFlags. `signed: false` leaves
+ * the field empty (no /V). Written without object streams so the raw byte-scan fallback of
+ * detectSignatures can see the dictionaries too.
+ */
+export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2 } = {}) {
+  const doc = await PDFDocument.create();
+  for (let i = 0; i < pages; i++) doc.addPage([612, 792]).drawText(`Signed page ${i + 1}`, { x: 50, y: 700, size: 18 });
+  const ctx = doc.context;
+  const page = doc.getPage(0);
+  const field = { FT: 'Sig', T: PDFHexString.fromText('Signature1'), Type: 'Annot', Subtype: 'Widget', Rect: [0, 0, 0, 0], F: 132, P: page.ref };
+  if (signed) {
+    field.V = ctx.register(ctx.obj({
+      Type: 'Sig', Filter: 'Adobe.PPKLite', SubFilter: 'adbe.pkcs7.detached',
+      ByteRange: [0, 1000, 9192, 500], Contents: PDFHexString.of('00'.repeat(64)), M: PDFHexString.fromText('D:20261007120000Z'),
+    }));
+  }
+  const fieldRef = ctx.register(ctx.obj(field));
+  page.node.set(PDFName.of('Annots'), ctx.obj([fieldRef]));
+  doc.catalog.set(PDFName.of('AcroForm'), ctx.obj({ Fields: [fieldRef], SigFlags: sigFlags }));
+  return doc.save({ useObjectStreams: false });
 }

@@ -105,6 +105,22 @@ export function confirmDiscard(name) {
   });
 }
 
+/** Saving rewrites the whole file: ask before overwriting a digitally signed original. */
+export function confirmSignedOverwrite(name) {
+  return showDialog({
+    title: 'This document is digitally signed',
+    body: h('div', {},
+      h('p', {}, `"${name}" carries a digital signature. Saving your changes over it rewrites the file, which invalidates the signature and removes the earlier signed revisions.`),
+      h('p', {}, 'Save the edited document as a separate copy to keep the signed original intact.')),
+    buttons: [
+      { label: 'Cancel', value: 'cancel', cancel: true },
+      { label: 'Overwrite original', value: 'overwrite', danger: true },
+      { label: 'Save as a copy…', value: 'copy', primary: true },
+    ],
+    className: 'signed-dialog',
+  });
+}
+
 export function showExternalLink(url) {
   const field = h('input.input.url-field', { type: 'text', readonly: true, value: url, 'aria-label': 'Link address' });
   const status = h('span.copy-status', { role: 'status' });
