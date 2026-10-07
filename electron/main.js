@@ -13,7 +13,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, session, shell } from 'electron';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -364,6 +364,63 @@ function registerIpc() {
   });
 }
 
+// ---- signature library -----------------------------------------------------------------------
+// Image items the renderer keeps across sessions (too big for settings.json). Stored under the
+// userData dir (the portable data dir in portable mode) as library/<kind>/<id>.bin (image bytes;
+// AES-GCM ciphertext when the item is password-locked, done in the renderer) and <id>.json (meta).
+// Add a kind (e.g. 'stamp') to LIBRARY_KINDS to reuse the storage.
+const LIBRARY_KINDS = new Set(['signature']);
+const LIBRARY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const LIBRARY_MAX_BYTES = 5 * 1024 * 1024;
+function libraryFile(kind, id, ext) {
+  if (!LIBRARY_KINDS.has(kind)) throw new TypeError('invalid library kind');
+  if (typeof id !== 'string' || !LIBRARY_ID.test(id)) throw new TypeError('invalid library id');
+  return join(app.getPath('userData'), 'library', kind, id + ext);
+}
+const ignoreMissing = (err) => { if (err?.code !== 'ENOENT') throw err; };
+function registerLibraryIpc() {
+  handle('library:list', async (kind) => {
+    const dir = dirname(libraryFile(kind, 'x', '.json'));
+    const names = await readdir(dir).catch((err) => { ignoreMissing(err); return []; });
+    const out = [];
+    for (const n of names) {
+      const id = n.endsWith('.json') ? n.slice(0, -5) : null;
+      if (!id || !LIBRARY_ID.test(id)) continue;
+      try { out.push({ id, meta: JSON.parse(await readFile(join(dir, n), 'utf8')) }); } catch (err) { console.error('library: unreadable meta', n, err.message); }
+    }
+    return out;
+  });
+  handle('library:get', async (kind, id) => {
+    const metaFile = libraryFile(kind, id, '.json'), binFile = libraryFile(kind, id, '.bin');
+    try {
+      const [meta, bytes] = await Promise.all([readFile(metaFile, 'utf8'), readFile(binFile)]);
+      return { id, meta: JSON.parse(meta), bytes: new Uint8Array(bytes) };
+    } catch (err) { ignoreMissing(err); return null; }
+  });
+  // item = {meta, bytes?}: without bytes only the meta is replaced (the item must exist).
+  handle('library:put', async (kind, id, item) => {
+    const metaFile = libraryFile(kind, id, '.json'), binFile = libraryFile(kind, id, '.bin');
+    if (!isPlainObject(item) || !isPlainObject(item.meta)) throw new TypeError('library:put: {meta, bytes} required');
+    const json = JSON.stringify(item.meta);
+    if (json.length > 64 * 1024) throw new RangeError('library meta too large (64 KiB max)');
+    await mkdir(dirname(metaFile), { recursive: true });
+    if (item.bytes !== undefined) {
+      const bytes = toBytes(item.bytes);
+      if (bytes.length > LIBRARY_MAX_BYTES) throw new RangeError('library item too large (5 MB max)');
+      await atomicWrite(binFile, bytes);
+    } else if (!existsSync(binFile)) throw new Error('library:put: no such item');
+    await atomicWrite(metaFile, Buffer.from(json));
+    return true;
+  });
+  handle('library:delete', async (kind, id) => {
+    const metaFile = libraryFile(kind, id, '.json'), binFile = libraryFile(kind, id, '.bin');
+    await unlink(metaFile).catch(ignoreMissing);
+    await unlink(binFile).catch(ignoreMissing);
+    return true;
+  });
+}
+// ---- end signature library -------------------------------------------------------------------
+
 // --- Lifecycle ------------------------------------------------------------------------------
 app.on('web-contents-created', (_event, contents) => {
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -377,6 +434,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler(() => false);
   protocol.handle(SCHEME, serveAppFile);
   registerIpc();
+  registerLibraryIpc(); // signature library
   createWindow();
 });
 

@@ -295,3 +295,9 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .co-chip[aria-pressed="true"] { outline: 2px solid var(--chip) !important; outline-offset: 1px; }
 .co-color { width: 28px; height: 22px; padding: 0; border: 1px solid var(--line); background: none; }
 .text-editor.callout-editor { background: transparent; }
+
+/* Handwriting fonts for typed signatures (SIL OFL 1.1, vendored by scripts/vendor.js). */
+@font-face { font-family: "Sig Dancing Script"; src: url("./vendor/fonts/dancing-script-latin-400-normal.woff2") format("woff2"); font-display: block; }
+@font-face { font-family: "Sig Great Vibes"; src: url("./vendor/fonts/great-vibes-latin-400-normal.woff2") format("woff2"); font-display: block; }
+@font-face { font-family: "Sig Caveat"; src: url("./vendor/fonts/caveat-latin-400-normal.woff2") format("woff2"); font-display: block; }
+@font-face { font-family: "Sig Sacramento"; src: url("./vendor/fonts/sacramento-latin-400-normal.woff2") format("woff2"); font-display: block; }

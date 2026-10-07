@@ -28,4 +28,9 @@ contextBridge.exposeInMainWorld('api', {
   showItem: (path) => ipcRenderer.invoke('shell:showItem', path),
   settingsGet: (key) => ipcRenderer.invoke('app:settingsGet', key),
   settingsSet: (key, value) => ipcRenderer.invoke('app:settingsSet', key, value),
+  // signature library (kind: 'signature')
+  libraryList: (kind) => ipcRenderer.invoke('library:list', kind),
+  libraryGet: (kind, id) => ipcRenderer.invoke('library:get', kind, id),
+  libraryPut: (kind, id, item) => ipcRenderer.invoke('library:put', kind, id, item),
+  libraryDelete: (kind, id) => ipcRenderer.invoke('library:delete', kind, id),
 });
