@@ -1,0 +1,7 @@
+node_modules/
+renderer/vendor/
+dist/
+build/libredwg/
+.cache/
+*.log
+*.tmp

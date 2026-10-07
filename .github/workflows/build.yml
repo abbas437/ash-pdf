@@ -1,0 +1,63 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write   # needed only by the tag-build release step
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run licenses
+      - run: npm test
+      - run: npm run vendor
+      - run: npm run dist
+      - name: SHA256SUMS.txt
+        shell: pwsh
+        working-directory: dist
+        run: |
+          $files = Get-ChildItem -File -Filter 'ASH-PDF-Studio-*.exe' | Sort-Object Name
+          if ($files.Count -ne 2) { throw "expected 2 .exe files, found $($files.Count)" }
+          $files | ForEach-Object { "$((Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } |
+            Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ASH-PDF-Studio-windows-x64
+          path: |
+            dist/ASH-PDF-Studio-Setup-*.exe
+            dist/ASH-PDF-Studio-Portable-*.exe
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: GitHub Release (tag builds only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/ASH-PDF-Studio-Setup-*.exe \
+            dist/ASH-PDF-Studio-Portable-*.exe \
+            dist/SHA256SUMS.txt \
+            --title "ASH PDF Studio $GITHUB_REF_NAME" \
+            --generate-notes
+
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run vendor && npm test

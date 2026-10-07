@@ -1,0 +1,97 @@
+{
+  "name": "ash-pdf",
+  "productName": "ASH PDF Studio",
+  "version": "0.1.0",
+  "description": "ASH PDF Studio - free PDF viewer and editor for Windows",
+  "type": "module",
+  "main": "electron/main.js",
+  "license": "MIT",
+  "author": "ASH Technical & Project Management Services (ASH PMCS)",
+  "private": true,
+  "scripts": {
+    "start": "node scripts/vendor.js && electron . --dev",
+    "vendor": "node scripts/vendor.js",
+    "test": "node --test test/",
+    "test:e2e": "node -e \"process.exit(require('fs').existsSync('test/e2e/run.mjs')?1:0)\" || node test/e2e/run.mjs",
+    "smoke:browser": "node scripts/smoke-browser.mjs",
+    "icon": "node scripts/make-icon.js",
+    "licenses": "node scripts/licenses.js",
+    "dist": "electron-builder --win nsis portable --x64 --publish never"
+  },
+  "dependencies": {
+    "@pdf-lib/fontkit": "^1.1.1",
+    "pdf-lib": "^1.17.1",
+    "pdfjs-dist": "^6.4.299"
+  },
+  "devDependencies": {
+    "@napi-rs/canvas": "^1.0.10",
+    "electron": "^44.6.0",
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.63.0"
+  },
+  "build": {
+    "appId": "com.ashpmcs.pdfstudio",
+    "productName": "ASH PDF Studio",
+    "copyright": "Copyright (c) 2026 ASH Technical & Project Management Services (ASH PMCS)",
+    "asar": true,
+    "compression": "maximum",
+    "publish": null,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "renderer/**/*",
+      "src/**/*",
+      "package.json",
+      "!**/*.map",
+      "!test{,/**/*}",
+      "!docs{,/**/*}",
+      "!scripts{,/**/*}",
+      "!node_modules{,/**/*}"
+    ],
+    "extraResources": [
+      {
+        "from": "THIRD-PARTY-NOTICES.md",
+        "to": "THIRD-PARTY-NOTICES.md"
+      },
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.txt"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "publisherName": "ASH Technical & Project Management Services (ASH PMCS)"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "ASH PDF Studio",
+      "license": "LICENSE",
+      "include": "build/installer.nsh",
+      "artifactName": "ASH-PDF-Studio-Setup-${version}.${ext}"
+    },
+    "portable": {
+      "artifactName": "ASH-PDF-Studio-Portable-${version}.${ext}"
+    }
+  }
+}
