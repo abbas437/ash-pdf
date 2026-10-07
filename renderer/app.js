@@ -27,6 +27,7 @@ import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextra
 import { pdfium } from './pdfium/client.js';
 import { initOffice } from './ui/office.js';
 import { initExports } from './ui/exports.js';
+import { initCompress } from './ui/compress.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
 import { initHandTool } from './ui/tools-hand.js';
 import { initSession } from './ui/session.js';
@@ -465,6 +466,7 @@ app.pageMarks = pageMarks;
 initPageTools(app);
 initOffice(app); // File > Export to Word, Create PDF from Office file
 initExports(app); // File > Export to Excel, Export page as image
+initCompress(app); // File > Reduce file size
 initAdvancedSearch(app);
 initCopyText(app);
 initHandTool();

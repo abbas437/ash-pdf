@@ -441,6 +441,16 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .vx-field { display: flex; flex-direction: column; gap: 3px; }
 .vx-field > span { color: var(--muted); font-size: 12px; }
 .vx-field .input { width: 100%; box-sizing: border-box; min-width: 0; }
+.rz-form { display: flex; flex-direction: column; gap: 10px; min-width: min(440px, 85vw); }
+.rz-presets { display: flex; flex-direction: column; gap: 6px; }
+.rz-preset { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); cursor: pointer; }
+.rz-preset:has(input:checked) { border-color: var(--accent); }
+.rz-preset input { grid-row: span 2; margin: 0; accent-color: var(--accent); }
+.rz-name { font-weight: 600; }
+.rz-detail, .rz-note { color: var(--muted); font-size: 12px; margin: 0; }
+.rz-sizes { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
+.rz-sizes dt { color: var(--muted); }
+.rz-sizes dd { margin: 0; font-variant-numeric: tabular-nums; }
 .vx-error { grid-column: 1 / -1; margin: 0; min-height: 1.2em; color: var(--focus); }
 .vx-note { margin: 8px 0 0; color: var(--muted); font-size: 12px; }
 .vx-wc-table { border-collapse: collapse; min-width: min(420px, 85vw); }
