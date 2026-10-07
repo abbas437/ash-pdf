@@ -30,6 +30,27 @@ export function filterEntries(entries, { type = '', author = '', status = '' } =
   return entries.filter((e) => (!type || e.type === type) && (!author || e.author === author) && (!status || e.status === status));
 }
 
+/** Entries whose comment text, reply text or author contains `query` (case-insensitive); blank matches all. */
+export function searchEntries(entries, query = '') {
+  const q = query.trim().toLowerCase();
+  if (!q) return entries;
+  const has = (s) => String(s ?? '').toLowerCase().includes(q);
+  return entries.filter((e) => has(e.text) || has(e.author) || e.replies.some((r) => has(r.text)));
+}
+
+export const SORTS = { page: 'Page', date: 'Date (newest)', author: 'Author' };
+
+/** A sorted copy: 'page' (page, then document order), 'date' (newest first; unsaved, undated entries
+ *  are the newest so they come first) or 'author' (A-Z, case-insensitive; then page order). */
+export function sortEntries(entries, by = 'page') {
+  const byPage = (a, b) => a.page - b.page || a.order - b.order;
+  const time = (e) => (e.date ? Date.parse(e.date) : Infinity);
+  const cmp = by === 'date' ? (a, b) => time(b) - time(a) || byPage(a, b)
+    : by === 'author' ? (a, b) => a.author.localeCompare(b.author, undefined, { sensitivity: 'base' }) || byPage(a, b)
+      : byPage;
+  return [...entries].sort((a, b) => cmp(a, b) || 0);
+}
+
 /** [{page, items}] by page number; items keep the document order. */
 export function groupByPage(entries) {
   const pages = new Map();

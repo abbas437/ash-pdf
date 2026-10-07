@@ -127,6 +127,12 @@ try {
   await page.selectOption('[data-filter="status"]', '');
   await until(async () => (await page.locator('[data-sb-panel="comments"] .cm-item').count()) === 3, 'filter cleared should show 3');
 
+  step = 'search';
+  await page.fill('.cm-search', 'REROUTED');
+  await until(async () => JSON.stringify(await page.$$eval('[data-sb-panel="comments"] .cm-item > .cm-text', (els) => els.map((x) => x.textContent))) === JSON.stringify(['Clash with duct']), 'search by reply text should show only the rect');
+  await page.fill('.cm-search', '');
+  await until(async () => (await page.locator('[data-sb-panel="comments"] .cm-item').count()) === 3, 'search cleared should show 3');
+
   step = 'csv';
   const date = (text) => { const o = reo.find((x) => x.note === text); return o.modified || o.created; };
   const dl = page.waitForEvent('download');
@@ -138,6 +144,14 @@ try {
     `1,Rectangle,Reviewer A,${date('Clash with duct')},Accepted,Clash with duct,Reviewer A: Rerouted above the tray`,
     `2,Sticky note,Reviewer A,${date('Check size')},None,Check size,`,
     `2,Ellipse,Reviewer A,${date('=SUM(1,2)')},None,"'=SUM(1,2)",`, ''], 'csv rows');
+
+  step = 'sort';
+  const [rRect, rNote, rEll] = ['rect', 'note', 'ellipse'].map((t) => reo.find((o) => o.type === t).id);
+  await ev("an.getObject(tab, arg).modified = '2030-01-01T00:00:00.000Z';", rEll);
+  await page.selectOption('.cm-sort', 'date');
+  await until(async () => JSON.stringify(await page.$$eval('[data-sb-panel="comments"] .cm-item', (els) => els.map((x) => x.dataset.id))) === JSON.stringify([rEll, rRect, rNote]), 'sort by date should list newest first');
+  await ev("an.getObject(tab, arg.id).modified = arg.m;", { id: rEll, m: reo.find((o) => o.id === rEll).modified });
+  await page.selectOption('.cm-sort', 'page');
 
   step = 'legibility';
   await page.mouse.move(700, 900);

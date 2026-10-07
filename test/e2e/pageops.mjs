@@ -160,6 +160,27 @@ try {
   eq(await texts(), P(1, 2, 3, 4, 5, 6), 'undo after interleave');
   eq(await objPages(), [0, 2], 'annotations after undoing interleave');
 
+  step = 'replace pages 2-3 with Back 4-5 (annotation on page 3 dropped)';
+  await menu('replace-pages');
+  const chooserR = page.waitForEvent('filechooser');
+  await page.click('#pt-rp-pick');
+  await (await chooserR).setFiles({ name: 'backs.pdf', mimeType: 'application/pdf', buffer: backs });
+  await page.waitForFunction(() => document.querySelector('#pt-rp-file').textContent.includes('6 pages'));
+  await page.fill('#pt-rp-pages', '4-5');
+  await page.fill('#pt-rp-at', '2');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.waitForSelector('.dialog button.danger');
+  sn = await snap();
+  await page.click('.dialog button.danger');
+  await done(sn); await thumbCount(6);
+  eq(await texts(), ['Page 1', 'Back 4', 'Back 5', 'Page 4', 'Page 5', 'Page 6'], 'texts after replace');
+  eq(await objPages(), [0], 'annotation on a replaced page dropped');
+  eq(await lastMap(), [[1, 1], [2, null], [3, null], [4, 4], [5, 5], [6, 6]], 'replace map');
+  await undoTo(6);
+  eq(await texts(), P(1, 2, 3, 4, 5, 6), 'undo after replace');
+  eq(await lastMap(), [[1, 1], [2, null], [3, null], [4, 4], [5, 5], [6, 6]], 'undo map');
+  eq(await objPages(), [0], 'undo keeps the other annotation on page 1 (unsaved ones on replaced pages go, as with Delete pages)');
+
   step = 'dark theme dialog';
   await ev('document.documentElement.dataset.theme = "dark";');
   await menu('resize-pages');
@@ -170,9 +191,10 @@ try {
   step = 'read-only tab disables the new tools';
   await ev('tab.readOnly = true;');
   await page.click('.menu-btn:text-is("Tools")');
-  for (const id of ['reverse-pages', 'resize-pages', 'interleave-pages']) check(await page.locator(`.menu-item[data-id="${id}"]`).isDisabled(), `${id} enabled on a read-only tab`);
+  for (const id of ['reverse-pages', 'resize-pages', 'interleave-pages', 'replace-pages']) check(await page.locator(`.menu-item[data-id="${id}"]`).isDisabled(), `${id} enabled on a read-only tab`);
   await page.keyboard.press('Escape');
   check(!(await ev('return pt.reverse(tab, [0, 1]);')), 'reverse ran on a read-only tab');
+  check(!(await ev('return pt.replaceDialog(tab);')) && !(await page.locator('.dialog').count()), 'replace ran on a read-only tab');
   await ev('tab.readOnly = false;');
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);

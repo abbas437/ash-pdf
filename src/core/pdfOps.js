@@ -263,6 +263,22 @@ export async function insertPagesFrom(destBytes, srcBytes, srcIndices, atIndex) 
   return saveEdited(dest);
 }
 
+/** Replace dest pages atIndex..atIndex+n-1 by copies of the n source pages (in the order given). */
+export async function replacePages(destBytes, srcBytes, srcIndices, atIndex) {
+  const dest = await loadPdf(destBytes);
+  const src = await loadPdf(srcBytes);
+  const n = dest.getPageCount();
+  assertPageIndices(srcIndices, src.getPageCount(), 'srcIndices');
+  if (srcIndices.length === 0) throw new RangeError('No pages selected');
+  if (!Number.isInteger(atIndex) || atIndex < 0 || atIndex + srcIndices.length > n) {
+    throw new RangeError(`Replacing ${srcIndices.length} page(s) must start at 1-${n - srcIndices.length + 1}`);
+  }
+  const copied = await dest.copyPages(src, srcIndices);
+  for (let k = srcIndices.length - 1; k >= 0; k--) dest.removePage(atIndex + k);
+  copied.forEach((p, k) => dest.insertPage(atIndex + k, p));
+  return saveEdited(dest);
+}
+
 /**
  * Crop by margins measured on the page as displayed (after /Rotate).
  * Sets /CropBox; MediaBox is unchanged.
