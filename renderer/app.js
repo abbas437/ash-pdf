@@ -11,6 +11,8 @@ import { initSidebar, registerSidebarTab, showSidebarTab, thumbs } from './ui/si
 import { initSearch, search } from './ui/search.js';
 import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
+import { initTextTools } from './ui/tools-text.js';
+import { initStampTools } from './ui/tools-stamp.js';
 import { initForms } from './ui/forms.js';
 import { initPageTools } from './ui/pagetools.js';
 
@@ -422,6 +424,8 @@ export const app = { state, bus, viewer, registerSidebarTab, showSidebarTab, thu
 window.ashStudio = app;
 initAnnotations();
 initShapeTools();
+initTextTools(app);
+initStampTools(app);
 app.annotations = annotations;
 initPageTools(app);
 

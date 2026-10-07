@@ -257,3 +257,30 @@ body.ann-drawing .viewer-host .page { cursor: crosshair; }
 .opt-seg { display: inline-flex; gap: 2px; }
 .opt-seg .tb-btn[aria-pressed="true"] { background: var(--hover, rgba(0,0,0,.08)); outline: 1px solid var(--line); }
 .st-annots { margin-left: auto; }
+/* Stamp, image and signature tools (ui/tools-stamp.js) */
+.opt-swatch { width: 24px; height: 24px; padding: 0; }
+.opt-swatch::after { content: ""; width: 14px; height: 14px; border-radius: 3px; background: var(--swatch); box-shadow: inset 0 0 0 1px rgba(0,0,0,.2); }
+.opt-seg .opt-swatch[aria-pressed="true"] { outline: 2px solid var(--swatch); outline-offset: -1px; }
+.opt-hint { color: var(--muted); font-size: 12px; }
+body.img-armed .viewer-host .page { cursor: copy; }
+.sig-dialog { display: flex; flex-direction: column; gap: 10px; max-width: 500px; }
+.sig-pad { display: block; border: 1px dashed var(--line); border-radius: 6px; background: #fff; touch-action: none; cursor: crosshair; }
+.sig-note { margin: 0; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.sig-row { display: flex; gap: 10px; align-items: center; }
+.sig-dialog .row { display: flex; gap: 8px; align-items: center; }
+.sig-name { flex: 1; }
+.sig-status { margin: 0; min-height: 1.2em; font-size: 12.5px; color: var(--muted); }
+/* Text tool (ui/tools-text.js) */
+.text-edit-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; z-index: 2; }
+.text-edit-layer[data-view-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.text-edit-layer[data-view-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.text-edit-layer[data-view-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
+.text-editor { position: absolute; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 0; resize: none; overflow: hidden;
+  white-space: pre-wrap; overflow-wrap: break-word; background: rgba(255, 255, 255, .55); outline: 1px dashed #1a73e8; outline-offset: 1px; pointer-events: auto; caret-color: #1a73e8; }
+.text-editor:focus { outline: 1px dashed #1a73e8; }
+.ann-text text { white-space: pre; }
+body.text-tool .viewer-host .textLayer, body.text-tool .viewer-host .linkLayer { pointer-events: none; }
+body.text-tool .viewer-host { user-select: none; -webkit-user-select: none; }
+body.text-tool .viewer-host .page { cursor: text; }
+.opt-glyph-bold { font-weight: 700; font-family: Georgia, serif; }
+.opt-glyph-italic { font-style: italic; font-family: Georgia, serif; }
