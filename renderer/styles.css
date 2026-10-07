@@ -591,3 +591,24 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .tool-labels .toolbar .tb-btn:not(.has-text)::after { content: attr(data-label); font-size: 10px; line-height: 1.15; white-space: nowrap; color: var(--muted); }
 .tool-labels .toolbar .tb-btn[aria-pressed="true"]::after { color: inherit; }
 .tool-labels .toolbar .tb-btn:disabled::after { opacity: .9; }
+
+/* Toolbar dropdown buttons (Pages, Split): icon, visible label and caret; menu under the button. */
+.tb-dd { position: relative; }
+.toolbar .tb-btn.tb-dd-btn { display: flex; align-items: center; gap: 4px; width: auto; padding: 0 6px; }
+.tb-dd-label { font-size: 12px; white-space: nowrap; }
+.tb-dd-caret { opacity: .7; }
+.tb-dd-btn[aria-expanded="true"]:not([aria-pressed="true"]) { background: var(--hover); border-color: var(--line); }
+.toolbar .tb-btn.tb-dd-btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+.tb-dd-menu { top: calc(100% + 4px); min-width: 200px; color: var(--text); }
+.tb-dd-menu[hidden] { display: none; }
+.tb-dd-menu .menu-item kbd:empty { display: none; }
+/* With tool labels on: icon and caret over a small label, like the other labelled buttons. */
+.tool-labels .toolbar .tb-btn.tb-dd-btn { display: grid; grid-template-columns: auto auto; grid-template-areas: "i c" "l l"; justify-content: center; align-items: center; column-gap: 1px; row-gap: 0; height: auto; min-width: 30px; padding: 2px 2px 1px; }
+.tool-labels .toolbar .tb-dd-btn > .icon:first-child { grid-area: i; }
+.tool-labels .toolbar .tb-dd-btn > .tb-dd-caret { grid-area: c; }
+.tool-labels .toolbar .tb-dd-label { grid-area: l; font-size: 10px; line-height: 1.15; color: var(--muted); text-align: center; }
+.tool-labels .toolbar .tb-dd-btn[aria-pressed="true"] .tb-dd-label { color: inherit; }
+/* Inside the More panel the menu opens to the left of the panel. */
+.toolbar .tb-more-panel .tb-btn.tb-dd-btn { display: flex; width: 100%; justify-content: flex-start; height: 30px; padding: 0 8px; gap: 8px; }
+.toolbar .tb-more-panel .tb-dd-label { font-size: 12px; color: inherit; }
+.tb-more-panel .tb-dd-menu { top: 0; left: auto; right: calc(100% + 8px); }

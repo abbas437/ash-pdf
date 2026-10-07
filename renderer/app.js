@@ -9,6 +9,7 @@ import { viewer } from './ui/viewer.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
 import { initSplitView } from './ui/splitview.js';
+import { initToolbarMenus } from './ui/toolbar-menus.js';
 import { initSearch, search } from './ui/search.js';
 import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
@@ -474,6 +475,7 @@ initAdvancedSearch(app);
 initCopyText(app);
 initHandTool();
 initSplitView({ host: viewerHost, activate, registerMenuItem });
+initToolbarMenus(app); // Pages and Split dropdowns
 const prefsReady = initPrefs({ registerMenuItem, setTheme, toolbar });
 
 (async () => {

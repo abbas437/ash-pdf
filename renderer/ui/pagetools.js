@@ -133,7 +133,8 @@ function offerUndo(tab) {
 }
 
 // ---------------------------------------------------------------- page operations
-const selectionOf = (tab, fallback = tab.currentPage) => {
+/** Pages selected in the sidebar thumbnails (sorted), else [fallback] (the current page). */
+export const selectionOf = (tab, fallback = tab.currentPage) => {
   const s = sorted(thumbs.selection).filter((i) => i < tab.numPages);
   return s.length ? s : [fallback];
 };
