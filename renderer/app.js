@@ -26,6 +26,7 @@ import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextra
 import { pdfium } from './pdfium/client.js';
 import { initOffice } from './ui/office.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
+import { initHandTool } from './ui/tools-hand.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -453,6 +454,7 @@ initPageTools(app);
 initOffice(app); // File > Export to Word, Create PDF from Office file
 initAdvancedSearch(app);
 initCopyText(app);
+initHandTool();
 
 (async () => {
   try {

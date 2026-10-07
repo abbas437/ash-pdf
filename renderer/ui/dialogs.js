@@ -1,5 +1,5 @@
 // Modal dialogs and toasts (never window.alert/confirm/prompt).
-import { h, copyText } from './dom.js';
+import { h } from './dom.js';
 import { icon } from './icons.js';
 
 let dialogSeq = 0;
@@ -121,18 +121,34 @@ export function confirmSignedOverwrite(name) {
   });
 }
 
-export function showExternalLink(url) {
+/**
+ * External link (URI action): shows the full address and lets the user open it (api.openExternal;
+ * main opens only http:, https: and mailto:, anything else is refused with a toast) or copy it.
+ * Resolves with 'open' | 'cancel' once the dialog closes (after the open attempt).
+ */
+export async function showExternalLink(url) {
   const field = h('input.input.url-field', { type: 'text', readonly: true, value: url, 'aria-label': 'Link address' });
   const status = h('span.copy-status', { role: 'status' });
-  const copyBtn = h('button.btn', { type: 'button', html: icon('copy', 16) + '<span>Copy</span>' });
-  copyBtn.addEventListener('click', () => { status.textContent = copyText(url) ? 'Copied' : 'Copy failed: select the text and press Ctrl+C'; });
-  return showDialog({
+  const copy = async () => {
+    try { await window.api.copyText(url); status.textContent = 'Link copied'; } catch (err) { status.textContent = `Could not copy: ${err?.message ?? err}`; }
+    return false; // keep the dialog open
+  };
+  const choice = await showDialog({
     title: 'External link',
-    body: h('div', {}, h('p', {}, 'This link points outside the document. For your safety it is not opened automatically; copy the address into your browser if you trust it.'),
-      h('div.row', {}, field, copyBtn), status),
-    buttons: [{ label: 'Close', value: 'ok', primary: true, cancel: true }],
+    body: h('div', {}, h('p', {}, 'This link points outside the document. Open it only if you trust the address:'), field, status),
+    buttons: [
+      { label: 'Cancel', value: 'cancel', cancel: true },
+      { label: 'Copy link', value: 'copy', validate: copy },
+      { label: 'Open', value: 'open', primary: true },
+    ],
     className: 'link-dialog',
   });
+  if (choice !== 'open') return 'cancel';
+  try { await window.api.openExternal(url); } catch (err) {
+    const msg = String(err?.message ?? err).replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, '');
+    toast(`The link was not opened: ${msg}`);
+  }
+  return choice;
 }
 
 let toastHost = null;
