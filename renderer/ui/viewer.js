@@ -94,6 +94,13 @@ function stepZoom(z, dir) {
 // ---------------------------------------------------------------- loading
 /** Load tab.bytes with pdf.js, asking for a password if needed. Throws {cancelled:true} on cancel. */
 async function openDocument(tab) {
+  const loaded = await loadDocument(tab);
+  commitDocument(tab, loaded);
+  return loaded.doc;
+}
+
+/** Load tab.bytes (as they are now) with pdf.js without touching the tab's document state. */
+async function loadDocument(tab) {
   let needed = false;
   let cancelled = false;
   const task = pdfjs.getDocument({
@@ -116,15 +123,24 @@ async function openDocument(tab) {
     if (cancelled) throw Object.assign(new Error('Opening cancelled'), { cancelled: true });
     throw err;
   }
-  const meta = await doc.getMetadata().catch(() => null);
-  tab.encrypted = needed || !!meta?.info?.EncryptFilterName;
+  try {
+    const meta = await doc.getMetadata().catch(() => null);
+    const pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
+    return { doc, meta, pages, encrypted: needed || !!meta?.info?.EncryptFilterName };
+  } catch (err) {
+    destroyDoc(doc);
+    throw err;
+  }
+}
+
+function commitDocument(tab, { doc, meta, pages, encrypted }) {
+  tab.encrypted = encrypted;
   tab.readOnly = tab.encrypted;
   tab.metadata = meta;
   tab.pdfDoc = doc;
   tab.numPages = doc.numPages;
-  tab.pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
+  tab.pages = pages;
   tab.currentPage = Math.min(tab.currentPage, tab.numPages - 1);
-  return doc;
 }
 
 /** (Re)create the scroll container and page elements of a tab. */
@@ -613,20 +629,30 @@ function destroy(tab) {
   tab.view = null;
 }
 
-/** Re-open tab.bytes (after page operations), keeping the reading position. */
+/**
+ * Re-open tab.bytes (after page operations), keeping the reading position. Reloads can overlap
+ * (undo + redo in quick succession): each one takes a generation number and only the newest
+ * may install its document; an older one that finishes later is destroyed and discarded, so
+ * the view always ends up showing the latest tab.bytes.
+ */
 async function reload(tab) {
   if (!tab.view) return;
+  const gen = (tab.reloadGen = (tab.reloadGen ?? 0) + 1);
+  const current = () => gen === tab.reloadGen && !!tab.view;
+  let loaded;
+  try {
+    loaded = await loadDocument(tab);
+  } catch (err) {
+    if (current() && !err?.cancelled) showError('Could not reload the document', err);
+    return;
+  }
+  if (!current()) { destroyDoc(loaded.doc); return; }
   saveScroll(tab);
   const keep = tab.scrollState;
   const oldDoc = tab.pdfDoc;
   for (let i = 0; i < tab.view.ps.length; i++) release(tab, i);
   tab.textCache = new Map();
-  try {
-    await openDocument(tab);
-  } catch (err) {
-    if (!err?.cancelled) showError('Could not reload the document', err);
-    return;
-  }
+  commitDocument(tab, loaded);
   build(tab);
   if (keep && tab.id === state.activeId) {
     tab.scrollState = { ...keep, pageIndex: Math.min(keep.pageIndex, tab.numPages - 1) };
