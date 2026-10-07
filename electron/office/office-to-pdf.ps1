@@ -71,5 +71,12 @@ try {
 } finally {
   if ($doc) { try { if ($Kind -eq 'excel') { $doc.Close($false) } elseif ($Kind -eq 'word') { $doc.Close($false) } else { $doc.Close() } } catch {} }
   if ($appObj -and $keepApp) { try { $appObj.DisplayAlerts = $prevAlerts } catch {} }
-  if ($appObj) { if (-not $keepApp) { try { $appObj.Quit() | Out-Null } catch {} }; [void][Runtime.InteropServices.Marshal]::ReleaseComObject($appObj) }
+  if ($appObj) {
+    $quit = -not $keepApp
+    # PowerPoint is single-instance: a presentation the user opened during the run lands in this PowerPoint.
+    # Quit only when nothing is left open after closing ours.
+    if ($quit -and $Kind -eq 'powerpoint') { try { $quit = ($appObj.Presentations.Count -eq 0) } catch { $quit = $false } }
+    if ($quit) { try { $appObj.Quit() | Out-Null } catch {} }
+    [void][Runtime.InteropServices.Marshal]::ReleaseComObject($appObj)
+  }
 }

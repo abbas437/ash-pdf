@@ -7,33 +7,18 @@ $ErrorActionPreference = 'Stop'
 $word = $null
 $doc = $null
 $m = [Type]::Missing
-# Word's PDF Reflow asks "Word will now convert your PDF to an editable Word document..." even with
-# DisplayAlerts off; hidden Word then waits for ever. DisableConvertPdfWarning = 1 turns that prompt off.
-# The previous value of each key touched is restored (or the value removed) in finally.
-$warningKeys = @{}
-function Disable-PdfWarning([string]$ver) {
-  if (-not $ver -or $warningKeys.ContainsKey($ver)) { return }
-  $key = "HKCU:\Software\Microsoft\Office\$ver\Word\Options"
-  if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
-  $prev = (Get-ItemProperty -Path $key -Name 'DisableConvertPdfWarning' -ErrorAction SilentlyContinue).DisableConvertPdfWarning
-  $warningKeys[$ver] = @{ Key = $key; Prev = $prev }
-  New-ItemProperty -Path $key -Name 'DisableConvertPdfWarning' -Value 1 -PropertyType DWord -Force | Out-Null
-}
+# Word's PDF Reflow prompt ("Word will now convert your PDF...") is turned off by the app (electron/office.js)
+# through HKCU ...\Word\Options DisableConvertPdfWarning before this script runs, and restored after it ends,
+# also when the app kills this script on timeout/cancel (a `finally` here would not run then).
 function Get-OneLine([string]$s) { return ($s -replace '\s*[\r\n]+\s*', ' ').Trim() }
 try {
   try { Unblock-File -LiteralPath $In } catch {} # the input is the app's own temp copy
-  # Set before Word starts (it may read its options at start-up): the registered version, e.g. Word.Application.16 -> 16.0
-  try {
-    $curVer = (Get-ItemProperty -Path 'Registry::HKEY_CLASSES_ROOT\Word.Application\CurVer' -ErrorAction Stop).'(default)'
-    if ($curVer -match '\.(\d+)$') { Disable-PdfWarning "$($Matches[1]).0" }
-  } catch {}
   $before = @(Get-Process -Name 'WINWORD' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
   try { $word = New-Object -ComObject Word.Application } catch { [Console]::Error.WriteLine('Microsoft Word is not installed'); exit 2 }
   $started = @(Get-Process -Name 'WINWORD' -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id })
   if ($started.Count -eq 1) { [Console]::Out.WriteLine("OFFICE_PID $($started[0].Id)"); [Console]::Out.Flush() }
   $word.Visible = $false
   $word.DisplayAlerts = 0 # wdAlertsNone
-  Disable-PdfWarning $word.Version # the running Word's version, when CurVer was missing or differs
   # Documents.Open(FileName, ConfirmConversions, ReadOnly, AddToRecentFiles, PasswordDocument, PasswordTemplate,
   #                Revert, WritePasswordDocument, WritePasswordTemplate, Format, Encoding, Visible)
   try {
@@ -49,10 +34,4 @@ try {
 } finally {
   if ($doc) { try { $doc.Close($false) | Out-Null } catch {} }
   if ($word) { try { $word.Quit() | Out-Null } catch {}; [void][Runtime.InteropServices.Marshal]::ReleaseComObject($word) }
-  foreach ($w in $warningKeys.Values) {
-    try {
-      if ($null -eq $w.Prev) { Remove-ItemProperty -Path $w.Key -Name 'DisableConvertPdfWarning' -ErrorAction SilentlyContinue }
-      else { New-ItemProperty -Path $w.Key -Name 'DisableConvertPdfWarning' -Value $w.Prev -PropertyType DWord -Force | Out-Null }
-    } catch {}
-  }
 }

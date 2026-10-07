@@ -55,7 +55,7 @@ async function withProgress(call) {
   try {
     return await call(jobId);
   } catch (err) {
-    if (cancelled) { toast('Conversion cancelled'); return null; }
+    if (cancelled) { toast(officeMessage(err)); return null; } // "Conversion cancelled", maybe "... PowerPoint may still be running."
     throw err;
   } finally {
     done = true;

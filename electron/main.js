@@ -116,7 +116,7 @@ async function atomicWrite(target, bytes) {
 // grants (all windows are the same trusted page, so per-window grants would add no isolation).
 // Per window: `ready` (the page has collected getLaunchFiles()) and `pending` (files waiting for that).
 const appWindows = new Map(); // BrowserWindow -> { ready: boolean, pending: string[] }
-let mainWindow = null; // the last-focused app window (target for files from the OS; office.js reads it)
+let mainWindow = null; // the last-focused app window (target for files from the OS)
 const launchFiles = []; // files that arrived before the first window exists
 
 function pdfPathsFromArgv(argv, cwd) {
@@ -878,7 +878,7 @@ app.whenReady().then(() => {
   registerIpc();
   registerLibraryIpc(); // signature library
   // ---- office conversions (electron/office.js): Word/Excel/PowerPoint <-> PDF through Microsoft Office
-  registerOfficeIpc({ handle, dialog, getWindow: () => mainWindow, grant, describeFile, isPackaged: app.isPackaged });
+  registerOfficeIpc({ handle, dialog, getWindow: callerWindow, grant, describeFile, isPackaged: app.isPackaged });
   // ---- end office conversions
   loadSessionAndRecent();
   const fromCommandLine = launchFiles.length > 0;
