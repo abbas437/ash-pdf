@@ -13,6 +13,7 @@ import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, resizeBox } from './annotations.js';
+import { createPad, cropToInk } from './signatures.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PRESETS = ['APPROVED', 'APPROVED AS NOTED', 'REVISE AND RESUBMIT', 'REJECTED', 'FOR INFORMATION', 'DRAFT', 'CONFIDENTIAL', 'VOID'];
@@ -278,55 +279,13 @@ function dataUrlBytes(url) {
   for (let k = 0; k < bin.length; k++) b[k] = bin.charCodeAt(k);
   return b;
 }
-/** Transparent PNG of the canvas cropped to the ink bounds plus 4 px; null when empty. */
-function cropToInk(canvas) {
-  const ctx = canvas.getContext('2d');
-  const { width: W, height: H } = canvas;
-  const d = ctx.getImageData(0, 0, W, H).data;
-  let x0 = W, y0 = H, x1 = -1, y1 = -1;
-  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) if (d[(y * W + x) * 4 + 3] > 8) { if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y; }
-  if (x1 < 0) return null;
-  const P = 4;
-  x0 = Math.max(0, x0 - P); y0 = Math.max(0, y0 - P); x1 = Math.min(W - 1, x1 + P); y1 = Math.min(H - 1, y1 + P);
-  const out = document.createElement('canvas');
-  out.width = x1 - x0 + 1; out.height = y1 - y0 + 1;
-  out.getContext('2d').drawImage(canvas, x0, y0, out.width, out.height, 0, 0, out.width, out.height);
-  return out.toDataURL('image/png');
-}
 async function drawSignatureDialog() {
-  const W = 480, H = 160, R = 2;
-  const canvas = h('canvas.sig-pad', { width: String(W * R), height: String(H * R), 'aria-label': 'Signature pad: draw with the mouse, pen or finger. Keyboard users can type their name below instead.' });
-  canvas.style.width = `${W}px`; canvas.style.height = `${H}px`;
-  const ctx = canvas.getContext('2d');
-  let pen = PENS[0][0], stroke = null;
+  const W = 480, H = 160;
+  const { canvas, ctx, clear: clearPad, setPen } = createPad({ W, H, pen: PENS[0][0] });
+  canvas.setAttribute('aria-label', 'Signature pad: draw with the mouse, pen or finger. Keyboard users can type their name below instead.');
   const status = h('p.sig-status', { role: 'status' });
-  const setup = () => { ctx.setTransform(R, 0, 0, R, 0, 0); ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = 3.5; ctx.strokeStyle = pen; ctx.fillStyle = pen; };
-  const clear = () => { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height); setup(); status.textContent = ''; };
-  setup();
-  const at = (e) => { const r = canvas.getBoundingClientRect(); return [((e.clientX - r.left) * W) / r.width, ((e.clientY - r.top) * H) / r.height]; };
-  canvas.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0) return;
-    e.preventDefault();
-    try { canvas.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    stroke = [at(e)];
-    ctx.beginPath(); ctx.arc(stroke[0][0], stroke[0][1], ctx.lineWidth / 2, 0, 2 * Math.PI); ctx.fill();
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (!stroke) return;
-    const p = at(e), n = stroke.length, a = stroke[n - 1];
-    if (Math.hypot(p[0] - a[0], p[1] - a[1]) < 1) return;
-    stroke.push(p);
-    // Smoothing: quadratic curve through the midpoints of successive samples.
-    const prev = n > 1 ? stroke[n - 2] : a;
-    ctx.beginPath();
-    ctx.moveTo((prev[0] + a[0]) / 2, (prev[1] + a[1]) / 2);
-    ctx.quadraticCurveTo(a[0], a[1], (a[0] + p[0]) / 2, (a[1] + p[1]) / 2);
-    ctx.stroke();
-  });
-  const end = () => { stroke = null; };
-  canvas.addEventListener('pointerup', end);
-  canvas.addEventListener('pointercancel', end);
-  const penSel = h('select.sig-pen', { 'aria-label': 'Pen colour', onchange: (e) => { pen = e.target.value; setup(); } }, PENS.map(([v, l]) => h('option', { value: v }, l)));
+  const clear = () => { clearPad(); status.textContent = ''; };
+  const penSel = h('select.sig-pen', { 'aria-label': 'Pen colour', onchange: (e) => setPen(e.target.value) }, PENS.map(([v, l]) => h('option', { value: v }, l)));
   const nameIn = h('input.input.sig-name', { type: 'text', maxlength: '60', 'aria-label': 'Type your name' });
   const typeBtn = h('button.btn.sig-type', { type: 'button', onclick: () => {
     const name = nameIn.value.trim();
