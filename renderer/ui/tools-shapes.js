@@ -1,4 +1,4 @@
-// Markup tools for the annotation layer: Select, Shapes (rectangle / ellipse / line / arrow),
+// Markup tools for the annotation layer: Select, Shapes (rectangle / ellipse / cloud / line / arrow),
 // Draw (freehand ink), Highlight and Whiteout. Objects go through ui/annotations.js.
 // Defaults suit review mark-up of drawings: red #d62828, 1.5 pt, no fill; dotted is one click away.
 import { bus } from '../bus.js';
@@ -11,6 +11,7 @@ import { annotations, selectHandlers } from './annotations.js';
 const SHAPES = [
   ['rect', 'Rectangle', 'R', '<rect x="4" y="6" width="16" height="12" rx="1"/>'],
   ['ellipse', 'Ellipse', 'E', '<ellipse cx="12" cy="12" rx="8.5" ry="6.5"/>'],
+  ['cloud', 'Cloud (revision cloud)', 'O', '<path d="M7 18a3 3 0 0 1-2.6-4.5A3 3 0 0 1 6 8a3 3 0 0 1 5-2 3 3 0 0 1 5 0 3 3 0 0 1 3.6 3.9A3 3 0 0 1 18 18a3 3 0 0 1-5.5 0A3 3 0 0 1 7 18z"/>'],
   ['line', 'Line', 'L', '<path d="M5 19L19 5"/>'],
   ['arrow', 'Arrow', 'A', '<path d="M5 19L19 5"/><path d="M11 5h8v8"/>'],
 ];
@@ -140,7 +141,7 @@ export function initShapeTools() {
     const c = creator(id);
     registerTool({ id, label, icon, shortcut, cursor: 'crosshair', options, onPointerDown: c.onPointerDown, onPointerMove: c.onPointerMove, onPointerUp: c.onPointerUp, onDeactivate: () => c.cancel(activeTab()) });
   };
-  mk('shapes', 'Shapes: rectangle, ellipse, line, arrow', 'shapes', 'R / E / L / A', [shapePicker, 'dash', 'color', 'strokeWidth', fillCtl, opacityCtl]);
+  mk('shapes', 'Shapes: rectangle, ellipse, cloud, line, arrow', 'shapes', 'R / E / O / L / A', [shapePicker, 'dash', 'color', 'strokeWidth', fillCtl, opacityCtl]);
   mk('draw', 'Draw (freehand)', 'draw', 'P', ['dash', 'color', 'strokeWidth', opacityCtl]);
   mk('highlight', 'Highlight area', 'highlight', 'H', [hlColorCtl, hlOpacityCtl]);
   mk('whiteout', 'Whiteout (covers, does not redact)', 'whiteout', 'W', null);

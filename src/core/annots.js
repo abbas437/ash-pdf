@@ -9,13 +9,14 @@ import {
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError } from './internal.js';
 import { flattenObjects, measureText, standardFontName, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
+import { cloudArc } from './cloud.js';
 
 const N = (s) => PDFName.of(s);
 const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
 const num = (v, d) => (Number.isFinite(v) ? v : d);
 
 const SUBTYPE = {
-  rect: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine',
+  rect: 'Square', cloud: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine',
   text: 'FreeText', callout: 'FreeText', stamp: 'Stamp', image: 'Stamp', highlight: 'Highlight',
   note: 'Text', underline: 'Underline', strikeout: 'StrikeOut', squiggly: 'Squiggly', textHighlight: 'Highlight',
 };
@@ -109,6 +110,10 @@ function layout(o) {
     case 'rect':
     case 'ellipse':
       return { bbox: grow(o, hasStroke(o, '#000000') ? sw / 2 : 0) };
+    case 'cloud': {
+      const bbox = grow(o, hasStroke(o, '#000000') ? sw / 2 : 0);
+      return { bbox, inner: grow(o, -cloudArc(o) / 2) }; // inner = the polygon the scallops sit on
+    }
     case 'line':
     case 'arrow': {
       const pts = [[o.x1, o.y1], [o.x2, o.y2]];
@@ -281,9 +286,16 @@ function typeEntries(o, g, lay) {
   switch (o.type) {
     case 'rect':
     case 'ellipse':
+    case 'cloud':
       strokeColor = parseColor(o.stroke, '#000000');
       width = strokeColor ? sw : 0;
       if (parseColor(o.fill, null)) e.IC = colorArr(parseColor(o.fill, null));
+      if (o.type === 'cloud') {
+        e.BE = { S: N('C'), I: 1 }; // cloudy border effect (§12.5.4)
+        const outer = visRectToPdf(g, lay.bbox), inner = visRectToPdf(g, lay.inner);
+        e.RD = [inner[0] - outer[0], outer[3] - inner[3], outer[2] - inner[2], inner[1] - outer[1]].map(r4);
+        extra.arcSize = cloudArc(o);
+      }
       break;
     case 'line':
     case 'arrow':
@@ -835,6 +847,13 @@ function toObject(doc, en, g) {
     case 'Square':
     case 'Circle': {
       o.type = en.subtype === 'Square' ? 'rect' : 'ellipse';
+      const be = dict.lookup(N('BE'));
+      if (o.type === 'rect' && be instanceof PDFDict && nameOf(be.lookup(N('S'))) === 'C') {
+        const b = pdfRectToVis(g, inner());
+        const arc = Number.isFinite(extra.arcSize) ? extra.arcSize : Math.min(b.w, b.h) > 0 ? Math.min(12, Math.min(b.w, b.h) / 2) : 12;
+        Object.assign(o, { type: 'cloud', x: b.x - arc / 2, y: b.y - arc / 2, w: b.w + arc, h: b.h + arc, stroke: C, fill: IC, strokeWidth: width, arcSize: arc });
+        break;
+      }
       const b = pdfRectToVis(g, inner());
       const m = C ? width / 2 : 0;
       Object.assign(o, { x: b.x + m, y: b.y + m, w: b.w - 2 * m, h: b.h - 2 * m, stroke: C, fill: IC, strokeWidth: width });

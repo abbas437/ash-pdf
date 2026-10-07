@@ -173,7 +173,7 @@ space (above). Colours are `'#rrggbb'` (or `'#rgb'`); `null`/`'none'` means no p
 | `callout` | `x,y,w,h,text,tx,ty,stroke('#ff0000'),fill('#ffffff'),strokeWidth(1),fontSize(10),color(=stroke),padding(4),dash` — boxed text plus a leader line from the nearest box edge point to the tip `(tx,ty)` (no line when the tip is inside the box) |
 | `stamp` | `x,y,w,h,text,subtext,color('#c00000'),rotation,borderWidth(3),opacity` — Helvetica-Bold text, auto-sized to fit, centred, inside an outline; optional `subtext` is a smaller second line (dynamic stamps; layout `stampLayout` in `stamps.js`, kept in `/ASHStudio` when saved as an annotation) |
 
-There is deliberately no revision-cloud shape; use dotted `rect`/`ellipse` + `text`/`callout`.
+| `cloud` | `x,y,w,h,stroke('#000000'),strokeWidth(1),fill,opacity,dash,arcSize(12)` — revision cloud: a scalloped border whose bumps (diameter `arcSize`) stay inside the box (`cloudPath` in `cloud.js`); saved as a `/Square` annotation with `/BE <</S /C /I 1>>` and `/RD` = the scallop polygon |
 
 ### `measureText(text, {font, bold, italic, fontSize, maxWidth, lineHeight}?) → {width, height, lines, lineHeight, ascent, descent, firstBaseline}`
 Synchronous; uses the same metrics and wrapping as `flattenObjects`, so the UI can size
