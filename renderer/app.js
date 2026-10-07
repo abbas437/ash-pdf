@@ -28,6 +28,7 @@ import { initOffice } from './ui/office.js';
 import { initExports } from './ui/exports.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
 import { initHandTool } from './ui/tools-hand.js';
+import { initSession } from './ui/session.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -347,10 +348,12 @@ async function setTheme(theme, persist = true) {
 // ---------------------------------------------------------------- menus content
 const zoomTo = (v) => withTab((t) => viewer.setZoom(t, v));
 const M = registerMenuItem;
+const session = initSession({ state, bus, viewer, activate, welcomeCard: welcome.firstChild, openFile: openFileObject });
 M('File', { id: 'open', label: 'Open…', shortcut: 'Ctrl+O', action: () => openDialog() });
 if (api.isElectron) {
   M('File', { id: 'newwindow', label: 'New window', shortcut: 'Ctrl+N', action: () => api.newWindow() });
   M('File', { id: 'openwindow', label: 'Open in new window…', action: () => api.openInNewWindow() });
+  M('File', { id: 'recent', label: 'Recent files…', action: () => session.showRecent().catch((err) => showError('Could not open the file', err)) });
 }
 M('File', { id: 'save', label: 'Save', shortcut: 'Ctrl+S', action: withTab((t) => saveTab(t, false)), enabled: hasDoc });
 M('File', { id: 'saveas', label: 'Save as…', shortcut: 'Ctrl+Shift+S', action: withTab((t) => saveTab(t, true)), enabled: hasDoc });
@@ -471,9 +474,10 @@ initHandTool();
   // Return nothing: contextBridge would copy the resolved tab object graph back to the preload (renderer OOM).
   api.onOpenFile((file) => { openFileObject(file); });
   try {
-    for (const f of (await api.getLaunchFiles()) ?? []) await openFileObject(f);
+    await session.openFiles((await api.getLaunchFiles()) ?? []);
   } catch (err) {
     showError('Could not open the start-up file', err);
   }
+  await session.start();
   document.body.dataset.ready = 'true';
 })();

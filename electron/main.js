@@ -187,6 +187,108 @@ app.on('open-file', (event, p) => {
   if (typeof p === 'string' && extname(p).toLowerCase() === '.pdf') openFromOs([p]);
 });
 
+// --- Session and recent files -----------------------------------------------------------------
+// Main owns both lists. The renderer only reports which of its tabs have a granted path
+// (app:sessionUpdate); a recorded path is granted again only when the user chooses to reopen it.
+const sessionFile = () => join(app.getPath('userData'), 'session.json');
+const recentFile = () => join(app.getPath('userData'), 'recent.json');
+const RECENT_MAX = 15;
+const SESSION_MAX_FILES = 200; // per window
+const STARTUP_MODES = new Set(['ask', 'restore', 'new']);
+const startupMode = () => (STARTUP_MODES.has(settings.renderer?.['startup.mode']) ? settings.renderer['startup.mode'] : 'ask');
+const windowSessions = new Map(); // BrowserWindow -> { files: [{ path, page }], active: path | null }
+const closedForQuit = new Map(); // windows closed by the quit (or the last window): saved with the session
+let quitting = false;
+let savedSession = []; // the previous run's windows, same shape as windowSessions' values
+let sessionOffer = null; // { win, auto }: the first window may reopen savedSession once
+let recent = []; // paths, newest first
+
+function readJson(file) {
+  try { return JSON.parse(readFileSync(file, 'utf8')); } catch { return null; }
+}
+function writeJson(file, value) {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;
+    writeFileSync(tmp, JSON.stringify(value, null, 2));
+    renameSync(tmp, file);
+  } catch (err) {
+    console.error('save failed', file, err);
+  }
+}
+const isPathString = (p) => typeof p === 'string' && p.length > 0 && p.length < 4096 && isAbsolute(p);
+const isFile = (p) => stat(p).then((s) => s.isFile(), () => false);
+
+// One window's state, keeping only files whose path passes `accept` (no duplicates, page 1-based).
+function cleanWindowState(v, accept) {
+  if (!isPlainObject(v) || !Array.isArray(v.files)) return null;
+  const files = [];
+  const seen = new Set();
+  for (const f of v.files.slice(0, SESSION_MAX_FILES)) {
+    const p = isPlainObject(f) ? f.path : null;
+    if (!isPathString(p) || !accept(p) || seen.has(pathKey(p))) continue;
+    seen.add(pathKey(p));
+    files.push({ path: p, page: Number.isInteger(f.page) && f.page >= 1 && f.page <= 1e6 ? f.page : 1 });
+  }
+  const active = isPathString(v.active) && seen.has(pathKey(v.active)) ? v.active : null;
+  return { files, active };
+}
+
+function loadSessionAndRecent() {
+  const s = readJson(sessionFile());
+  savedSession = (Array.isArray(s?.windows) ? s.windows : []).slice(0, 50)
+    .map((w) => cleanWindowState(w, () => true)).filter((w) => w?.files.length);
+  const r = readJson(recentFile());
+  recent = (Array.isArray(r) ? r : []).filter(isPathString).slice(0, RECENT_MAX);
+}
+
+function addRecent(paths) {
+  if (!paths.length) return;
+  for (const p of paths) recent = [p, ...recent.filter((q) => pathKey(q) !== pathKey(p))];
+  recent = recent.slice(0, RECENT_MAX);
+  writeJson(recentFile(), recent);
+}
+
+function saveSession() {
+  let windows = [...closedForQuit.values(), ...windowSessions.values()].filter((w) => w.files.length);
+  if (!windows.length && sessionOffer) windows = savedSession; // never answered and nothing open: keep it
+  writeJson(sessionFile(), { version: 1, windows });
+}
+app.on('before-quit', () => { quitting = true; });
+app.on('will-quit', saveSession);
+
+// Reopens the saved session: the first saved window's files go to the caller (returned), the others
+// open in new windows. Files that no longer exist (deleted, moved, temporary e-mail attachments) are
+// returned in `missing`.
+async function restoreSession() {
+  sessionOffer = null;
+  const missing = [];
+  const windows = [];
+  for (const w of savedSession) {
+    const files = [];
+    for (const f of w.files) {
+      if (await isFile(f.path)) files.push(f);
+      else missing.push(f.path);
+    }
+    if (files.length) windows.push({ ...w, files });
+  }
+  const meta = (w) => new Map(w.files.map((f) => [pathKey(f.path), { page: f.page, active: !!w.active && pathKey(w.active) === pathKey(f.path) }]));
+  const [first, ...rest] = windows;
+  for (const w of rest) {
+    w.files.forEach((f) => grant(f.path));
+    appWindows.get(createAppWindow(w.files.map((f) => f.path))).meta = meta(w);
+  }
+  const files = [];
+  if (first) {
+    const m = meta(first);
+    for (const f of first.files) {
+      grant(f.path);
+      try { files.push({ ...(await describeFile(f.path)), ...m.get(pathKey(f.path)) }); } catch { missing.push(f.path); }
+    }
+  }
+  return { files, missing };
+}
+
 // --- Window ---------------------------------------------------------------------------------
 function visibleBounds(b) {
   if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return null;
@@ -256,6 +358,7 @@ function createAppWindow(files = []) {
       title: 'Unsaved changes', message: 'There are unsaved changes.', detail: 'If you close now, they will be lost.',
     });
     if (choice === 1) event.preventDefault(); // preventDefault = ignore the guard and unload
+    else quitting = false; // a quit stops at the first window that stays open
   });
   win.on('close', () => {
     settings.window = { bounds: win.getNormalBounds(), maximized: win.isMaximized() };
@@ -263,6 +366,10 @@ function createAppWindow(files = []) {
   });
   win.on('closed', () => {
     appWindows.delete(win);
+    // A window closed on its own is forgotten; one closed by the quit, or the last one, is the session.
+    const last = windowSessions.get(win);
+    windowSessions.delete(win);
+    if (last && (quitting || appWindows.size === 0)) closedForQuit.set(win, last);
     if (mainWindow === win) mainWindow = [...appWindows.keys()].at(-1) ?? null;
   });
   win.loadURL(START_URL);
@@ -506,9 +613,45 @@ function registerIpc() {
     const paths = state.pending.splice(0);
     const files = [];
     for (const p of paths) {
-      try { files.push(await describeFile(p)); } catch (err) { console.error('launch file unreadable', p, err.message); }
+      try { files.push({ ...(await describeFile(p)), ...state.meta?.get(pathKey(p)) }); } catch (err) { console.error('launch file unreadable', p, err.message); }
     }
     return files;
+  });
+
+  // ---- session and recent files (see "Session and recent files" above)
+  // The caller's open files; entries whose path is not granted are dropped.
+  handle('app:sessionUpdate', (v) => {
+    const win = callerWindow();
+    const next = cleanWindowState(v, isGranted);
+    if (!next) throw new TypeError('sessionUpdate: { files: [{ path, page }], active } expected');
+    const before = new Set((windowSessions.get(win)?.files ?? []).map((f) => pathKey(f.path)));
+    windowSessions.set(win, next);
+    addRecent(next.files.map((f) => f.path).filter((p) => !before.has(pathKey(p))));
+    return true;
+  });
+  // { mode, offer: { count, auto } | null }: the offer exists for the first window only, until answered.
+  handle('app:sessionInfo', () => {
+    const count = savedSession.reduce((n, w) => n + w.files.length, 0);
+    const offer = sessionOffer?.win === callerWindow() && count ? { count, auto: sessionOffer.auto } : null;
+    return { mode: startupMode(), offer };
+  });
+  handle('app:sessionRestore', () => (sessionOffer?.win === callerWindow() ? restoreSession() : null));
+  handle('app:sessionDismiss', () => {
+    if (sessionOffer?.win === callerWindow()) sessionOffer = null;
+    return true;
+  });
+  handle('app:recentList', () => Promise.all(recent.map(async (p) => ({ path: p, name: basename(p), folder: dirname(p), exists: await isFile(p) }))));
+  // Opens an entry of the recent list: granted again after a check that it still exists; null if missing.
+  handle('app:recentOpen', async (p) => {
+    if (!isPathString(p) || !recent.some((q) => pathKey(q) === pathKey(p))) throw new Error('recentOpen: not in the recent files list');
+    if (!(await isFile(p))) return null;
+    grant(p);
+    return describeFile(p);
+  });
+  handle('app:recentClear', () => {
+    recent = [];
+    writeJson(recentFile(), recent);
+    return true;
   });
 
   handle('app:print', () => new Promise((done) => {
@@ -737,7 +880,12 @@ app.whenReady().then(() => {
   // ---- office conversions (electron/office.js): Word/Excel/PowerPoint <-> PDF through Microsoft Office
   registerOfficeIpc({ handle, dialog, getWindow: () => mainWindow, grant, describeFile, isPackaged: app.isPackaged });
   // ---- end office conversions
-  createAppWindow(launchFiles.splice(0));
+  loadSessionAndRecent();
+  const fromCommandLine = launchFiles.length > 0;
+  const first = createAppWindow(launchFiles.splice(0));
+  // Files given at start-up take priority: the saved session is then only offered, never reopened automatically.
+  const mode = startupMode();
+  if (mode !== 'new' && savedSession.length) sessionOffer = { win: first, auto: mode === 'restore' && !fromCommandLine };
 });
 
 app.on('window-all-closed', () => app.quit());
