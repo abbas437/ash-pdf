@@ -434,6 +434,7 @@ export function initStampTools(a) {
   annotations.registerObjectType('stamp', stampType);
   annotations.registerObjectType('image', imageType);
   const c = stampCreator();
+  bus.on('prefs:changed', ({ prefs }) => { opt.shape = stampShape(prefs['stamps.shape']); bus.emit('stamp:changed', { id: opt.stamp.id }); });
   Promise.all([window.api.settingsGet(LAST_KEY).catch(() => null), window.api.settingsGet(DYN_KEY).catch(() => null), loadCustom(), window.api.settingsGet(SHAPE_KEY).catch(() => null)]).then(([last, dyn, , shape]) => {
     if (dyn && typeof dyn === 'object') Object.assign(opt.dyn, dyn);
     opt.shape = stampShape(shape);
