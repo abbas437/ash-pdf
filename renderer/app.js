@@ -200,8 +200,13 @@ export async function saveTab(tab = activeTab(), asNew = false) {
       if (out instanceof Uint8Array) { bytes = out; if (!hook.transient && tab.bytes === base) tab.bytes = out; }
     }
     let res;
-    if (!asNew && tab.path && !String(tab.path).startsWith('dropped:')) res = await api.writeFile(tab.path, bytes);
-    else res = await api.saveFile({ defaultPath: tab.name, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
+    if (!asNew && tab.path && !String(tab.path).startsWith('dropped:')) {
+      try { res = await api.writeFile(tab.path, bytes); } catch (err) {
+        // A path from a read-only folder grant (Advanced search) is not writable in place: fall back to Save As.
+        if (!/was not opened or saved in this session/.test(err?.message ?? '')) throw err;
+        res = await api.saveFile({ defaultPath: tab.path, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
+      }
+    } else res = await api.saveFile({ defaultPath: tab.name, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
     if (!res) return false;
     tab.path = res.path;
     tab.name = String(res.path).split(/[\\/]/).pop() || tab.name;

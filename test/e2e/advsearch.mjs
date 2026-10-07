@@ -110,6 +110,15 @@ try {
   await page.waitForFunction(() => window.ashStudio.state.tabs.find((x) => x.id === window.ashStudio.state.activeId)?.name === 'beta.pdf');
   eq(await ev('return app.state.tabs.length;'), 2, 'no duplicate tab');
 
+  step = 'a document opened from a hit saves via Save As (folder grants are read-only)';
+  await ev('await app.pageTools.rotate(tab, [2], 90);');
+  check(await ev('return !!tab.dirty;'), 'edit did not mark the tab dirty');
+  const saveDl = page.waitForEvent('download', { timeout: 10_000 });
+  await page.keyboard.press('Control+s');
+  eq((await saveDl).suggestedFilename(), 'beta.pdf', 'save dialog file name');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t && !t.dirty && t.path.startsWith('browser-file:'); }, null, { timeout: 10_000 });
+  eq(await ev('return [tab.name, tab.path.endsWith("/beta.pdf")];'), ['beta.pdf', true], 'tab renamed to the saved path');
+
   step = 'export results to CSV';
   const download = page.waitForEvent('download');
   await page.click('[data-as="export"]');
