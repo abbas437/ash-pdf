@@ -8,7 +8,7 @@ import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
-import { registerTool, setTool } from './toolbar.js';
+import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, getAuthor } from './annotations.js';
 import { textAngle, quadsFromBoxes, quadsBox } from './markup-geom.js';
@@ -238,7 +238,7 @@ export function initMarkupTools(app) {
     const k = e.key.toLowerCase();
     if (k === 'h' && !textSelected()) return;
     const tool = { h: 'text-highlight', u: 'underline', k: 'strikeout', g: 'squiggly', n: 'note' }[k];
-    if (tool) { e.preventDefault(); e.stopImmediatePropagation(); setTool(tool); }
+    if (tool) { e.preventDefault(); e.stopImmediatePropagation(); toggleTool(tool); }
   }, true);
 }
 

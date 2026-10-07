@@ -14,7 +14,7 @@ import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
 import { viewer } from './viewer.js';
 import { dialogOpen } from './dialogs.js';
-import { registerTool, setTool } from './toolbar.js';
+import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { annotations, resizeBox } from './annotations.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -421,6 +421,6 @@ export function initTextTools(app) {
   bus.on('tab:activated', () => editor?.commit());
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || dialogOpen() || isTyping(e.target) || !activeTab()) return;
-    if (e.key.toLowerCase() === 't') { e.preventDefault(); setTool('text'); }
+    if (e.key.toLowerCase() === 't') { e.preventDefault(); toggleTool('text'); }
   });
 }

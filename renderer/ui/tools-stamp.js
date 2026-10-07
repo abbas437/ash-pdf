@@ -10,7 +10,7 @@ import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
-import { registerTool, setTool } from './toolbar.js';
+import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, resizeBox, getAuthor } from './annotations.js';
 import { STANDARD_STAMPS, DYNAMIC_STAMPS, stampShape, stampSubtext, stampLayout } from '../../src/core/stamps.js';
@@ -453,6 +453,6 @@ export function initStampTools(a) {
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || dialogOpen() || isTyping(e.target) || !activeTab()) return;
     const tool = { s: 'stamp', i: 'image' }[e.key.toLowerCase()];
-    if (tool) { e.preventDefault(); setTool(tool); }
+    if (tool) { e.preventDefault(); toggleTool(tool); }
   });
 }

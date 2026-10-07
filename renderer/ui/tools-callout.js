@@ -13,7 +13,7 @@ import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
 import { viewer } from './viewer.js';
 import { dialogOpen } from './dialogs.js';
-import { registerTool, setTool } from './toolbar.js';
+import { registerTool, toggleTool } from './toolbar.js';
 import { annotations, resizeBox, dashArray } from './annotations.js';
 import { openTextEditor } from './tools-text.js';
 import { calloutArrowHead } from '../../src/core/arrowhead.js';
@@ -335,7 +335,7 @@ export function initCalloutTools() {
   document.addEventListener('keydown', (e) => {
     if (e.ctrlKey || e.metaKey || e.altKey || dialogOpen() || isTyping(e.target) || !activeTab()) return;
     const tool = { c: 'callout', m: 'markup' }[e.key.toLowerCase()];
-    if (tool) { e.preventDefault(); setTool(tool); }
+    if (tool) { e.preventDefault(); toggleTool(tool); }
   });
 }
 

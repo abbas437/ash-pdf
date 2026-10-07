@@ -8,12 +8,17 @@ const tools = new Map(); // id -> tool definition
 let toolsEl = null;
 let optionsEl = null;
 
-const PLACEHOLDERS = [
-  ['select', 'Select', 'select'], ['text', 'Text', 'text'], ['highlight', 'Highlight', 'highlight'],
-  ['draw', 'Draw', 'draw'], ['shapes', 'Shapes', 'shapes'], ['image', 'Image', 'image'],
-  ['whiteout', 'Whiteout', 'whiteout'], ['stamp', 'Stamp', 'stamp'], ['callout', 'Callout', 'callout'],
-  ['forms', 'Forms', 'forms'], ['pages', 'Pages', 'pages'],
+let barEl = null;
+let moreWrap = null, morePanel = null, moreBtn = null;
+
+// Tool groups, left to right; ids not listed here go to Edit. Items keep this order in every group.
+const GROUPS = [
+  ['navigate', 'Navigate', ['select', 'hand']],
+  ['edit', 'Edit', ['text', 'image', 'whiteout', 'forms']],
+  ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes']],
+  ['sign', 'Stamp and sign', ['stamp', 'sign']],
 ];
+const groupOf = (id) => GROUPS.find((g) => g[2].includes(id)) ?? GROUPS[1];
 
 /** Icon button: btn('open', 'Open (Ctrl+O)', onClick, {id}) */
 export function btn(iconName, label, onClick, props = {}) {
@@ -28,11 +33,22 @@ export function buildToolbar(container, groups, optionsContainer) {
     if (n) container.append(h('span.tb-sep', { role: 'separator', 'aria-orientation': 'vertical' }));
     container.append(h('div.tb-group', {}, g));
   }
-  toolsEl = h('div.tb-group.tb-tools', { role: 'group', 'aria-label': 'Editing tools' });
-  for (const [id, label, ic] of PLACEHOLDERS) {
-    toolsEl.append(h('button.tb-btn.tool-btn', { type: 'button', disabled: true, dataset: { tool: id }, title: `${label}: added in next build`, 'aria-label': `${label} (added in next build)`, 'aria-pressed': 'false', html: icon(ic) }));
+  toolsEl = h('div.tb-tools', { role: 'group', 'aria-label': 'Tools' });
+  for (const [n, [key, label]] of GROUPS.entries()) {
+    if (n) toolsEl.append(h('span.tb-sep', { role: 'separator', 'aria-orientation': 'vertical' }));
+    toolsEl.append(h('div.tb-group.tb-tg', { role: 'group', 'aria-label': label, dataset: { group: key } }));
   }
+  moreBtn = h('button.tb-btn.tb-more-btn', { type: 'button', title: 'More', 'aria-label': 'More tools', 'aria-haspopup': 'true', 'aria-expanded': 'false', html: '<span class="tb-more-glyph" aria-hidden="true">\u00bb</span>' });
+  morePanel = h('div.tb-more-panel', { role: 'group', 'aria-label': 'More tools', hidden: true });
+  moreWrap = h('div.tb-more', { hidden: true }, moreBtn, morePanel);
+  moreBtn.onclick = () => showMore(morePanel.hidden);
+  morePanel.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b?.classList.contains('tb-btn') && !b.hasAttribute('aria-haspopup')) showMore(false); });
+  document.addEventListener('pointerdown', (e) => { if (!morePanel.hidden && !moreWrap.contains(e.target)) showMore(false); }, true);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !morePanel.hidden) { showMore(false); moreBtn.focus(); } });
+  toolsEl.append(moreWrap);
   container.append(h('span.tb-sep', { role: 'separator' }), toolsEl);
+  barEl = container;
+  watchOverflow(container);
   optionsEl = optionsContainer;
   optionsEl.setAttribute('role', 'toolbar');
   optionsEl.setAttribute('aria-label', 'Tool options');
@@ -58,10 +74,10 @@ export function buildToolbar(container, groups, optionsContainer) {
 export function registerTool(def) {
   if (!def?.id) throw new TypeError('registerTool: id required');
   tools.set(def.id, def);
-  let b = toolsEl?.querySelector(`[data-tool="${def.id}"]`);
+  let b = barEl?.querySelector(`[data-tool="${def.id}"]`);
   if (!b && toolsEl) {
-    b = h('button.tb-btn.tool-btn', { type: 'button', dataset: { tool: def.id } });
-    toolsEl.append(b);
+    b = h('button.tb-btn.tool-btn', { type: 'button', dataset: { tool: def.id }, 'aria-pressed': String(state.tool === def.id) });
+    addToolbarItem(def.id, b);
   }
   if (b) {
     b.disabled = false;
@@ -69,13 +85,18 @@ export function registerTool(def) {
     b.title = tip;
     b.setAttribute('aria-label', tip);
     if (def.icon) b.innerHTML = def.icon.trim().startsWith('<') ? def.icon : icon(def.icon);
-    b.onclick = () => setTool(def.id);
+    b.onclick = () => toggleTool(def.id);
   }
   return def;
 }
 
 export function getTool(id = state.tool) { return tools.get(id) ?? null; }
 export function listTools() { return [...tools.values()]; }
+
+/** Toolbar click / shortcut: a second activation of the active tool returns to Select (the default). */
+export function toggleTool(id) {
+  setTool(id !== 'select' && id === state.tool ? 'select' : id);
+}
 
 export function setTool(id) {
   const prev = tools.get(state.tool);
@@ -84,8 +105,9 @@ export function setTool(id) {
   prev?.onDeactivate?.();
   state.tool = id;
   next.onActivate?.();
-  for (const b of toolsEl?.querySelectorAll('[data-tool]') ?? []) b.setAttribute('aria-pressed', String(b.dataset.tool === id));
+  for (const b of barEl?.querySelectorAll('[data-tool]') ?? []) b.setAttribute('aria-pressed', String(b.dataset.tool === id));
   renderOptions();
+  syncMorePressed();
   bus.emit('tool:changed', { tool: id, previous: prev?.id ?? null });
 }
 
@@ -117,4 +139,99 @@ function renderOptions() {
     else if (STD[o]) optionsEl.append(STD[o]());
   }
   optionsEl.hidden = !optionsEl.childElementCount;
+}
+
+// ---------------------------------------------------------------- groups, dropdowns, overflow
+
+/** Put a toolbar item (button or wrapper) for `key` into its tool group, in the group's order. */
+export function addToolbarItem(key, el) {
+  const [gkey, , order] = groupOf(key);
+  const group = toolsEl.querySelector(`[data-group="${gkey}"]`);
+  el.dataset.tbItem = key;
+  const rank = (k) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
+  const after = [...group.children].find((c) => rank(c.dataset.tbItem) > rank(key));
+  group.insertBefore(el, after ?? null);
+  scheduleLayout();
+  return el;
+}
+
+/**
+ * Toolbar button with a dropdown menu. items() is called on each open and returns
+ * [{id, label, action, enabled?: () => bool} | {separator: true}]. Returns {wrap, button, close}.
+ */
+export function dropdownButton({ id, icon: ic, label, title = label, items }) {
+  const button = h('button.tb-btn.tb-dd-btn', { type: 'button', id, title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': 'false', html: icon(ic) });
+  const menu = h('div.menu.tb-dd-menu', { role: 'menu', 'aria-label': label, hidden: true });
+  const wrap = h('div.tb-dd', {}, button, menu);
+  const close = (focus) => { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); if (focus) button.focus(); };
+  const open = (focus) => {
+    menu.replaceChildren(...items().map((it) => (it.separator ? h('div.menu-sep', { role: 'separator' })
+      : h('button.menu-item', { type: 'button', role: 'menuitem', dataset: { id: it.id }, disabled: it.enabled ? !it.enabled() : false, onclick: () => { close(); showMore(false); it.action(); } },
+        h('span', {}, it.label), h('kbd', {}, it.shortcut ?? '')))));
+    menu.hidden = false;
+    button.setAttribute('aria-expanded', 'true');
+    if (focus) menu.querySelector('button:not([disabled])')?.focus();
+  };
+  button.onclick = () => (menu.hidden ? open() : close());
+  button.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); open(true); } });
+  menu.addEventListener('keydown', (e) => {
+    const list = [...menu.querySelectorAll('button:not([disabled])')];
+    const k = list.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); list[(k + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length]?.focus(); }
+  });
+  document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !wrap.contains(e.target)) close(); }, true);
+  return { wrap, button, close };
+}
+
+function showMore(on) {
+  if (!morePanel) return;
+  morePanel.hidden = !on;
+  moreBtn.setAttribute('aria-expanded', String(on));
+}
+function syncMorePressed() {
+  moreBtn?.setAttribute('aria-pressed', String(!!morePanel?.querySelector('[aria-pressed="true"]')));
+}
+
+// When the items do not fit on one row, trailing items move (in order) into the More panel;
+// each leaves a comment marker so it goes back to the same place when there is room again.
+let layoutQueued = false;
+function scheduleLayout() {
+  if (layoutQueued || !barEl) return;
+  layoutQueued = true;
+  requestAnimationFrame(() => { layoutQueued = false; layout(); });
+}
+const items = () => [...barEl.querySelectorAll('.tb-group > *')].filter((el) => !el.classList.contains('tb-group') && !el.classList.contains('tb-sep') && !moreWrap.contains(el));
+function fits() {
+  const r = barEl.getBoundingClientRect();
+  const right = r.right - parseFloat(getComputedStyle(barEl).paddingRight || 0) + 0.5;
+  return [...barEl.children].every((c) => c.getBoundingClientRect().right <= right);
+}
+let observer = null;
+function layout() {
+  observer?.disconnect();
+  for (const el of [...morePanel.children]) { const m = el.__tbMarker; if (m) { m.replaceWith(el); delete el.__tbMarker; } }
+  moreWrap.hidden = true;
+  if (!fits()) {
+    moreWrap.hidden = false;
+    const list = items();
+    while (list.length && !fits()) {
+      const el = list.pop();
+      const marker = document.createComment('tb');
+      el.replaceWith(marker);
+      el.__tbMarker = marker;
+      morePanel.prepend(el);
+    }
+  }
+  if (moreWrap.hidden) showMore(false);
+  syncMorePressed();
+  observer?.observe(barEl, OBS);
+  observer?.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+}
+const OBS = { subtree: true, childList: true, attributes: true, attributeFilter: ['data-label', 'hidden', 'class'] };
+function watchOverflow(container) {
+  new ResizeObserver(scheduleLayout).observe(container);
+  observer = new MutationObserver(scheduleLayout);
+  observer.observe(container, OBS);
+  observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 }

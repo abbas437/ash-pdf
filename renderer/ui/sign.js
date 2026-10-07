@@ -11,7 +11,7 @@
 import { activeTab } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, toast } from './dialogs.js';
-import { getTool, setTool } from './toolbar.js';
+import { getTool, setTool, addToolbarItem } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, AUTHOR_KEY } from './annotations.js';
 import { armImage } from './tools-stamp.js';
@@ -229,8 +229,7 @@ export function initSign(app) {
   });
   menuEl = h('div.sign-menu', { role: 'menu', 'aria-label': 'Sign', hidden: true });
   menuEl.addEventListener('keydown', onMenuKey);
-  const tools = document.querySelector('.toolbar .tb-tools');
-  tools?.after(h('span.tb-sep', { role: 'separator' }), h('div.tb-group.sign-wrap', { role: 'group', 'aria-label': 'Sign' }, btnEl, menuEl));
+  addToolbarItem('sign', h('div.sign-wrap', {}, btnEl, menuEl));
   app.registerMenuItem('Tools', { id: 'sign', label: 'Sign…', action: () => openMenu(true) });
   const sel = getTool('select');
   if (sel) { sel.options = [...[sel.options ?? []].flat(), selectionOptions]; setTool('select'); }

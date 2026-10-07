@@ -7,7 +7,7 @@ import { state, activeTab } from '../state.js';
 import { isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { addIcon } from './icons.js';
-import { registerTool, setTool } from './toolbar.js';
+import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 
 addIcon('hand', '<path d="M8 12.5V6.2a1.4 1.4 0 0 1 2.8 0V11"/><path d="M10.8 10.5V4.6a1.4 1.4 0 0 1 2.8 0v5.9"/><path d="M13.6 10.5V5.8a1.4 1.4 0 0 1 2.8 0v5.7"/><path d="M16.4 11.5V8.4a1.4 1.4 0 0 1 2.8 0v5.3A6.8 6.8 0 0 1 12.4 20.5h-.6a6.4 6.4 0 0 1-4.9-2.3L3.9 14.6a1.4 1.4 0 0 1 2.1-1.9L8 14.6"/>');
@@ -71,7 +71,7 @@ export function initHandTool() {
       if (spaceFrom == null && !e.repeat && state.tool !== 'hand') { spaceFrom = state.tool; setTool('hand'); }
       return;
     }
-    if (e.key.toLowerCase() === 'q' && !e.repeat) { e.preventDefault(); spaceFrom = null; setTool('hand'); }
+    if (e.key.toLowerCase() === 'q' && !e.repeat) { e.preventDefault(); spaceFrom = null; toggleTool('hand'); }
   });
   document.addEventListener('keyup', (e) => {
     if (e.key !== ' ' || spaceFrom == null) return;

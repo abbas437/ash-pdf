@@ -45,6 +45,8 @@ export function initialZoom(defaultZoom, last) {
 const SHORT = new Map([
   ['previous page', 'Previous'], ['next page', 'Next'], ['rotate view left', 'Rotate L'], ['rotate view right', 'Rotate R'],
   ['show / hide sidebar', 'Sidebar'], ['dark theme', 'Theme'], ['light theme', 'Theme'],
+  ['highlight area', 'Area'], ['highlight text', 'Highlight'], ['underline text', 'Underline'], ['strikeout text', 'Strike'],
+  ['squiggly underline', 'Squiggly'], ['sticky note', 'Note'], ['callout comment', 'Callout'], ['markup + comment', 'Markup'],
 ]);
 
 /** Short label for a toolbar button from its tooltip: 'Save as (Ctrl+Shift+S)' -> 'Save as'. */
