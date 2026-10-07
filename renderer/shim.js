@@ -6,7 +6,7 @@
 //   - files come from <input type=file> and are kept in memory under pseudo paths
 //     ("browser-file:<n>/<name>") so readFile()/writeFile() behave like in Electron;
 //   - saving triggers a Blob download;
-//   - settings live in localStorage.
+//   - settings live in localStorage; the signature library lives in memory.
 // Every method returns a Promise, as the IPC-backed versions do; onOpenFile returns an
 // unsubscribe function.
 if (!window.api) {
@@ -81,6 +81,13 @@ if (!window.api) {
     },
     cacheKeys: () => [...cache.keys()],
   });
+  const library = new Map(); // `${kind}/${id}` -> {meta, bytes}
+  const libKey = (kind, id) => {
+    if (kind !== 'signature') throw new TypeError('invalid library kind');
+    if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new TypeError('invalid library id');
+    return `${kind}/${id}`;
+  };
+  const cloneJson = (v) => JSON.parse(JSON.stringify(v));
 
   window.api = Object.freeze({
     isElectron: false,
@@ -144,5 +151,28 @@ if (!window.api) {
       cache.set(String(key), value);
       return true;
     },
+    async libraryList(kind) {
+      libKey(kind, 'x');
+      return [...library].filter(([k]) => k.startsWith(`${kind}/`)).map(([k, v]) => ({ id: k.slice(kind.length + 1), meta: cloneJson(v.meta) }));
+    },
+    async libraryGet(kind, id) {
+      const v = library.get(libKey(kind, id));
+      return v ? { id, meta: cloneJson(v.meta), bytes: v.bytes.slice() } : null;
+    },
+    async libraryPut(kind, id, item) {
+      const k = libKey(kind, id);
+      if (!item || typeof item.meta !== 'object') throw new TypeError('library:put: {meta, bytes} required');
+      if (JSON.stringify(item.meta).length > 64 * 1024) throw new RangeError('library meta too large (64 KiB max)');
+      let bytes = library.get(k)?.bytes;
+      if (item.bytes !== undefined) {
+        if (!(item.bytes instanceof Uint8Array)) throw new TypeError('bytes must be a Uint8Array');
+        if (item.bytes.length > 5 * 1024 * 1024) throw new RangeError('library item too large (5 MB max)');
+        bytes = item.bytes.slice();
+      }
+      if (!bytes) throw new Error('library:put: no such item');
+      library.set(k, { meta: cloneJson(item.meta), bytes });
+      return true;
+    },
+    async libraryDelete(kind, id) { library.delete(libKey(kind, id)); return true; },
   });
 }

@@ -33,4 +33,9 @@ contextBridge.exposeInMainWorld('api', {
   listPdfs: (folder, opts) => ipcRenderer.invoke('search:listPdfs', folder, opts ?? {}),
   cacheGet: (key) => ipcRenderer.invoke('search:cacheGet', key),
   cacheSet: (key, value) => ipcRenderer.invoke('search:cacheSet', key, value),
+  // signature library (kind: 'signature')
+  libraryList: (kind) => ipcRenderer.invoke('library:list', kind),
+  libraryGet: (kind, id) => ipcRenderer.invoke('library:get', kind, id),
+  libraryPut: (kind, id, item) => ipcRenderer.invoke('library:put', kind, id, item),
+  libraryDelete: (kind, id) => ipcRenderer.invoke('library:delete', kind, id),
 });

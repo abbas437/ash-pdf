@@ -13,6 +13,7 @@
 //   renderer/vendor/pdf-lib.esm.min.js     pdf-lib dist/pdf-lib.esm.min.js (self-contained ES module) ("pdf-lib")
 //   renderer/vendor/fontkit.esm.js         generated ES wrapper around @pdf-lib/fontkit's UMD build ("@pdf-lib/fontkit")
 //   renderer/vendor/minisearch.js          minisearch dist/es/index.js (self-contained ES module) ("minisearch")
+//   renderer/vendor/fonts/<font>-latin-400-normal.woff2  @fontsource/* handwriting fonts (SIL OFL 1.1) for typed signatures
 //   renderer/vendor/licenses/              licence files of everything above
 //
 // Why fontkit is wrapped: @pdf-lib/fontkit's ES build (dist/fontkit.es.min.js) does
@@ -87,6 +88,13 @@ if (fkLicence) cpSync(fkLicence, join(out, 'licenses', '@pdf-lib-fontkit-LICENSE
 // --- MiniSearch (MIT) — dist/es/index.js is a self-contained ES module (advanced search index) ---
 copy('minisearch/dist/es/index.js', 'minisearch.js');
 copy('minisearch/LICENSE.txt', 'licenses/minisearch-LICENSE.txt');
+// --- Handwriting fonts for typed signatures (SIL OFL 1.1), latin subset, regular weight ---
+// Font names and families are listed in renderer/ui/signatures.js (SIG_FONTS) and styles.css.
+const SIGNATURE_FONTS = ['dancing-script', 'great-vibes', 'caveat', 'sacramento'];
+for (const f of SIGNATURE_FONTS) {
+  copy(`@fontsource/${f}/files/${f}-latin-400-normal.woff2`, `fonts/${f}-latin-400-normal.woff2`);
+  copy(`@fontsource/${f}/LICENSE`, `licenses/@fontsource-${f}-LICENSE.txt`);
+}
 
 const count = (d) => readdirSync(d, { recursive: true }).length;
 for (const line of copied) console.log(`vendor: ${line}`);

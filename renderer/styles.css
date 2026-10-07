@@ -312,3 +312,8 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .as-file-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .as-count { padding: 0 6px; border-radius: 8px; background: var(--hover); color: var(--muted); font-size: 11px; font-weight: 400; }
 .as-row:has(.as-num) { flex-wrap: nowrap; }
+/* Handwriting fonts for typed signatures (SIL OFL 1.1, vendored by scripts/vendor.js). */
+@font-face { font-family: "Sig Dancing Script"; src: url("./vendor/fonts/dancing-script-latin-400-normal.woff2") format("woff2"); font-display: block; }
+@font-face { font-family: "Sig Great Vibes"; src: url("./vendor/fonts/great-vibes-latin-400-normal.woff2") format("woff2"); font-display: block; }
+@font-face { font-family: "Sig Caveat"; src: url("./vendor/fonts/caveat-latin-400-normal.woff2") format("woff2"); font-display: block; }
+@font-face { font-family: "Sig Sacramento"; src: url("./vendor/fonts/sacramento-latin-400-normal.woff2") format("woff2"); font-display: block; }
