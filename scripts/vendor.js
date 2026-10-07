@@ -14,6 +14,8 @@
 //   renderer/vendor/fontkit.esm.js         generated ES wrapper around @pdf-lib/fontkit's UMD build ("@pdf-lib/fontkit")
 //   renderer/vendor/minisearch.js          minisearch dist/es/index.js (self-contained ES module) ("minisearch")
 //   renderer/vendor/fonts/<font>-latin-400-normal.woff2  @fontsource/* handwriting fonts (SIL OFL 1.1) for typed signatures
+//   renderer/vendor/pdfium/index.browser.js @embedpdf/pdfium dist/index.browser.js (PDFium wasm glue, MIT) -> renderer/pdfium/worker.js
+//   renderer/vendor/pdfium/pdfium.wasm      @embedpdf/pdfium dist/pdfium.wasm (PDFium, BSD-3-Clause/Apache-2.0) -> renderer/pdfium/client.js
 //   renderer/vendor/licenses/              licence files of everything above
 //
 // Why fontkit is wrapped: @pdf-lib/fontkit's ES build (dist/fontkit.es.min.js) does
@@ -96,6 +98,14 @@ for (const f of SIGNATURE_FONTS) {
   copy(`@fontsource/${f}/LICENSE`, `licenses/@fontsource-${f}-LICENSE.txt`);
 }
 
+// --- @embedpdf/pdfium (MIT wrapper; PDFium BSD-3-Clause + Apache-2.0) — edit engine, loaded lazily ---
+// Only the browser build and the wasm: the build has no imports, and its DEFAULT_PDFIUM_WASM_URL (a CDN)
+// is never used — renderer/pdfium/client.js compiles the vendored wasm itself. Source maps are not copied.
+copy('@embedpdf/pdfium/dist/index.browser.js', 'pdfium/index.browser.js');
+copy('@embedpdf/pdfium/dist/pdfium.wasm', 'pdfium/pdfium.wasm');
+copy('@embedpdf/pdfium/LICENSE', 'licenses/@embedpdf-pdfium-LICENSE.txt');
+copy('@embedpdf/pdfium/LICENSE.pdfium', 'licenses/pdfium-LICENSE.txt');
+
 const count = (d) => readdirSync(d, { recursive: true }).length;
 for (const line of copied) console.log(`vendor: ${line}`);
-console.log(`vendor: done — pdfjs-dist@${version('pdfjs-dist')}, pdf-lib@${version('pdf-lib')}, @pdf-lib/fontkit@${version('@pdf-lib/fontkit')}; ${count(out)} entries in renderer/vendor`);
+console.log(`vendor: done — pdfjs-dist@${version('pdfjs-dist')}, pdf-lib@${version('pdf-lib')}, @pdf-lib/fontkit@${version('@pdf-lib/fontkit')}, @embedpdf/pdfium@${version('@embedpdf/pdfium')}; ${count(out)} entries in renderer/vendor`);

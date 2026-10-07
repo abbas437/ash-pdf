@@ -23,6 +23,7 @@ import { initPageTools, idle as pageOpsIdle } from './ui/pagetools.js';
 import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
 import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextras.js';
+import { pdfium } from './pdfium/client.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -433,7 +434,7 @@ window.addEventListener('beforeunload', (e) => { if (state.tabs.some((t) => t.di
 bus.on('tab:dirtyChanged', refresh);
 
 // ---------------------------------------------------------------- start-up
-export const app = { state, bus, viewer, registerSidebarTab, showSidebarTab, thumbs, search, openBytes, openDialog, activate, closeTab, saveTab, printTab, showProperties, registerMenuItem, registerTool, setTool, showDialog, toast, markDirty, setTheme };
+export const app = { state, bus, viewer, registerSidebarTab, showSidebarTab, thumbs, search, openBytes, openDialog, activate, closeTab, saveTab, printTab, showProperties, registerMenuItem, registerTool, setTool, showDialog, toast, markDirty, setTheme, pdfium };
 window.ashStudio = app;
 initAnnotations();
 initShapeTools();

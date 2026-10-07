@@ -3,7 +3,8 @@
 // "dependencies" tree, followed recursively through node_modules) and exits 1 if any of
 // them is not under an allow-listed licence (GPL/AGPL/LGPL/MPL/unknown stop the build).
 // It also lists the BUNDLED components below, which ship inside those packages' files (pdf.js
-// data and wasm decoders copied by scripts/vendor.js, libraries inlined in fontkit's build),
+// data and wasm decoders copied by scripts/vendor.js, libraries inlined in fontkit's build, PDFium and
+// the libraries compiled into @embedpdf/pdfium's wasm),
 // with licence texts read from disk; a missing licence file fails the script.
 //
 // Usage: node scripts/licenses.js [--root <project dir>] [--out <file>]
@@ -14,7 +15,10 @@ import { fileURLToPath } from 'node:url';
 
 const ALLOWED = new Set(['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'ISC', '0BSD', 'OFL-1.1', 'Unlicense', 'CC0-1.0', 'BlueOak-1.0.0',
   // Zlib: permissive (OSI-approved). Added for pako ("MIT AND Zlib"), which pdf-lib bundles.
-  'Zlib']);
+  'Zlib',
+  // Permissive notice-only licences of libraries compiled into PDFium's wasm (@embedpdf/pdfium):
+  // libpng-2.0 (PNG Reference Library v2), FTL (FreeType Project License), IJG (libjpeg).
+  'libpng-2.0', 'FTL', 'IJG']);
 
 const args = process.argv.slice(2);
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -76,6 +80,7 @@ while (queue.length) {
 // names, code and comments); fontkit 1.1.1 lists them as devDependencies, so their licence files
 // were taken from the npm releases matching those ranges and kept in scripts/third-party-licenses/.
 const PJ = 'node_modules/pdfjs-dist', TPL = 'scripts/third-party-licenses';
+const PDFIUM = 'compiled into @embedpdf/pdfium dist/pdfium.wasm -> renderer/vendor/pdfium/pdfium.wasm';
 const FK = 'inlined in @pdf-lib/fontkit dist/fontkit.umd.min.js (renderer/vendor/fontkit.esm.js)';
 const BUNDLED = [
   { name: 'Adobe CMaps', licence: 'BSD-3-Clause', where: 'pdfjs-dist cmaps/ -> renderer/vendor/pdfjs/cmaps/', files: [`${PJ}/cmaps/LICENSE`] },
@@ -105,6 +110,33 @@ const BUNDLED = [
     name, version, licence, where: FK, note,
     files: file === null ? [] : [`${TPL}/${name.replace('@', '').replace('/', '-')}-${version}-LICENSE.txt`],
   })),
+  // PDFium edit engine: @embedpdf/pdfium dist/pdfium.wasm (vendored by scripts/vendor.js). The npm package's
+  // own LICENSE (MIT) covers only the JS wrapper; PDFium's notice ships beside it as LICENSE.pdfium, and the
+  // third-party libraries below are statically compiled into the wasm. They were identified from strings
+  // in the wasm (library error messages, FreeType module names, version strings); the build has no symbol
+  // names. Upstream licence texts were fetched in 2026-10 and kept in scripts/third-party-licenses/.
+  // A version is given only where the wasm contains it; otherwise "version unconfirmed".
+  { name: 'PDFium', version: 'version unconfirmed', licence: 'BSD-3-Clause AND Apache-2.0', where: PDFIUM,
+    note: 'Includes the Foxit/PDFium standard Type 1 fonts and Chrome Sans/Serif MM fonts compiled into the wasm.',
+    files: ['node_modules/@embedpdf/pdfium/LICENSE.pdfium'] },
+  { name: 'libpng', version: '1.6.43', licence: 'libpng-2.0', where: PDFIUM,
+    note: 'Version from the string "1.6.43" in the wasm (libpng\'s version check). Text from libpng v1.6.43 (github.com/pnggroup/libpng, tag v1.6.43, LICENSE).',
+    files: [`${TPL}/libpng-1.6.43-LICENSE.txt`] },
+  { name: 'zlib', version: 'version unconfirmed', licence: 'Zlib', where: PDFIUM,
+    note: 'The wasm contains the string "1.3.1", consistent with zlib 1.3.1 (Chromium\'s zlib), but not tied to zlib by a symbol. Text from github.com/madler/zlib tag v1.3.1, LICENSE.',
+    files: [`${TPL}/zlib-LICENSE.txt`] },
+  { name: 'FreeType', version: 'version unconfirmed', licence: 'FTL OR GPL-2.0-only', where: PDFIUM,
+    note: 'Used under the FreeType Project License (FTL), one of its two alternatives. Portions of this software are copyright (c) The FreeType Project (www.freetype.org). All rights reserved. Texts from github.com/freetype/freetype (master): LICENSE.TXT, docs/FTL.TXT.',
+    files: [`${TPL}/freetype-LICENSE.txt`, `${TPL}/freetype-FTL.txt`] },
+  { name: 'OpenJPEG (in PDFium)', version: 'version unconfirmed', licence: 'BSD-2-Clause', where: PDFIUM,
+    note: 'Text from github.com/uclouvain/openjpeg (master), LICENSE.',
+    files: [`${TPL}/openjpeg-LICENSE.txt`] },
+  { name: 'libjpeg-turbo (JPEG decoder)', version: 'version unconfirmed', licence: 'IJG AND BSD-3-Clause AND Zlib', where: PDFIUM,
+    note: 'PDFium decodes DCT (JPEG) images with libjpeg-turbo. This software is based in part on the work of the Independent JPEG Group. The wasm has no libjpeg message strings, so the library is identified from PDFium\'s DCT codec (built on libjpeg-turbo), not by a string. Texts from github.com/libjpeg-turbo/libjpeg-turbo (main): LICENSE.md, README.ijg.',
+    files: [`${TPL}/libjpeg-turbo-LICENSE.md`, `${TPL}/libjpeg-turbo-README.ijg`] },
+  { name: 'Little CMS (lcms2)', version: 'version unconfirmed', licence: 'MIT', where: PDFIUM,
+    note: 'Colour management; identified by its error messages in the wasm. Text from github.com/mm2/Little-CMS (master), LICENSE.',
+    files: [`${TPL}/lcms2-LICENSE.txt`] },
 ].map((b) => ({ ...b, allowed: isAllowed(b.licence) }));
 for (const b of BUNDLED) {
   b.texts = b.files.map((f) => ({ file: f, text: existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8').trim() : null }));
@@ -128,7 +160,9 @@ const lines = [
   ...records.map((r) => `| ${r.name} | ${r.version} | ${r.licence} |`),
   '',
   '**Bundled components.** These ship inside the packages above (pdf.js data files and WebAssembly',
-  'decoders, and libraries compiled into the fontkit build) and are listed with their own licences.',
+  'decoders, libraries compiled into the fontkit build, and PDFium with the libraries compiled into',
+  '@embedpdf/pdfium\'s WebAssembly build) and are listed with their own licences. "version unconfirmed" means the',
+  'version could not be read from the shipped binary.',
   '',
   '| Component | Version | Licence | Shipped as |',
   '| --- | --- | --- | --- |',

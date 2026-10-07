@@ -182,6 +182,18 @@ try {
   r = await call('settingsGet', 'plain');
   expect('settingsGet plain', r, r === 'ok:1');
 
+  step = 'pdfium: app:// serves the wasm as application/wasm';
+  const wasm = await win.evaluate(async () => {
+    const res = await fetch(new URL('vendor/pdfium/pdfium.wasm', location.href));
+    const head = new Uint8Array(await res.arrayBuffer(), 0, 4);
+    return { status: res.status, type: res.headers.get('content-type'), magic: Array.from(head).join(',') };
+  });
+  expect('pdfium.wasm response', JSON.stringify(wasm), wasm.status === 200 && wasm.type === 'application/wasm' && wasm.magic === '0,97,115,109');
+  step = 'pdfium: selfTest in the worker under the app CSP';
+  const st = await win.evaluate(() => window.ashStudio.pdfium.selfTest().catch((e) => ({ error: `${e.name}: ${e.message}` })));
+  expect('pdfium selfTest', JSON.stringify({ ...st, objects: undefined }),
+    !st.error && st.pageCount === 2 && st.text === 'PDFium self-test 4711' && st.originalIsPrefix && st.outLength > st.inLength);
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');
