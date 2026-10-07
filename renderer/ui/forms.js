@@ -7,7 +7,8 @@
 // rotation exactly like svg.overlay-svg (styles.css).
 //
 // tab.forms = {fields, widgets: Map(name -> [{pageIndex, rect, buttonValue}]), values, ...}
-// `values` holds only the values the user changed since the last load/save.
+// `values` holds the values the user changed since the document was opened (kept across
+// reloads by field name); tab.bytes never carries them, they are written on save only.
 import { bus } from '../bus.js';
 import { state, activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
@@ -259,13 +260,14 @@ async function flattenDialog(tab = activeTab()) {
   }
 }
 
-async function saveHook(tab) {
+// Transient, like the annotations hook: only the bytes being written get the values. tab.bytes
+// stays the unfilled document and `values` is kept until the tab is closed, so a page-operation
+// undo/redo (which swaps tab.bytes for a snapshot taken before this save) cannot drop them.
+async function saveHook(tab, bytes = tab.bytes) {
   const forms = tab.forms;
   if (!forms || !Object.keys(forms.values).length) return undefined;
   const { fillFields } = await loadCore();
-  const out = await fillFields(tab.bytes, forms.values, { flatten: false, updateAppearances: true });
-  // The saved bytes now carry the values: they become the new baseline.
-  for (const f of forms.fields) if (Object.hasOwn(forms.values, f.name)) f.value = forms.values[f.name];
-  forms.values = {};
-  return out;
+  return fillFields(bytes, forms.values, { flatten: false, updateAppearances: true });
 }
+saveHook.id = 'forms';
+saveHook.transient = true;

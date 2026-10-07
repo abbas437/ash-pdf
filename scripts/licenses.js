@@ -2,6 +2,9 @@
 // Writes THIRD-PARTY-NOTICES.md for every production dependency (the package.json
 // "dependencies" tree, followed recursively through node_modules) and exits 1 if any of
 // them is not under an allow-listed licence (GPL/AGPL/LGPL/MPL/unknown stop the build).
+// It also lists the BUNDLED components below, which ship inside those packages' files (pdf.js
+// data and wasm decoders copied by scripts/vendor.js, libraries inlined in fontkit's build),
+// with licence texts read from disk; a missing licence file fails the script.
 //
 // Usage: node scripts/licenses.js [--root <project dir>] [--out <file>]
 //   --root defaults to the repository; --out defaults to <root>/THIRD-PARTY-NOTICES.md.
@@ -66,6 +69,48 @@ while (queue.length) {
   for (const dep of Object.keys(pkg.dependencies ?? {})) queue.push({ name: dep, from: dir, via: pkg.name });
 }
 
+// Components shipped in the build that are not separate npm dependencies. `files` are relative to
+// the project root. pdf.js assets: the files scripts/vendor.js copies into renderer/vendor/pdfjs/
+// (Liberation fonts and quickjs are not copied). fontkit: dist/fontkit.umd.min.js (vendored as
+// renderer/vendor/fontkit.esm.js) inlines these libraries (identified from the bundle's module
+// names, code and comments); fontkit 1.1.1 lists them as devDependencies, so their licence files
+// were taken from the npm releases matching those ranges and kept in scripts/third-party-licenses/.
+const PJ = 'node_modules/pdfjs-dist', TPL = 'scripts/third-party-licenses';
+const FK = 'inlined in @pdf-lib/fontkit dist/fontkit.umd.min.js (renderer/vendor/fontkit.esm.js)';
+const BUNDLED = [
+  { name: 'Adobe CMaps', licence: 'BSD-3-Clause', where: 'pdfjs-dist cmaps/ -> renderer/vendor/pdfjs/cmaps/', files: [`${PJ}/cmaps/LICENSE`] },
+  { name: 'Foxit standard fonts (PDFium)', licence: 'BSD-3-Clause', where: 'pdfjs-dist standard_fonts/Foxit*.pfb -> renderer/vendor/pdfjs/standard_fonts/', files: [`${PJ}/standard_fonts/LICENSE_FOXIT`] },
+  { name: 'OpenJPEG (JPEG 2000 decoder)', licence: 'BSD-2-Clause', where: 'pdfjs-dist wasm/openjpeg.wasm, openjpeg_nowasm_fallback.js -> renderer/vendor/pdfjs/wasm/', files: [`${PJ}/wasm/LICENSE_OPENJPEG`, `${PJ}/wasm/LICENSE_PDFJS_OPENJPEG`] },
+  { name: 'PDFium JBIG2 decoder', licence: 'BSD-3-Clause AND Apache-2.0', where: 'pdfjs-dist wasm/jbig2.wasm, jbig2_nowasm_fallback.js -> renderer/vendor/pdfjs/wasm/', files: [`${PJ}/wasm/LICENSE_JBIG2`, `${PJ}/wasm/LICENSE_PDFJS_JBIG2`] },
+  { name: 'qcms (colour management)', licence: 'MIT', where: 'pdfjs-dist wasm/qcms_bg.wasm -> renderer/vendor/pdfjs/wasm/', files: [`${PJ}/wasm/LICENSE_QCMS`, `${PJ}/wasm/LICENSE_PDFJS_QCMS`] },
+  { name: 'CGATS001Compat ICC profile', licence: 'CC0-1.0', where: 'pdfjs-dist iccs/ -> renderer/vendor/pdfjs/iccs/', files: [`${PJ}/iccs/LICENSE`] },
+  ...[
+    ['@pdf-lib/restructure', '0.0.1', 'MIT', null],
+    ['@pdf-lib/unicode-properties', '0.0.1', 'MIT'],
+    ['@pdf-lib/brotli', '0.0.0', 'MIT', null, 'Its brotli decoder sources carry "Copyright 2013 Google Inc." Apache-2.0 headers, kept in the bundle.'],
+    ['unicode-trie', '0.3.1', 'MIT', null],
+    ['tiny-inflate', '1.0.3', 'MIT'],
+    ['dfa', '1.2.0', 'MIT', null],
+    ['clone', '1.0.4', 'MIT'],
+    ['deep-equal', '1.1.2', 'MIT'],
+    ['base64-arraybuffer', '0.1.5', 'MIT'],
+    ['iconv-lite', '0.4.24', 'MIT'],
+    ['safer-buffer', '2.1.2', 'MIT'],
+    ['buffer', '5.7.1', 'MIT'],
+    ['base64-js', '1.5.1', 'MIT'],
+    ['ieee754', '1.2.1', 'BSD-3-Clause'],
+    ['string_decoder', '1.3.0', 'MIT'],
+    ['inherits', '2.0.4', 'ISC'],
+  ].map(([name, version, licence, file, note]) => ({
+    name, version, licence, where: FK, note,
+    files: file === null ? [] : [`${TPL}/${name.replace('@', '').replace('/', '-')}-${version}-LICENSE.txt`],
+  })),
+].map((b) => ({ ...b, allowed: isAllowed(b.licence) }));
+for (const b of BUNDLED) {
+  b.texts = b.files.map((f) => ({ file: f, text: existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8').trim() : null }));
+  for (const t of b.texts) if (t.text == null) missing.push(`licence file ${t.file} (for ${b.name})`);
+}
+
 const records = [...seen.values()].sort((a, b) => a.name.localeCompare(b.name) || a.version.localeCompare(b.version));
 const lines = [
   '# Third-party notices',
@@ -82,19 +127,32 @@ const lines = [
   '| --- | --- | --- |',
   ...records.map((r) => `| ${r.name} | ${r.version} | ${r.licence} |`),
   '',
+  '**Bundled components.** These ship inside the packages above (pdf.js data files and WebAssembly',
+  'decoders, and libraries compiled into the fontkit build) and are listed with their own licences.',
+  '',
+  '| Component | Version | Licence | Shipped as |',
+  '| --- | --- | --- | --- |',
+  ...BUNDLED.map((b) => `| ${b.name} | ${b.version ?? '-'} | ${b.licence} | ${b.where} |`),
+  '',
 ];
 for (const r of records) {
   lines.push(`## ${r.name} ${r.version}`, '', `Licence: ${r.licence}${r.repo ? `  \nSource: ${String(r.repo).replace(/^git\+/, '')}` : ''}`, '');
   if (r.lic) lines.push(`From \`${r.lic.file}\`:`, '', '```text', r.lic.text, '```', '');
   else lines.push(`The package does not ship a licence file; its package.json declares \`${r.licence}\`. The standard text of that licence applies.`, '');
 }
+for (const b of BUNDLED) {
+  lines.push(`## ${b.name}${b.version ? ` ${b.version}` : ''} (bundled)`, '', `Licence: ${b.licence}  \nShipped as: ${b.where}`, '');
+  if (b.note) lines.push(b.note, '');
+  for (const t of b.texts) lines.push(`From \`${t.file}\`:`, '', '```text', t.text ?? '(missing)', '```', '');
+  if (!b.texts.length) lines.push(`The upstream release ships no licence file; its package.json and README declare \`${b.licence}\`. The standard text of that licence applies.`, '');
+}
 writeFileSync(outFile, lines.join('\n'));
 
-const bad = records.filter((r) => !r.allowed);
-console.log(`licenses: ${records.length} production packages -> ${outFile}`);
-for (const r of records) console.log(`  ${r.allowed ? 'ok ' : 'BAD'} ${r.name}@${r.version} ${r.licence}`);
-if (missing.length) console.error(`licenses: not installed: ${missing.join(', ')} — run npm ci`);
+const bad = [...records, ...BUNDLED].filter((r) => !r.allowed);
+console.log(`licenses: ${records.length} production packages, ${BUNDLED.length} bundled components -> ${outFile}`);
+for (const r of [...records, ...BUNDLED]) console.log(`  ${r.allowed ? 'ok ' : 'BAD'} ${r.name}${r.version ? `@${r.version}` : ''} ${r.licence}`);
+if (missing.length) console.error(`licenses: missing: ${missing.join(', ')} — run npm ci`);
 if (bad.length || missing.length) {
-  if (bad.length) console.error(`licenses: FAIL — not in allow-list [${[...ALLOWED].join(', ')}]: ${bad.map((r) => `${r.name}@${r.version} (${r.licence})`).join(', ')}`);
+  if (bad.length) console.error(`licenses: FAIL — not in allow-list [${[...ALLOWED].join(', ')}]: ${bad.map((r) => `${r.name}@${r.version ?? '-'} (${r.licence})`).join(', ')}`);
   process.exit(1);
 }
