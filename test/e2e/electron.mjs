@@ -4,8 +4,8 @@
 // env: ELECTRON_BIN (optional; defaults to the installed electron package).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -193,6 +193,26 @@ try {
   const st = await win.evaluate(() => window.ashStudio.pdfium.selfTest().catch((e) => ({ error: `${e.name}: ${e.message}` })));
   expect('pdfium selfTest', JSON.stringify({ ...st, objects: undefined }),
     !st.error && st.pageCount === 2 && st.text === 'PDFium self-test 4711' && st.originalIsPrefix && st.outLength > st.inLength);
+
+  step = 'office (fake runner): File > Export to Word document';
+  const out = join(tmp, 'out dir; & "x"', 'Résumé & co.docx');
+  await mkdir(dirname(out), { recursive: true });
+  await app.evaluate(({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, out);
+  const menuClick = async (id) => { await win.click('.menu-btn:text-is("File")'); await win.click(`.menu-item[data-id="${id}"]`); };
+  await menuClick('export-docx');
+  await win.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Saved R.sum. & co\.docx/.test(t.textContent)), null, { timeout: 15000 });
+  const calls = await app.evaluate(() => globalThis.__ashOfficeCalls.map(({ command, args }) => ({ command, args })));
+  const c = calls[0];
+  expect('Word runner call', JSON.stringify(calls), calls.length === 1 && c.command === 'powershell.exe'
+    && c.args.slice(0, 5).join(' ') === '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File' && c.args[5].endsWith('pdf-to-docx.ps1')
+    && c.args[6].endsWith('document.pdf') && c.args[7] === out && c.args.length === 8);
+  expect('docx written', '', (await readFile(out, 'utf8')) === 'ASH fake Office output');
+  step = 'office (fake runner): Microsoft Word missing -> clear error';
+  await app.evaluate(() => { process.env.ASH_TEST_FAKE_OFFICE = 'missing'; });
+  await menuClick('export-docx');
+  await win.waitForFunction(() => /Microsoft Word is not installed/.test(document.querySelector('dialog[open], .dialog')?.textContent ?? ''), null, { timeout: 15000 });
+  await win.keyboard.press('Escape');
+  await app.evaluate(() => { process.env.ASH_TEST_FAKE_OFFICE = '1'; });
 
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));

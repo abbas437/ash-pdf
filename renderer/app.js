@@ -24,6 +24,7 @@ import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
 import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextras.js';
 import { pdfium } from './pdfium/client.js';
+import { initOffice } from './ui/office.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -448,6 +449,7 @@ initSign(app);
 app.annotations = annotations;
 app.pageMarks = pageMarks;
 initPageTools(app);
+initOffice(app); // File > Export to Word, Create PDF from Office file
 initAdvancedSearch(app);
 
 (async () => {

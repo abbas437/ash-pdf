@@ -39,4 +39,8 @@ contextBridge.exposeInMainWorld('api', {
   libraryGet: (kind, id) => ipcRenderer.invoke('library:get', kind, id),
   libraryPut: (kind, id, item) => ipcRenderer.invoke('library:put', kind, id, item),
   libraryDelete: (kind, id) => ipcRenderer.invoke('library:delete', kind, id),
+  // ---- office conversions (electron/office.js)
+  officeStatus: () => ipcRenderer.invoke('office:status'),
+  officeExportDocx: (opts) => ipcRenderer.invoke('office:exportDocx', opts ?? {}),
+  officeToPdf: () => ipcRenderer.invoke('office:toPdf'),
 });
