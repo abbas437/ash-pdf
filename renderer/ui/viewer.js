@@ -29,6 +29,9 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 let host = null;
 let resizeObs = null;
+// Tabs shown in a split pane besides the active one (ui/splitview.js); empty when unsplit.
+const shown = new Set();
+const live = (tab) => tab.id === state.activeId || shown.has(tab);
 
 export const viewer = {
   pdfjs,
@@ -63,18 +66,24 @@ export const viewer = {
   getTextContent,
   optionalContent,
   rerender: (tab) => { for (let i = 0; i < tab.numPages; i++) release(tab, i); schedule(tab); },
+  setShown: (tabs) => { shown.clear(); for (const t of tabs) shown.add(t); },
+  refit,
   renderedPages: (tab) => (tab.view ? tab.view.ps.flatMap((p, i) => (p.rendered ? [i] : [])) : []),
 };
 
 function mount(el) {
   host = el;
-  resizeObs = new ResizeObserver(() => {
-    const tab = state.tabs.find((t) => t.id === state.activeId);
-    if (!tab?.view) return;
+  resizeObs = new ResizeObserver(refit);
+  resizeObs.observe(host);
+}
+
+/** Re-apply fit zoom (or re-render) for every visible tab after its pane changed size. */
+function refit() {
+  for (const tab of state.tabs) {
+    if (!tab.view || !live(tab)) continue;
     if (tab.zoomMode !== 'custom') setZoom(tab, tab.zoomMode);
     else schedule(tab);
-  });
-  resizeObs.observe(host);
+  }
 }
 
 function cssScale(tab) { return tab.zoom * PDF_TO_CSS; }
@@ -404,7 +413,7 @@ function schedule(tab) {
 
 function update(tab) {
   const v = tab.view;
-  if (!v || v.destroyed || tab.id !== state.activeId || v.scrollEl.hidden) return;
+  if (!v || v.destroyed || !live(tab) || v.scrollEl.hidden) return;
   const sc = v.scrollEl;
   const top = sc.scrollTop;
   const bottom = top + sc.clientHeight;
@@ -454,7 +463,7 @@ function enqueue(tab, i) {
 function pump() {
   while (running < MAX_RUNNING && queue.length) {
     const job = queue.shift();
-    if (job.tab.view?.destroyed || job.tab.id !== state.activeId) continue;
+    if (job.tab.view?.destroyed || !live(job.tab)) continue;
     running++;
     renderPage(job.tab, job.i)
       .catch((err) => reportRenderError(job.tab, job.i, err))
@@ -640,12 +649,13 @@ function restoreScroll(tab) {
 }
 
 function activate(tab) {
-  for (const t of state.tabs) if (t !== tab && t.view && !t.view.scrollEl.hidden) deactivate(t);
+  for (const t of state.tabs) if (t !== tab && t.view && !t.view.scrollEl.hidden && !shown.has(t)) deactivate(t);
   const v = tab.view;
   if (!v) return;
+  const inPane = shown.has(tab) && !v.scrollEl.hidden; // focusing a split pane keeps its position
   v.scrollEl.hidden = false;
   layout(tab);
-  if (tab.scrollState) restoreScroll(tab);
+  if (inPane) { /* already on screen */ } else if (tab.scrollState) restoreScroll(tab);
   else centerX(tab);
   schedule(tab);
 }

@@ -39,6 +39,38 @@ export function initSidebar(workArea) {
   return root;
 }
 
+export const SIDEBAR_MIN = 160;
+/** Set the sidebar width in CSS px, clamped to [SIDEBAR_MIN, 50 % of the window]; returns it. */
+export function setSidebarWidth(px) {
+  const w = Math.round(Math.min(window.innerWidth / 2, Math.max(SIDEBAR_MIN, Number(px) || 200)));
+  root.style.width = `${w}px`;
+  return w;
+}
+
+/** Add the drag handle on the sidebar's right edge; onCommit(width) runs when a drag ends. */
+export function initSidebarResize(onCommit) {
+  const grip = h('div.sb-resize', { role: 'separator', 'aria-orientation': 'vertical', 'aria-label': 'Resize sidebar', title: 'Drag to resize the sidebar' });
+  root.append(grip);
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    grip.classList.add('dragging');
+    const left = root.getBoundingClientRect().left;
+    let w = root.offsetWidth;
+    const move = (ev) => { w = setSidebarWidth(ev.clientX - left); };
+    const up = () => {
+      grip.classList.remove('dragging');
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', up);
+      grip.removeEventListener('pointercancel', up);
+      onCommit(w);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+  });
+}
+
 export function registerSidebarTab(def) {
   if (!def?.id || typeof def.render !== 'function') throw new TypeError('registerSidebarTab: id and render() required');
   if (!strip) throw new Error('registerSidebarTab: initSidebar() has not run');

@@ -140,6 +140,21 @@ body.drop-target .viewer-host { outline: 3px dashed var(--brass); outline-offset
 /* ---- sidebar (ui/sidebar.js) ---- */
 .sidebar { flex: none; width: 200px; display: flex; flex-direction: column; min-height: 0; background: var(--surface); border-right: 1px solid var(--line); }
 body.sidebar-closed .sidebar { display: none; }
+.sidebar { position: relative; }
+.sb-resize { position: absolute; top: 0; right: -4px; bottom: 0; width: 8px; cursor: col-resize; z-index: 5; touch-action: none; }
+.sb-resize:hover, .sb-resize.dragging { background: linear-gradient(90deg, transparent 3px, var(--brass) 3px, var(--brass) 5px, transparent 5px); }
+/* Split view (ui/splitview.js) */
+.viewer-host.split { display: grid; }
+.viewer-host.split-v { grid-template-areas: "ha dv hb" "pa dv pb"; grid-template-rows: auto minmax(0, 1fr); }
+.viewer-host.split-h { grid-template-areas: "ha" "pa" "dv" "hb" "pb"; grid-template-columns: minmax(0, 1fr); }
+.viewer-host.split > .viewer-scroll { position: relative; inset: auto; min-width: 0; min-height: 0; }
+.viewer-scroll.pane-focused { box-shadow: inset 0 0 0 2px var(--brass); }
+.split-head { display: flex; align-items: center; min-width: 0; padding: 3px 8px; background: var(--surface); color: var(--muted); border-top: 2px solid transparent; border-bottom: 1px solid var(--line); }
+.split-head.focused { border-top-color: var(--brass); color: var(--text); }
+.split-pick { min-width: 0; max-width: 100%; font: inherit; font-size: 12px; color: inherit; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
+.split-divider { background: var(--line); cursor: col-resize; touch-action: none; }
+.split-h > .split-divider { cursor: row-resize; }
+.split-divider:hover, .split-divider.dragging { background: var(--brass); }
 .sb-tabs { display: flex; gap: 2px; padding: 4px 6px; border-bottom: 1px solid var(--line); }
 .sb-tab { display: grid; place-items: center; width: 30px; height: 28px; border: 1px solid transparent; border-radius: 6px; background: none; color: var(--muted); }
 .sb-tab:hover { background: var(--hover); }
