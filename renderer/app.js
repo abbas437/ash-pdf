@@ -31,6 +31,7 @@ import { initCompress } from './ui/compress.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
 import { initHandTool } from './ui/tools-hand.js';
 import { initSession } from './ui/session.js';
+import { initPrefs, openPrefs, prefsForNewTab, applySidebarOnOpen } from './ui/prefs.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -119,7 +120,7 @@ const hasDoc = () => !!activeTab();
 
 /** Open {name, path?, bytes} in a new tab. Returns the tab or null. */
 export async function openBytes({ name, path = null, bytes }) {
-  const tab = createTab({ name, path, bytes });
+  const tab = Object.assign(createTab({ name, path, bytes }), prefsForNewTab());
   // Background check of the file as opened; saveTab asks before overwriting a signed original at this path.
   tab.signedPath = null;
   tab.signatureCheck = import('../src/core/index.js').then((core) => core.detectSignatures(bytes))
@@ -132,6 +133,7 @@ export async function openBytes({ name, path = null, bytes }) {
   }
   state.tabs = [...state.tabs, tab];
   viewer.build(tab);
+  applySidebarOnOpen();
   bus.emit('tab:opened', { tab });
   activate(tab.id);
   return tab;
@@ -387,7 +389,7 @@ M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => show
 
 function showShortcuts() {
   const keys = [['Ctrl+O', 'Open'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'],
-    ['Ctrl+F', 'Find'], ['Ctrl+= / Ctrl+-', 'Zoom in / out'], ['Ctrl+0 / Ctrl+1', 'Fit page / Actual size'], ['Home / End', 'First / last page'], ['Page Up / Page Down', 'Previous / next page']];
+    ['Ctrl+F', 'Find'], ['Ctrl+,', 'Preferences'], ['Ctrl+= / Ctrl+-', 'Zoom in / out'], ['Ctrl+0 / Ctrl+1', 'Fit page / Actual size'], ['Home / End', 'First / last page'], ['Page Up / Page Down', 'Previous / next page']];
   showDialog({ title: 'Keyboard shortcuts', body: h('table.props', {}, keys.map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', {}, v)))) });
 }
 
@@ -404,6 +406,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && k === 'p') return run(() => tab && printTab(tab));
   if (ctrl && k === 'w') return run(() => tab && closeTab(tab));
   if (ctrl && k === 'f') return run(() => tab && bus.emit('search:open', {}));
+  if (ctrl && e.key === ',') return run(() => openPrefs());
   if ((ctrl && k === 'b' && !e.shiftKey && !e.altKey && !isTyping(e.target)) || e.key === 'F4') return run(() => { state.sidebarOpen = !state.sidebarOpen; });
   if (ctrl && e.key === 'Tab') return run(() => {
     if (state.tabs.length < 2) return;
@@ -471,12 +474,14 @@ initAdvancedSearch(app);
 initCopyText(app);
 initHandTool();
 initSplitView({ host: viewerHost, activate, registerMenuItem });
+const prefsReady = initPrefs({ registerMenuItem, setTheme, toolbar });
 
 (async () => {
   try {
     await setTheme((await api.settingsGet('theme')) ?? 'light', false);
   } catch { await setTheme('light', false); }
   try { const w = await api.settingsGet('ui.sidebarWidth'); if (w) setSidebarWidth(w); } catch { /* keep the default width */ }
+  await prefsReady.catch(() => {});
   refresh();
   // Return nothing: contextBridge would copy the resolved tab object graph back to the preload (renderer OOM).
   api.onOpenFile((file) => { openFileObject(file); });
