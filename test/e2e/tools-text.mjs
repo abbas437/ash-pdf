@@ -9,6 +9,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
+import { flattenAnnotations } from '../../src/core/annots.js';
 import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
@@ -310,7 +311,8 @@ try {
   step = 'save';
   const final = await texts();
   check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false');
-  const out = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  // Overlay objects are saved as PDF annotations: flatten them so the checks below see what they draw.
+  const out = await flattenAnnotations(Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));')));
   check((await PDFDocument.load(out)).getPageCount() === 3, 'saved page count');
   const items = await ev(`
     const d = await v.pdfjs.getDocument({ data: new Uint8Array(arg) }).promise, res = [];

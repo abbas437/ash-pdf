@@ -121,8 +121,9 @@ try {
   check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false');
   const out = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
   const doc = await PDFDocument.load(out);
-  const xobjs = doc.getPages()[0].node.Resources()?.lookup?.(PDFName.of('XObject'));
-  check(xobjs && xobjs.keys().length >= 1, 'saved page 1 has no image XObject');
+  // The signature image is saved as a /Stamp annotation whose appearance carries the image.
+  const annots = doc.getPages()[0].node.Annots()?.asArray().map((r) => doc.context.lookup(r)) ?? [];
+  check(annots.some((a) => a.get(PDFName.of('Subtype'))?.toString() === '/Stamp' && a.get(PDFName.of('AP'))), 'saved page 1 has no Stamp annotation with an appearance for the signature image');
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('SIGNATURES OK');

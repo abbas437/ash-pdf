@@ -10,7 +10,8 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument, StandardFonts, degrees, decodePDFRawStream, PDFArray } from 'pdf-lib';
+import { flattenAnnotations } from '../../src/core/annots.js';
+import { PDFDocument, StandardFonts, degrees, decodePDFRawStream, PDFArray, PDFName } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
@@ -213,11 +214,17 @@ try {
   // ------------------------------------------------------------ save + output checks
   step = 'save';
   check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false');
-  const out = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  // Overlay objects are saved as PDF annotations: flatten them so the checks below see what they draw.
+  const out = await flattenAnnotations(Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));')));
   const doc = await PDFDocument.load(out);
   check(doc.getPageCount() === 2, `saved page count ${doc.getPageCount()}`);
+  const decode = (st) => Buffer.from(decodePDFRawStream(st).decode()).toString('latin1');
+  // Page content plus the Form XObjects it draws (flattened annotation appearances), recursively.
+  const forms = (res, seen = new Set()) => { const xo = res?.lookup(PDFName.of('XObject')); if (!xo) return [];
+    return xo.keys().flatMap((k) => { const st = xo.lookup(k); if (seen.has(st) || st.dict.get(PDFName.of('Subtype'))?.toString() !== '/Form') return [];
+      seen.add(st); return [decode(st), ...forms(st.dict.lookup(PDFName.of('Resources')), seen)]; }); };
   const contents = (pg) => { const c = pg.node.Contents(); const refs = c instanceof PDFArray ? c.asArray() : [c];
-    return refs.map((r) => Buffer.from(decodePDFRawStream(doc.context.lookup(r)).decode()).toString('latin1')).join('\n'); };
+    return [...refs.map((r) => decode(doc.context.lookup(r))), ...forms(pg.node.Resources())].join('\n'); };
   const cs = contents(doc.getPage(0));
   check(/\[\s*1 2\s*\]\s*0\s+d/.test(cs), 'callout dotted dash array [1 2] missing from page 1 content');
   check(/\[\s*1\.5 3\s*\]\s*0\s+d/.test(cs), 'markup dotted dash array [1.5 3] missing from page 1 content');

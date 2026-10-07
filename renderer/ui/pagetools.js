@@ -11,6 +11,7 @@ import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
+import { getAuthor, setAuthor, DEFAULT_AUTHOR } from './annotations.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -637,6 +638,47 @@ export async function insertFromDialog(tab = activeTab()) {
   }));
 }
 
+// ---------------------------------------------------------------- Flatten annotations…
+// Burns the annotations in tab.bytes (those already saved in the file) into the page content as one
+// page-op undo step. Overlay objects drawn in this session are never in tab.bytes (the save hook is
+// transient), so they are not affected and stay editable.
+export async function flattenAnnotationsDialog(tab = activeTab()) {
+  if (!tab) return;
+  if (tab.readOnly) { toast(RO_TIP); return; }
+  const form = h('div.pt-form', {},
+    h('p.pt-hint', {}, 'This flattens the annotations already saved in the file: they become part of the page content and can no longer be edited, moved or deleted. Annotations drawn since the file was opened are not affected; they stay editable.'),
+    tab.dirty ? h('p.pt-hint', {}, 'This document has unsaved changes. Choose Save first to save them before flattening.') : null,
+    h('fieldset.pt-fieldset', {}, h('legend', {}, 'Apply to'),
+      radio('pt-flat-to', 'all', `All pages (${tab.numPages})`, true),
+      radio('pt-flat-to', 'current', `Current page (${tab.currentPage + 1})`, false)));
+  const v = await showDialog({
+    title: 'Flatten annotations', body: form, className: 'pt-dialog', initialFocus: 'input[name="pt-flat-to"]:checked',
+    buttons: [CANCEL, ...(tab.dirty ? [{ label: 'Save first', value: 'save' }] : []), { label: 'Flatten', value: 'ok', primary: true }],
+  });
+  if (v !== 'ok' && v !== 'save') return;
+  const pages = radioValue(form, 'pt-flat-to') === 'current' ? [tab.currentPage] : null;
+  if (v === 'save' && !(await app.saveTab(tab))) return;
+  const { flattenAnnotations } = await import('../../src/core/annots.js');
+  let none = false;
+  const ok = await runOp(tab, 'Flatten annotations', async (bytes, n) => {
+    const out = await flattenAnnotations(bytes, pages ? { pages } : {});
+    if (out === bytes) { none = true; return null; }
+    return { bytes: out, map: new Map(range(n).map((i) => [i, i])) };
+  });
+  if (none) toast(pages ? 'No saved annotations on this page' : 'No saved annotations to flatten');
+  return ok;
+}
+
+// ---------------------------------------------------------------- Author name…
+export async function authorDialog() {
+  const input = h('input.input', { type: 'text', id: 'pt-author', value: await getAuthor(), maxlength: '200', spellcheck: 'false' });
+  const v = await showDialog({
+    title: 'Author name', body: h('div.pt-form', {}, field('Author name', input, `Written as the author of the annotations you save. Leave empty for "${DEFAULT_AUTHOR}".`)),
+    className: 'pt-dialog', initialFocus: '#pt-author', buttons: [CANCEL, { label: 'OK', value: 'ok', primary: true }],
+  });
+  if (v === 'ok') await setAuthor(input.value);
+}
+
 // ---------------------------------------------------------------- init
 /** Wire page tools into the shell. `appApi` is the object exported as window.ashStudio. */
 export function initPageTools(appApi) {
@@ -662,9 +704,13 @@ export function initPageTools(appApi) {
   M('Edit', { separator: true });
   item('Edit', { id: 'undo-pages', label: 'Undo page change', action: withTab(undo) }, (t) => !!t.bytesUndo?.length);
   item('Edit', { id: 'redo-pages', label: 'Redo page change', action: withTab(redo) }, (t) => !!t.bytesRedo?.length);
+  M('Edit', { separator: true });
+  M('Edit', { id: 'annots-author', label: 'Author name…', action: () => authorDialog() });
   M('Tools', { separator: true });
   item('Tools', { id: 'insert-pages', label: 'Insert pages from PDF…', action: withTab(insertFromDialog) });
   item('Tools', { id: 'crop', label: 'Crop pages…', action: withTab(cropDialog) });
   item('Tools', { id: 'edit-properties', label: 'Edit properties…', action: withTab(propertiesDialog) });
-  app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog };
+  M('Document', { separator: true });
+  item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
+  app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, flattenAnnotationsDialog, authorDialog };
 }

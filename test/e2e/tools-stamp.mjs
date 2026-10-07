@@ -11,6 +11,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { chromium } from 'playwright-core';
+import { flattenAnnotations } from '../../src/core/annots.js';
 import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
 
 const sharp = createRequire(import.meta.url)('/opt/npm-tools/node_modules/sharp');
@@ -232,7 +233,8 @@ try {
   const final = await objs();
   check(await ev('return !document.querySelector(".st-annots").hidden && /\\d+ annotations/.test(document.querySelector(".st-annots").textContent);'), 'status-bar annotation count');
   check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false');
-  const out = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  // Overlay objects are saved as PDF annotations: flatten them so the checks below see what they draw.
+  const out = await flattenAnnotations(Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));')));
   check((await PDFDocument.load(out)).getPageCount() === 3, 'saved page count');
 
   step = 'verify output';
