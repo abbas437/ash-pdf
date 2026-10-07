@@ -121,6 +121,8 @@ try {
     const D = c.getContext('2d').getImageData(Math.round(arg.x * k), Math.round(arg.y * k), Math.round(arg.w * k), Math.round(arg.h * k)).data;
     let n = 0; for (let i = 0; i < D.length; i += 4) if (D[i + 3] > 0 && (D[i] < 200 || D[i + 1] < 200 || D[i + 2] < 200)) n++;
     return n;`, b);
+  // The message reads the dialog only when there is one: page.textContent would wait for it (30 s).
+  const noDialog = async () => { const d = await page.$('.dialog'); check(!d, `unexpected dialog: ${d && await d.textContent()}`); };
   const waitRendered = () => page.waitForFunction(() => { const c = document.querySelector('.page[data-page-index="0"] canvas.page-canvas'); return c && c.width > 0; }, null, { timeout: 10_000 });
 
   step = 'open';
@@ -145,7 +147,7 @@ try {
   check(await canvasInk(edge) === 0, 'the foreign square is drawn on the page canvas as well as by the overlay');
   check(await ev('return v.getOverlaySvg(tab, 0).querySelectorAll("rect").length > 0;'), 'overlay does not draw the square');
   await page.waitForSelector('.page[data-page-index="0"] a.pdf-link', { timeout: 10_000 }); // the Link still works
-  check(!(await page.$('.dialog')), `unexpected dialog: ${await page.textContent('.dialog').catch(() => '')}`);
+  await noDialog();
 
   step = 'move + save';
   await ev('an.update(tab, arg, { x: 300, y: 200 });', sq.id);
@@ -175,7 +177,7 @@ try {
   check((await objs()).length === 1, 'new rect duplicated in the overlay');
 
   step = 'flatten after save first';
-  check(!(await page.$('.dialog')), `unexpected dialog: ${await page.textContent('.dialog').catch(() => '')}`);
+  await noDialog();
   await ev('an.add(tab, { type: "ellipse", page: 0, x: 400, y: 650, w: 60, h: 40, stroke: "#000000" });');
   await page.click('.menu-btn:text-is("Document")');
   await page.click('.menu-item[data-id="flatten-annotations"]');
@@ -203,7 +205,6 @@ try {
       return t?.name === n && t.numPages === k && a.viewer.getOverlaySvg(t, 0); }, [name, pages], { timeout: 10_000 });
     await waitRendered();
   };
-  const noDialog = async () => check(!(await page.$('.dialog')), `unexpected dialog: ${await page.textContent('.dialog').catch(() => '')}`);
 
   step = 'delete page 1: unedited imports are not rewritten';
   const three = await makeThreePagePdf();
