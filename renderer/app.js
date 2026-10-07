@@ -41,7 +41,7 @@ const banner = h('div.banner', { role: 'status', hidden: true });
 const viewerHost = h('main.viewer-host', { 'aria-label': 'Document viewer' });
 const welcome = h('div.welcome', {},
   h('div.welcome-card', {},
-    h('div.welcome-mark', { html: icon('pages', 40) }),
+    h('div.welcome-logo-wrap', {}, h('img.brand-logo.lt.welcome-logo', { src: 'assets/brand/ash-logo-horizontal.svg', alt: 'ASH' }), h('img.brand-logo.rev.welcome-logo', { src: 'assets/brand/ash-logo-horizontal-reversed.svg', alt: '' })),
     h('h1', {}, 'ASH PDF Studio'),
     h('p', {}, 'ASH PDF Studio is ready. Open a PDF or drop files here.'),
     h('button.btn.primary', { type: 'button', onclick: () => openDialog() }, 'Open PDF…')));
@@ -377,7 +377,7 @@ initForms({ registerMenuItem });
 const pageMarks = initPageMarks({ registerMenuItem }); // Document menu: must be registered before Help
 initViewExtrasMenus({ registerMenuItem }); // View > Snapshot, Document > Word count: before Help
 M('Help', { id: 'keys', label: 'Keyboard shortcuts', action: showShortcuts });
-M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => showDialog({ title: 'About ASH PDF Studio', body: `Version ${await api.version()}. Free and open source (MIT). Uses pdf.js (Apache-2.0) and pdf-lib (MIT).` }) });
+M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => showDialog({ title: 'About ASH PDF Studio', className: 'about-dlg', body: h('div', {}, h('img.brand-logo.lt.about-logo', { src: 'assets/brand/ash-logo-horizontal.svg', alt: 'ASH Technical & Project Management Services' }), h('img.brand-logo.rev.about-logo', { src: 'assets/brand/ash-logo-horizontal-reversed.svg', alt: '' }), h('p', {}, `Version ${await api.version()}. Free and open source (MIT). Uses pdf.js (Apache-2.0) and pdf-lib (MIT).`), h('p.about-tm', {}, 'The ASH logo and icon are trademarks of ASH Technical & Project Management Services and are not covered by the MIT licence.')) }) });
 
 function showShortcuts() {
   const keys = [['Ctrl+O', 'Open'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'],

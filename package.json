@@ -14,7 +14,6 @@
     "test": "node --test \"test/*.test.js\"",
     "test:e2e": "node -e \"process.exit(require('fs').existsSync('test/e2e/run.mjs')?1:0)\" || node test/e2e/run.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
-    "icon": "node scripts/make-icon.js",
     "licenses": "node scripts/licenses.js",
     "dist": "electron-builder --win nsis portable --x64 --publish never"
   },

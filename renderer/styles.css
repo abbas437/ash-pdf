@@ -505,3 +505,11 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 
 /* ---- page text context menu (ui/copytext.js) */
 .menu.context-menu { z-index: 1000; min-width: 160px; top: auto; }
+
+/* ASH brand logo: light-background SVG by default, reversed SVG in the dark theme. Trademark: see assets/brand/README.md. */
+.brand-logo { display: block; height: 40px; width: auto; }
+.brand-logo.rev, [data-theme="dark"] .brand-logo.lt { display: none; }
+[data-theme="dark"] .brand-logo.rev { display: block; }
+.welcome-logo { opacity: .85; margin: 0 auto 14px; height: 34px; }
+.about-logo { height: 48px; margin: 0 0 12px; }
+.about-tm { font-size: 11px; color: var(--muted); }

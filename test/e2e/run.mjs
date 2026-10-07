@@ -12,7 +12,7 @@ import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
-const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
 const ROTATED = 1; // 0-based index of the page carrying /Rotate 90
 
 async function makeMainPdf() {
@@ -245,6 +245,22 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('.doc-tab').length === 0);
   check(await page.locator('.welcome').isVisible(), 'welcome screen not back after closing the last tab');
   // Encrypted-document banner: pdf-lib cannot write encrypted PDFs, so that path is skipped.
+
+  step = 'about logo';
+  const aboutLogo = async (theme) => {
+    await page.locator('.menu-btn', { hasText: /^Help$/ }).click();
+    await page.locator('.menu[aria-label=Help] button', { hasText: 'About ASH PDF Studio' }).click();
+    await page.waitForSelector('.dialog .about-logo', { state: 'attached' });
+    const r = await page.evaluate(() => [...document.querySelectorAll('.dialog img.about-logo')].filter((i) => i.offsetParent !== null).map((i) => [i.complete, i.naturalWidth, i.getAttribute('src')]));
+    check(r.length === 1 && r[0][0] && r[0][1] > 0, `About logo not loaded (${theme}): ${JSON.stringify(r)}`);
+    check(r[0][2].includes(theme === 'dark' ? 'reversed' : 'horizontal.svg'), `wrong About logo variant for ${theme}`);
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(() => !document.querySelector('.dialog'));
+  };
+  await aboutLogo('light');
+  await page.click('#theme-toggle');
+  await aboutLogo('dark');
+  await page.click('#theme-toggle');
 
   step = 'theme';
   await openFile('ductwork-12.pdf', mainPdf);
