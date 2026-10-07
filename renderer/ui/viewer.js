@@ -31,7 +31,20 @@ let host = null;
 let resizeObs = null;
 // Tabs shown in a split pane besides the active one (ui/splitview.js); empty when unsplit.
 const shown = new Set();
-const live = (tab) => tab.id === state.activeId || shown.has(tab);
+// Split view of ONE document (ui/splitview.js): a second view holder per tab. It is a Proxy of the
+// tab with its own view, zoom, zoomMode, currentPage and scrollState; every other read and write
+// goes to the tab. The focused pane is always the tab itself: focusing the other pane swaps those
+// fields (swapViews), so tools acting on activeTab() act on what the user clicked. A view finds its
+// current holder through owner (scrollEl -> holder). A secondary emits only page:rendered and
+// zoom:changed (the annotation redraw signal), never page/tab events of its own.
+const OWN = ['view', 'zoom', 'zoomMode', 'currentPage', 'scrollState'];
+const secs = new WeakMap();   // tab -> secondary holder
+const stores = new WeakMap(); // secondary holder -> {its own fields}
+const baseOf = new WeakMap(); // secondary holder -> tab
+const owner = new WeakMap();  // scrollEl -> holder whose view it is (tab or secondary)
+const holderOf = (v) => { const t = owner.get(v.scrollEl); return t?.view === v ? t : null; };
+const live = (tab) => { const b = baseOf.get(tab) ?? tab; return b.id === state.activeId || shown.has(b); };
+const emitFor = (tab, ev, data) => { if (!baseOf.has(tab)) bus.emit(ev, data); };
 
 export const viewer = {
   pdfjs,
@@ -65,7 +78,11 @@ export const viewer = {
   pageToClient,
   getTextContent,
   optionalContent,
-  rerender: (tab) => { for (let i = 0; i < tab.numPages; i++) release(tab, i); schedule(tab); },
+  rerender: (tab) => { for (const t of withSecondary(tab)) { for (let i = 0; i < t.numPages; i++) release(t, i); schedule(t); } },
+  secondary,
+  secondaryOf: (tab) => secs.get(tab) ?? null,
+  dropSecondary,
+  swapViews,
   setShown: (tabs) => { shown.clear(); for (const t of tabs) shown.add(t); },
   refit,
   renderedPages: (tab) => (tab.view ? tab.view.ps.flatMap((p, i) => (p.rendered ? [i] : [])) : []),
@@ -79,12 +96,60 @@ function mount(el) {
 
 /** Re-apply fit zoom (or re-render) for every visible tab after its pane changed size. */
 function refit() {
-  for (const tab of state.tabs) {
+  for (const tab of state.tabs.flatMap(withSecondary)) {
     if (!tab.view || !live(tab)) continue;
     if (tab.zoomMode !== 'custom') setZoom(tab, tab.zoomMode);
     else schedule(tab);
   }
 }
+
+const withSecondary = (tab) => (secs.has(tab) ? [tab, secs.get(tab)] : [tab]);
+
+/** The tab's secondary view holder (created on first call; its pane starts on the tab's page). */
+function secondary(tab) {
+  if (secs.has(tab)) return secs.get(tab);
+  const store = { view: null, zoom: tab.zoom, zoomMode: tab.zoomMode, currentPage: tab.currentPage, scrollState: null };
+  const sec = new Proxy(tab, {
+    get: (t, k) => (k in store ? store[k] : Reflect.get(t, k)),
+    set: (t, k, val) => { if (k in store) store[k] = val; else t[k] = val; return true; },
+  });
+  secs.set(tab, sec);
+  stores.set(sec, store);
+  baseOf.set(sec, tab);
+  build(sec);
+  return sec;
+}
+
+/** Release the secondary view (canvases and all); the tab keeps its own (focused) view. */
+function dropSecondary(tab) {
+  const sec = secs.get(tab);
+  if (!sec) return;
+  const v = sec.view;
+  secs.delete(tab);
+  if (!v) return;
+  v.destroyed = true;
+  cancelAnimationFrame(v.raf);
+  for (let i = 0; i < v.ps.length; i++) release(sec, i);
+  v.scrollEl.remove();
+  owner.delete(v.scrollEl);
+}
+
+/** Give the tab its secondary's view (and zoom, page, scroll) and vice versa. */
+function swapViews(tab) {
+  const sec = secs.get(tab);
+  if (!sec) return;
+  const store = stores.get(sec);
+  for (const k of OWN) [tab[k], store[k]] = [store[k], tab[k]];
+  owner.set(tab.view.scrollEl, tab);
+  owner.set(store.view.scrollEl, sec);
+  bus.emit('page:changed', { tab, pageIndex: tab.currentPage });
+  bus.emit('zoom:changed', { tab, zoom: tab.zoom, mode: tab.zoomMode, scale: cssScale(tab) });
+}
+// Annotations redraw on zoom:changed: an edit made through the tab reaches its other pane.
+bus.on('annotations:changed', ({ tab }) => {
+  const sec = secs.get(tab);
+  if (sec?.view) bus.emit('zoom:changed', { tab: sec, zoom: sec.zoom, mode: sec.zoomMode, scale: cssScale(sec) });
+});
 
 function cssScale(tab) { return tab.zoom * PDF_TO_CSS; }
 function totalRotation(tab, i) { return (tab.pages[i].rotate + tab.viewRotation) % 360; }
@@ -195,16 +260,18 @@ function build(tab) {
     old.pagesEl.replaceWith(pagesEl);
   } else {
     scrollEl.append(pagesEl);
-    scrollEl.addEventListener('scroll', () => schedule(tab), { passive: true });
-    const unpin = () => { tab.view.navTarget = null; };
-    scrollEl.addEventListener('wheel', (e) => onWheel(tab, e), { passive: false });
+    owner.set(scrollEl, tab);
+    const holder = () => owner.get(scrollEl);
+    scrollEl.addEventListener('scroll', () => schedule(holder()), { passive: true });
+    const unpin = () => { holder().view.navTarget = null; };
+    scrollEl.addEventListener('wheel', (e) => onWheel(holder(), e), { passive: false });
     scrollEl.addEventListener('pointerdown', unpin);
     scrollEl.addEventListener('keydown', (e) => { if (/^Arrow|^Page|^Home|^End|^ $/.test(e.key)) unpin(); });
     host.append(scrollEl);
   }
   tab.view = { scrollEl, pagesEl, pageEls, ps, navTarget: null, raf: 0, laidScale: 0, destroyed: false };
   layout(tab);
-  bus.emit('tab:loaded', { tab, reloaded: !!old });
+  emitFor(tab, 'tab:loaded', { tab, reloaded: !!old });
 }
 
 function round3(n) { return Math.round(n * 1000) / 1000; }
@@ -305,6 +372,8 @@ function rotateView(tab, delta) {
   for (let i = 0; i < tab.numPages; i++) release(tab, i);
   layout(tab);
   scrollToPage(tab, page);
+  const sec = secs.get(tab);
+  if (sec?.view) { for (let i = 0; i < sec.numPages; i++) release(sec, i); layout(sec); scrollToPage(sec, sec.currentPage); }
   bus.emit('rotation:changed', { tab, rotation: tab.viewRotation });
   bus.emit('zoom:changed', { tab, zoom: tab.zoom, mode: tab.zoomMode, scale: cssScale(tab) });
 }
@@ -367,7 +436,7 @@ async function goToDest(tab, dest) {
 function setCurrent(tab, i) {
   if (tab.currentPage === i) return;
   tab.currentPage = i;
-  bus.emit('page:changed', { tab, pageIndex: i });
+  emitFor(tab, 'page:changed', { tab, pageIndex: i });
 }
 
 // ---------------------------------------------------------------- coordinates
@@ -408,7 +477,7 @@ function pageToClient(tab, i, x, y) {
 function schedule(tab) {
   const v = tab.view;
   if (!v || v.raf) return;
-  v.raf = requestAnimationFrame(() => { v.raf = 0; update(tab); });
+  v.raf = requestAnimationFrame(() => { v.raf = 0; const t = holderOf(v); if (t) update(t); });
 }
 
 function update(tab) {
@@ -453,20 +522,23 @@ const queue = [];
 let running = 0;
 const MAX_RUNNING = 2;
 
+// Jobs name the view, not the holder: a pane focus swap may hand the view to the other holder.
 function enqueue(tab, i) {
-  if (queue.some((j) => j.tab === tab && j.i === i)) return;
-  if (tab.view.ps[i].task) return;
-  queue.push({ tab, i });
+  const v = tab.view;
+  if (queue.some((j) => j.v === v && j.i === i)) return;
+  if (v.ps[i].task) return;
+  queue.push({ v, i });
   pump();
 }
 
 function pump() {
   while (running < MAX_RUNNING && queue.length) {
     const job = queue.shift();
-    if (job.tab.view?.destroyed || !live(job.tab)) continue;
+    const tab = holderOf(job.v);
+    if (job.v.destroyed || !tab || !live(tab)) continue;
     running++;
-    renderPage(job.tab, job.i)
-      .catch((err) => reportRenderError(job.tab, job.i, err))
+    renderPage(tab, job.i)
+      .catch((err) => reportRenderError(tab, job.i, err))
       .finally(() => { running--; pump(); });
   }
 }
@@ -511,9 +583,11 @@ async function renderPage(tab, i) {
   } finally {
     if (ps.task === task) ps.task = null;
   }
+  // Re-resolve the holder after each await: a pane focus swap moves the view to the other one.
+  tab = owner.get(v.scrollEl) ?? tab;
   if (v.destroyed || tab.view !== v || cssScale(tab) !== scale || totalRotation(tab, i) !== vp.rotation) {
     freeCanvas(canvas);
-    schedule(tab);
+    if (tab.view && !tab.view.destroyed) schedule(tab);
     return;
   }
   const pageEl = v.pageEls[i];
@@ -526,6 +600,7 @@ async function renderPage(tab, i) {
   const tlDiv = h('div.textLayer');
   const tl = new pdfjs.TextLayer({ textContentSource: textContent, container: tlDiv, viewport: vp });
   await tl.render();
+  tab = owner.get(v.scrollEl) ?? tab;
   if (tab.view !== v || ps.canvas !== canvas) { tl.cancel?.(); return; }
   ps.textLayerDiv?.remove();
   canvas.after(tlDiv);
@@ -533,6 +608,7 @@ async function renderPage(tab, i) {
   ps.textLayerDiv = tlDiv;
 
   await renderLinks(tab, i, vp);
+  tab = owner.get(v.scrollEl) ?? tab;
   // Released (or re-rendered) while the text/link layers were awaited: not ours to mark.
   if (tab.view !== v || ps.canvas !== canvas) return;
   ps.rendered = true;
@@ -558,7 +634,8 @@ function setLinkStatus(text) {
 }
 
 async function renderLinks(tab, i, vp) {
-  const ps = tab.view.ps[i];
+  const v = tab.view;
+  const ps = v.ps[i];
   ps.linkLayer.replaceChildren();
   let annots = [];
   try { annots = await tab.pages[i].getAnnotations({ intent: 'display' }); } catch { return; }
@@ -590,6 +667,7 @@ async function renderLinks(tab, i, vp) {
       e.preventDefault();
       if (down?.defaultPrevented || !LINK_TOOLS.has(state.tool)) return;
       setLinkStatus('');
+      tab = holderOf(v) ?? tab; // the pane's holder now (its pointerdown may have swapped them)
       if (url) showExternalLink(url);
       else if (a.dest) goToDest(tab, a.dest);
       else if (a.action === 'NextPage') viewer.nextPage(tab);
@@ -675,6 +753,7 @@ function deactivate(tab) {
 }
 
 function destroy(tab) {
+  dropSecondary(tab);
   const v = tab.view;
   if (!v) return;
   v.destroyed = true;
@@ -707,6 +786,8 @@ async function reload(tab) {
   if (!current()) { destroyDoc(loaded.doc); return; }
   saveScroll(tab);
   const keep = tab.scrollState;
+  const sec = secs.get(tab);
+  if (sec?.view) { saveScroll(sec); for (let i = 0; i < sec.view.ps.length; i++) release(sec, i); }
   const oldDoc = tab.pdfDoc;
   for (let i = 0; i < tab.view.ps.length; i++) release(tab, i);
   tab.textCache = new Map();
@@ -715,6 +796,11 @@ async function reload(tab) {
   if (keep && tab.id === state.activeId) {
     tab.scrollState = { ...keep, pageIndex: Math.min(keep.pageIndex, tab.numPages - 1) };
     restoreScroll(tab);
+  }
+  if (sec?.view && secs.get(tab) === sec) {
+    sec.currentPage = Math.min(sec.currentPage, tab.numPages - 1);
+    build(sec);
+    if (sec.scrollState) { sec.scrollState.pageIndex = Math.min(sec.scrollState.pageIndex, tab.numPages - 1); restoreScroll(sec); }
   }
   destroyDoc(oldDoc);
   schedule(tab);
