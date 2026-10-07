@@ -171,6 +171,25 @@ try {
   check(JSON.stringify(got) === JSON.stringify(exp), `saved values ${JSON.stringify(got)} != ${JSON.stringify(exp)}`);
   check(!(await ev('return tab.dirty;')), 'tab still dirty after save');
 
+  // Page operation, fill, save, then undo the page operation: the undo snapshot predates the
+  // save, so the filled value must survive outside tab.bytes and be written by the next save.
+  step = 'undo page change after save';
+  const reloaded = () => page.waitForFunction(() => { const t = window.ashStudio.state.tabs[0]; return !!t.forms && document.querySelectorAll('.form-layer .form-ctl').length >= 10; }, null, { timeout: 10_000 });
+  await ev('await app.pageTools.rotate(tab, [1], 90);');
+  await page.waitForFunction(() => window.ashStudio.state.tabs[0].pages?.[1]?.rotate === 180, null, { timeout: 10_000 });
+  await reloaded();
+  await page.fill('[data-field="name"]', 'After rotate');
+  check(await ev('return await app.saveTab(tab, false);'), 'saveTab after rotate returned false');
+  check(await ev('return await app.pageTools.undo(tab);'), 'page undo returned false');
+  await reloaded();
+  await page.waitForFunction(() => window.ashStudio.state.tabs[0].pages?.[1]?.rotate === 90, null, { timeout: 10_000 });
+  await settle();
+  check((await page.inputValue('[data-field="name"]')) === 'After rotate', `name field after undo: ${await page.inputValue('[data-field="name"]')}`);
+  check(await ev('return await app.saveTab(tab, false);'), 'saveTab after undo returned false');
+  const resaved = (await PDFDocument.load(Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));')))).getForm();
+  check(resaved.getTextField('name').getText() === 'After rotate', `saved name after undo: ${resaved.getTextField('name').getText()}`);
+  check(resaved.getDropdown('colour').getSelected()[0] === 'Green', 'saved colour lost after undo');
+
   step = 'flatten';
   await page.click('.forms-bar-flatten');
   await page.click('.dialog button[data-value="flatten"]');
