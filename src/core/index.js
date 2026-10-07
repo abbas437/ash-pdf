@@ -4,3 +4,4 @@ export { flattenObjects, measureText, sanitizeText, standardFontName } from './a
 export { listFields, fillFields, flattenForm } from './forms.js';
 export { pageGeometry, pdfToVisible, visibleUpMatrix } from './internal.js';
 export { detectSignatures } from './signatures.js';
+export { writeAnnotations, readAnnotations } from './annots.js';
