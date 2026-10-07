@@ -122,6 +122,6 @@ export async function imageDialog(tab = activeTab()) {
 
 export function initExports(app) {
   const enabled = () => !!activeTab()?.pdfDoc;
-  app.registerMenuItem('File', { id: 'export-xlsx', label: 'Export to Excel workbook (.xlsx)…', action: () => excelDialog(), enabled });
-  app.registerMenuItem('File', { id: 'export-image', label: 'Export page as image (PNG/JPEG)…', action: () => imageDialog(), enabled });
+  app.registerMenuItem('File', { id: 'export-xlsx', label: 'Export to Excel…', action: () => excelDialog(), enabled });
+  app.registerMenuItem('File', { id: 'export-image', label: 'Export to image…', action: () => imageDialog(), enabled });
 }

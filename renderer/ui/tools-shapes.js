@@ -5,7 +5,7 @@ import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
-import { registerTool, setTool } from './toolbar.js';
+import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { annotations, selectHandlers } from './annotations.js';
 
 const SHAPES = [
@@ -151,9 +151,9 @@ export function initShapeTools() {
     if (e.ctrlKey || e.metaKey || e.altKey || dialogOpen() || isTyping(e.target) || !activeTab()) return;
     const k = e.key.toLowerCase();
     const shape = SHAPES.find((s) => s[2].toLowerCase() === k);
-    if (shape) { e.preventDefault(); shapeKind = shape[0]; setTool('shapes'); setTool('shapes'); return; }
+    if (shape) { e.preventDefault(); const again = state.tool === 'shapes' && shapeKind === shape[0]; shapeKind = shape[0]; if (again) setTool('select'); else { setTool('shapes'); setTool('shapes'); } return; }
     const tool = { v: 'select', p: 'draw', h: 'highlight', w: 'whiteout' }[k];
-    if (tool) { e.preventDefault(); setTool(tool); }
+    if (tool) { e.preventDefault(); toggleTool(tool); }
   });
 }
 

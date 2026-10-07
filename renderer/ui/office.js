@@ -50,6 +50,6 @@ export function initOffice(app) {
     app.registerMenuItem('File', it);
   };
   app.registerMenuItem('File', { separator: true });
-  item({ id: 'export-docx', label: 'Export to Word document (.docx)…', action: () => exportDocx() }, true);
-  item({ id: 'office-to-pdf', label: 'Create PDF from Office file…', action: () => officeToPdf(app) }, false);
+  item({ id: 'export-docx', label: 'Export to Word…', action: () => exportDocx() }, true);
+  item({ id: 'office-to-pdf', label: 'Create PDF from Office…', action: () => officeToPdf(app) }, false);
 }
