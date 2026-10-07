@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Toolbar UX e2e: tool groups, second click returns to Select, one-row toolbar with More overflow,
-// no "next build" placeholders, short single-line File menu items. Prints "E2E OK" on success.
+// Toolbar UX e2e: tool groups, second click returns to Select, Pages and Split dropdowns (mouse and
+// keyboard, also inside More), one-row toolbar with More overflow, no "next build" placeholders, short single-line File menu items. Prints "E2E OK" on success.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -40,10 +40,14 @@ try {
   const tool = () => page.evaluate(() => window.ashStudio.state.tool);
 
   step = 'groups';
+  await page.setViewportSize({ width: 1600, height: 800 }); // wide enough that nothing overflows into More
+  await settle(); await settle();
   const groups = await page.$$eval('.tb-tools > .tb-tg', (gs) => gs.filter((g) => g.children.length).map((g) => g.getAttribute('aria-label')));
-  check(JSON.stringify(groups) === JSON.stringify(['Navigate', 'Edit', 'Comment', 'Stamp and sign']), `groups: ${groups}`);
+  check(JSON.stringify(groups) === JSON.stringify(['Navigate', 'Pages', 'View', 'Edit', 'Comment', 'Stamp and sign']), `groups: ${groups}`);
   const inGroup = await page.$$eval('.tb-tg', (gs) => Object.fromEntries(gs.map((g) => [g.dataset.group, [...g.children].map((c) => c.dataset.tbItem)])));
-  check(inGroup.navigate.join() === 'select,hand' && inGroup.edit[0] === 'text' && inGroup.comment.includes('highlight') && inGroup.sign.join() === 'stamp,sign', `group members: ${JSON.stringify(inGroup)}`);
+  check(inGroup.navigate.join() === 'select,hand' && inGroup.edit[0] === 'text' && inGroup.comment.includes('highlight') && inGroup.sign.join() === 'stamp,sign' && inGroup.pages.join() === 'pages' && inGroup.view.join() === 'split', `group members: ${JSON.stringify(inGroup)}`);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await settle(); await settle();
 
   step = 'second click returns to Select';
   await page.click('.tb-btn[data-tool="highlight"]');
@@ -58,6 +62,62 @@ try {
   check((await tool()) === 'draw', 'P selects Draw');
   await page.keyboard.press('p');
   check((await tool()) === 'select', `P twice: tool ${await tool()}`);
+
+  // Opens dropdown #id (via More when it has overflowed) and picks item data-id=item.
+  const inMore = (id) => page.evaluate((s) => !!document.querySelector(s).closest('.tb-more-panel'), `#${id}`);
+  const pick = async (id, item) => {
+    if (await inMore(id)) await page.click('.tb-more-btn');
+    await page.click(`#${id}`);
+    await page.click(`#${id} + .tb-dd-menu .menu-item[data-id="${item}"]`);
+  };
+  const tabInfo = () => page.evaluate(() => { const t = window.ashStudio.state.tabs[0]; return { n: t.numPages, rot: t.pages?.[0]?.rotate }; });
+  const pressed = () => page.getAttribute('#btn-split', 'aria-pressed');
+  const panes = () => page.evaluate(() => [...document.querySelectorAll('.viewer-scroll[data-pane]')].filter((el) => !el.hidden).length);
+
+  step = 'Pages > Rotate right';
+  check((await tabInfo()).rot === 0, `page 1 rotation before: ${(await tabInfo()).rot}`);
+  await pick('btn-pages', 'rotate-right');
+  await page.waitForFunction(() => window.ashStudio.state.tabs[0].pages?.[0]?.rotate === 90, null, { timeout: 10_000 }).catch(() => {});
+  check((await tabInfo()).rot === 90, `page 1 rotation after Rotate right: ${(await tabInfo()).rot}`);
+
+  step = 'Pages > Insert blank page';
+  await pick('btn-pages', 'insert-blank');
+  await page.waitForFunction(() => window.ashStudio.state.tabs[0].numPages === 3, null, { timeout: 10_000 }).catch(() => {});
+  check((await tabInfo()).n === 3, `pages after Insert blank page: ${(await tabInfo()).n}`);
+
+  step = 'Split > Split vertically';
+  check((await pressed()) === 'false', `Split pressed before splitting: ${await pressed()}`);
+  await pick('btn-split', 'split-v');
+  await page.waitForFunction(() => document.querySelector('.viewer-host.split.split-v'), null, { timeout: 5_000 }).catch(() => {});
+  check((await panes()) === 2, `panes after Split vertically: ${await panes()}`);
+  check((await pressed()) === 'true', `Split not pressed while split: ${await pressed()}`);
+
+  step = 'Split > Unsplit';
+  await pick('btn-split', 'unsplit');
+  check(!(await page.$('.viewer-host.split')) && (await panes()) === 0, `still split after Unsplit (${await panes()} panes)`);
+  check((await pressed()) === 'false', `Split still pressed after Unsplit: ${await pressed()}`);
+
+  step = 'dropdown keyboard';
+  const focused = () => page.evaluate(() => document.activeElement?.dataset.id ?? document.activeElement?.id ?? '');
+  const menuOpen = (id) => page.evaluate((s) => !document.querySelector(s).hidden, `#${id} + .tb-dd-menu`);
+  const keys = async (id) => {
+    await page.focus(`#${id}`);
+    for (const k of ['Enter', ' ', 'ArrowDown']) {
+      await page.keyboard.press(k);
+      check(await menuOpen(id), `${id}: ${k} did not open the menu`);
+      const first = await focused();
+      check(first && first !== id, `${id}: ${k} left focus on ${first}`);
+      await page.keyboard.press('ArrowDown');
+      const second = await focused();
+      check(second && second !== first, `${id}: ArrowDown did not move (${first} -> ${second})`);
+      await page.keyboard.press('ArrowUp');
+      check((await focused()) === first, `${id}: ArrowUp did not move back`);
+      await page.keyboard.press('Escape');
+      check(!(await menuOpen(id)) && (await focused()) === id, `${id}: Esc did not close to the button`);
+    }
+  };
+  await keys('btn-pages');
+  await keys('btn-split');
 
   step = 'one row with labels';
   const row = () => page.evaluate(() => {
@@ -75,6 +135,17 @@ try {
   check(r.more && r.inMore > 0, `900: More button missing or empty ${JSON.stringify(r)}`);
   await page.click('.tb-more-btn');
   check(await page.locator('.tb-more-panel').isVisible(), 'More panel did not open');
+
+  step = 'dropdown keyboard inside More';
+  check(await inMore('btn-split'), 'at 900 px Split is not in More');
+  await keys('btn-split');
+  check(await page.locator('.tb-more-panel').isVisible(), 'Esc in the Split menu also closed More');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter'); // Split vertically from the keyboard, inside More
+  await page.waitForFunction(() => document.querySelector('.viewer-host.split.split-v'), null, { timeout: 5_000 }).catch(() => {});
+  check((await panes()) === 2 && (await pressed()) === 'true', `keyboard Split vertically in More: ${await panes()} panes, pressed ${await pressed()}`);
+  await pick('btn-split', 'unsplit');
+  check((await panes()) === 0, 'Unsplit from More');
   await page.setViewportSize({ width: 1280, height: 800 });
   await settle(); await settle();
 

@@ -12,13 +12,16 @@ let barEl = null;
 let moreWrap = null, morePanel = null, moreBtn = null;
 
 // Tool groups, left to right; ids not listed here go to Edit. Items keep this order in every group.
+// Pages and View (Split) come early so they are the last to overflow into More.
 const GROUPS = [
   ['navigate', 'Navigate', ['select', 'hand']],
+  ['pages', 'Pages', ['pages']],
+  ['view', 'View', ['split']],
   ['edit', 'Edit', ['text', 'image', 'whiteout', 'forms']],
   ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes']],
   ['sign', 'Stamp and sign', ['stamp', 'sign']],
 ];
-const groupOf = (id) => GROUPS.find((g) => g[2].includes(id)) ?? GROUPS[1];
+const groupOf = (id) => GROUPS.find((g) => g[2].includes(id)) ?? GROUPS.find((g) => g[0] === 'edit');
 
 /** Icon button: btn('open', 'Open (Ctrl+O)', onClick, {id}) */
 export function btn(iconName, label, onClick, props = {}) {
@@ -155,31 +158,52 @@ export function addToolbarItem(key, el) {
   return el;
 }
 
+const CARET = '<svg class="icon tb-dd-caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><path d="M2 3.5l3 3 3-3"/></svg>';
+
 /**
- * Toolbar button with a dropdown menu. items() is called on each open and returns
- * [{id, label, action, enabled?: () => bool} | {separator: true}]. Returns {wrap, button, close}.
+ * Toolbar button (icon, visible label, caret) with a dropdown menu. items() is called on each open
+ * and returns [{id, label, action, enabled?: () => bool} | {separator: true}]. Keyboard: Enter, Space
+ * or ArrowDown opens it on the first item; ArrowUp/ArrowDown/Home/End move; Esc closes back to the
+ * button; Tab away closes. Returns {wrap, button, close}.
  */
 export function dropdownButton({ id, icon: ic, label, title = label, items }) {
-  const button = h('button.tb-btn.tb-dd-btn', { type: 'button', id, title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': 'false', html: icon(ic) });
+  const button = h('button.tb-btn.tb-dd-btn', { type: 'button', id, title, 'aria-label': title, 'aria-haspopup': 'menu', 'aria-expanded': 'false',
+    html: `${icon(ic)}<span class="tb-dd-label">${label}</span>${CARET}` });
   const menu = h('div.menu.tb-dd-menu', { role: 'menu', 'aria-label': label, hidden: true });
   const wrap = h('div.tb-dd', {}, button, menu);
-  const close = (focus) => { menu.hidden = true; button.setAttribute('aria-expanded', 'false'); if (focus) button.focus(); };
+  const close = (focus) => {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    menu.replaceChildren(); // hidden items must not join the toolbar's arrow-key roving
+    button.setAttribute('aria-expanded', 'false');
+    if (focus) button.focus();
+  };
   const open = (focus) => {
     menu.replaceChildren(...items().map((it) => (it.separator ? h('div.menu-sep', { role: 'separator' })
-      : h('button.menu-item', { type: 'button', role: 'menuitem', dataset: { id: it.id }, disabled: it.enabled ? !it.enabled() : false, onclick: () => { close(); showMore(false); it.action(); } },
+      : h('button.menu-item', { type: 'button', role: 'menuitem', tabindex: '-1', dataset: { id: it.id }, disabled: it.enabled ? !it.enabled() : false, onclick: () => { close(); showMore(false); it.action(); } },
         h('span', {}, it.label), h('kbd', {}, it.shortcut ?? '')))));
     menu.hidden = false;
     button.setAttribute('aria-expanded', 'true');
     if (focus) menu.querySelector('button:not([disabled])')?.focus();
   };
   button.onclick = () => (menu.hidden ? open() : close());
-  button.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown') { e.preventDefault(); open(true); } });
+  button.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); open(true); }
+    else if (e.key === 'Escape' && !menu.hidden) { e.preventDefault(); e.stopPropagation(); close(true); }
+  });
   menu.addEventListener('keydown', (e) => {
     const list = [...menu.querySelectorAll('button:not([disabled])')];
     const k = list.indexOf(document.activeElement);
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); close(true); }
-    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); list[(k + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length]?.focus(); }
+    const go = (i) => list[(i + list.length) % list.length]?.focus();
+    if (e.key === 'Escape') close(true);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') go(k + (e.key === 'ArrowDown' ? 1 : -1));
+    else if (e.key === 'Home' || e.key === 'End') go(e.key === 'Home' ? 0 : -1);
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { /* stay in the menu */ }
+    else return;
+    e.preventDefault();
+    e.stopPropagation();
   });
+  wrap.addEventListener('focusout', (e) => { if (!wrap.contains(e.relatedTarget)) close(); });
   document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !wrap.contains(e.target)) close(); }, true);
   return { wrap, button, close };
 }
@@ -231,7 +255,9 @@ function layout() {
 const OBS = { subtree: true, childList: true, attributes: true, attributeFilter: ['data-label', 'hidden', 'class'] };
 function watchOverflow(container) {
   new ResizeObserver(scheduleLayout).observe(container);
-  observer = new MutationObserver(scheduleLayout);
+  // Opening or filling a dropdown menu changes no widths; relaying out then would move a menu that
+  // sits in the More panel and drop its focus.
+  observer = new MutationObserver((recs) => { if (recs.some((r) => !r.target.closest?.('.tb-dd-menu'))) scheduleLayout(); });
   observer.observe(container, OBS);
   observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
 }

@@ -71,6 +71,7 @@ function splitOn(dir) {
   }
   split.dir = dir;
   apply();
+  bus.emit('split:changed', { split: true, dir });
 }
 
 /** Show tab `id` in pane k (0 = first, 1 = second). The other pane's tab: the same document twice. */
@@ -188,6 +189,7 @@ function unsplit() {
   if (!split) return;
   const ids = split.ids;
   split = null;
+  bus.emit('split:changed', { split: false });
   for (const t of state.tabs) viewer.dropSecondary(t); // the focused pane (the tab's own view) stays
   viewer.setShown([]);
   host.classList.remove('split', 'split-v', 'split-h');
