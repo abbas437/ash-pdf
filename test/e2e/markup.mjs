@@ -77,7 +77,8 @@ try {
     return { box: { x0: Math.min(pts[0].x, pts[1].x), y0: Math.min(pts[0].y, pts[1].y), x1: Math.max(pts[0].x, pts[1].x), y1: Math.max(pts[0].y, pts[1].y) },
       dir: [p1.x - p0.x, p1.y - p0.y], from: [fx - dx * (ext(f) / 2 - 1), fy - dy * (ext(f) / 2 - 1)], to: [lx + dx * (ext(l) / 2 - 1), ly + dy * (ext(l) / 2 - 1)] };`, [i, w]);
   const markWord = async (tool, i, w) => {
-    await page.click(`[data-tool="${tool}"]`);
+    // A second click on the active tool turns it off (back to Select), so click only when it is not active.
+    if (!(await page.$(`[data-tool="${tool}"][aria-pressed="true"]`))) await page.click(`[data-tool="${tool}"]`);
     const W = await word(i, w);
     await page.mouse.move(...W.from); await page.mouse.down(); await page.mouse.move(...W.to, { steps: 8 }); await page.mouse.up();
     await page.waitForTimeout(50);

@@ -90,7 +90,8 @@ try {
     step = `callout ${sc.name}`;
     await ev('v.setZoom(tab, arg.zoom); if (tab.viewRotation !== arg.rot) v.rotateView(tab, arg.rot - tab.viewRotation);', sc);
     await scroll(sc.pageIndex);
-    await key('c');
+    // C on the active Callout tool turns it off (back to Select), so press it only when Callout is not active.
+    if (await ev('return app.state.tool;') !== 'callout') await key('c');
     check(await ev('return app.state.tool;') === 'callout', 'C did not pick Callout');
     const ca = await toClient(sc.pageIndex, ...sc.T), cb = await toClient(sc.pageIndex, ...sc.B);
     const pa = await toPage(ca), pb = await toPage(cb);
