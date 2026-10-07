@@ -4,6 +4,7 @@
 import {
   PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFNumber, PDFString, PDFHexString, PDFStream,
   PDFRawStream, PDFObjectCopier, decodePDFRawStream, BlendMode, rgb,
+  pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError } from './internal.js';
 import { flattenObjects, measureText, standardFontName } from './annotate.js';
@@ -647,6 +648,79 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     for (const x of extras) page.node.addAnnot(x);
   });
   if (touched) collectGarbage(doc);
+  return saveEdited(doc);
+}
+
+// ---------------------------------------------------------------- flattenAnnotations
+
+const HIDDEN = 2 | 32; // /F Hidden | NoView: not displayed, so nothing to burn in
+
+/** The normal appearance stream of an annotation as {ref, stream}, or null (none, or /AS names no state). */
+function normalAppearance(doc, dict) {
+  const ap = dict.lookup(N('AP'));
+  if (!(ap instanceof PDFDict)) return null;
+  let raw = ap.get(N('N'));
+  let v = doc.context.lookup(raw);
+  if (v instanceof PDFDict && !(v instanceof PDFStream)) {
+    const as = nameOf(dict.lookup(N('AS')));
+    if (!as) return null;
+    raw = v.get(N(as));
+    v = doc.context.lookup(raw);
+  }
+  if (!(v instanceof PDFStream)) return null;
+  return { ref: raw instanceof PDFRef ? raw : doc.context.register(v), stream: v };
+}
+
+/**
+ * PDF 32000 §12.5.5: the form's /BBox transformed by its /Matrix, mapped onto /Rect by matrix A.
+ * Returns A, or null for a degenerate box.
+ */
+function appearanceMatrix(stream, rect) {
+  const nums = (key) => {
+    const v = stream.dict.lookup(N(key));
+    return v instanceof PDFArray ? v.asArray().map((x) => stream.dict.context.lookup(x).asNumber()) : null;
+  };
+  const bb = nums('BBox');
+  if (!bb || bb.length !== 4) return null;
+  const [a, b, c, d, e, f] = nums('Matrix') || [1, 0, 0, 1, 0, 0];
+  const pts = [[bb[0], bb[1]], [bb[2], bb[1]], [bb[0], bb[3]], [bb[2], bb[3]]].map(([x, y]) => [a * x + c * y + e, b * x + d * y + f]);
+  const [x1, y1, x2, y2] = bboxOf(pts);
+  const R = [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])];
+  if (x2 - x1 <= 0 || y2 - y1 <= 0) return null;
+  const sx = (R[2] - R[0]) / (x2 - x1);
+  const sy = (R[3] - R[1]) / (y2 - y1);
+  return [sx, 0, 0, sy, R[0] - x1 * sx, R[1] - y1 * sy];
+}
+
+/**
+ * Burn markup annotations' normal appearances into the page content and remove them (with their
+ * popups and replies). `pages` = page indices, `ids` = annotation ids (as readAnnotations reports
+ * them); both default to everything. Widgets, Links and other non-markup annotations are untouched.
+ */
+export async function flattenAnnotations(pdfBytes, { pages: pageSel, ids } = {}) {
+  const doc = await loadPdf(pdfBytes);
+  const pages = doc.getPages();
+  const pageSet = pageSel ? new Set(pageSel) : null;
+  const idSet = ids ? new Set(ids) : null;
+  const sc = scan(doc);
+  const targets = sc.markups.filter((en) => (!pageSet || pageSet.has(en.page)) && (!idSet || idSet.has(en.id)));
+  if (!targets.length) return pdfBytes;
+  for (const en of targets) {
+    const flags = en.dict.lookup(N('F'));
+    if (flags instanceof PDFNumber && flags.asNumber() & HIDDEN) continue;
+    const ap = normalAppearance(doc, en.dict);
+    const rect = readNums(en.dict, 'Rect');
+    if (!ap || !rect || rect.length !== 4 || !rect.every(Number.isFinite)) continue;
+    const A = appearanceMatrix(ap.stream, rect);
+    if (!A) continue;
+    const page = pages[en.page];
+    const name = page.node.newXObject('ASHFlat', ap.ref);
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...A.map(r4)), drawObject(name), popGraphicsState());
+  }
+  const kill = new Set(targets);
+  for (const en of targets) dependents(sc, en).forEach((d) => kill.add(d));
+  dropFromAnnots(doc, [...kill]);
+  collectGarbage(doc);
   return saveEdited(doc);
 }
 

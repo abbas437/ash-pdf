@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument, PDFName, PDFArray, PDFHexString } from 'pdf-lib';
-import { writeAnnotations, readAnnotations } from '../src/core/annots.js';
-import { makePdf, makeGeometryFixture, makeImage, near, pdfjsDoc } from './helpers.js';
+import { writeAnnotations, readAnnotations, flattenAnnotations } from '../src/core/annots.js';
+import { makePdf, makeGeometryFixture, makeImage, near, pdfjsDoc, renderPage, isColor } from './helpers.js';
 
 const NOW = '2026-10-07T10:00:00.000Z';
 const OPTS = { author: 'Ahmad', now: NOW };
@@ -180,3 +180,119 @@ describe('pdf.js sees the written annotations', () => {
   });
 });
 
+
+// ---------------------------------------------------------------- flattenAnnotations and edge cases
+
+const RED = [255, 0, 0];
+const WHITE = [255, 255, 255];
+
+async function annotCount(bytes, pageIndex = 0) {
+  const doc = await PDFDocument.load(bytes);
+  return annotDicts(doc, pageIndex).length;
+}
+
+async function opsOf(bytes, pageIndex = 0) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const doc = await pdfjsDoc(bytes);
+  const ol = await (await doc.getPage(pageIndex + 1)).getOperatorList({ annotationMode: pdfjs.AnnotationMode.DISABLE });
+  await doc.close();
+  return { fn: ol.fnArray, OPS: pdfjs.OPS };
+}
+
+/** Page with hand-made foreign annotations: rotated-Matrix AP, /AS state dict, direct (non-ref) dict, Link, Widget. */
+async function foreignFlattenFixture() {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const ctx = doc.context;
+  const blue = (bbox, matrix) => ctx.register(ctx.stream(`0 0 1 rg ${bbox.join(' ')} re f`, { Type: 'XObject', Subtype: 'Form', BBox: bbox, ...(matrix ? { Matrix: matrix } : {}) }));
+  // BBox [0 0 20 10] rotated 90deg by /Matrix -> transformed box x[-10,0] y[0,20]; must fill /Rect [100 400 200 600]
+  const sq = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [100, 400, 200, 600], NM: PDFHexString.fromText('rot'), AP: { N: blue([0, 0, 20, 10], [0, 1, -1, 0, 0, 0]) } }));
+  const off = ctx.register(ctx.stream('1 0 0 rg 0 0 10 10 re f', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 10, 10] }));
+  const st = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Stamp', Rect: [300, 400, 350, 450], NM: PDFHexString.fromText('state'), AS: 'On', AP: { N: { On: blue([0, 0, 10, 10]), Off: off } } }));
+  const direct = ctx.obj({ Type: 'Annot', Subtype: 'Circle', Rect: [400, 100, 450, 150], AP: { N: blue([0, 0, 50, 50]) } });
+  const link = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Link', Rect: [10, 10, 60, 30], Border: [0, 0, 0] }));
+  const widget = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Widget', FT: 'Btn', T: PDFHexString.fromText('w'), Rect: [10, 700, 60, 730] }));
+  page.node.set(PDFName.of('Annots'), ctx.obj([sq, st, direct, link, widget]));
+  return doc.save();
+}
+
+describe('flattenAnnotations', () => {
+  test('rotated page: appearance burned in at the same place, annotation + popup + replies + status removed', async () => {
+    const src = await makeGeometryFixture(90);
+    const objs = [
+      { id: 'r', page: 0, type: 'rect', x: 40, y: 50, w: 80, h: 30, stroke: '#ff0000', fill: '#ff0000', strokeWidth: 2, replies: [{ id: 'r-1', author: 'Bob', text: 'ok' }], status: 'rejected' },
+      { id: 'n', page: 0, type: 'note', x: 200, y: 200, note: 'hi' },
+    ];
+    const written = await writeAnnotations(src, { add: objs }, OPTS);
+    assert.equal(await annotCount(written), 4 + 1, 'rect, reply, status, note, popup');
+    const before = await renderPage(written);
+    assert.ok(isColor(before.sample(80, 65), RED), 'annotation renders red before flattening');
+    const out = await flattenAnnotations(written);
+    assert.equal(await annotCount(out), 0);
+    assert.deepEqual(await readAnnotations(out), { objects: [], skipped: [] });
+    const after = await renderPage(out);
+    assert.ok(isColor(after.sample(80, 65), RED), 'burned-in content renders red at the same visible spot');
+    assert.ok(isColor(after.sample(80, 150), WHITE), 'nothing outside the box');
+    const { fn, OPS } = await opsOf(out);
+    assert.ok(fn.includes(OPS.paintFormXObjectBegin), 'page content paints the appearance XObject');
+  });
+
+  test('BBox x Matrix is mapped onto /Rect; /AS state; direct dicts; Link and Widget untouched', async () => {
+    const out = await flattenAnnotations(await foreignFlattenFixture());
+    const doc = await PDFDocument.load(out);
+    assert.deepEqual(annotDicts(doc).map((d) => d.lookup(PDFName.of('Subtype')).decodeText()), ['Link', 'Widget']);
+    const px = await renderPage(out);
+    const BLUE = [0, 0, 255];
+    for (const [x, y] of [[105, 792 - 405], [195, 792 - 595], [150, 792 - 500]]) assert.ok(isColor(px.sample(x, y), BLUE), `rotated AP fills Rect at ${x},${y}`);
+    assert.ok(isColor(px.sample(150, 792 - 620), WHITE), 'nothing above Rect');
+    assert.ok(isColor(px.sample(325, 792 - 425), BLUE), '/AS /On state drawn, not /Off');
+    assert.ok(isColor(px.sample(425, 792 - 125), BLUE), 'direct annotation dict flattened');
+  });
+
+  test('pages and ids select what is flattened', async () => {
+    const src = await makePdf(2);
+    const box = (id, page, x) => ({ id, page, type: 'rect', x, y: 50, w: 40, h: 40, stroke: '#ff0000' });
+    const written = await writeAnnotations(src, { add: [box('a', 0, 40), box('b', 0, 140), box('c', 1, 40)] }, OPTS);
+    const byPage = await flattenAnnotations(written, { pages: [1] });
+    assert.deepEqual((await readAnnotations(byPage)).objects.map((o) => o.id).sort(), ['a', 'b']);
+    const byId = await flattenAnnotations(written, { ids: ['b'] });
+    assert.deepEqual((await readAnnotations(byId)).objects.map((o) => o.id).sort(), ['a', 'c']);
+    assert.equal(await flattenAnnotations(written, { ids: ['nope'] }), written, 'nothing selected -> input returned');
+  });
+});
+
+describe('writeAnnotations edge cases', () => {
+  for (const status of ['rejected', 'cancelled', 'completed', 'none']) {
+    test(`status "${status}" round trips`, async () => {
+      const out = await writeAnnotations(await makePdf(1), { add: [{ id: 'r', page: 0, type: 'rect', x: 10, y: 10, w: 20, h: 20, status }] }, OPTS);
+      const [o] = (await readAnnotations(out)).objects;
+      assert.equal(o.status, status);
+    });
+  }
+
+  test('multi-stroke ink keeps every stroke (write, read, appearance)', async () => {
+    const paths = [[[30, 40], [80, 40]], [[30, 90], [80, 90], [80, 130]]];
+    const out = await writeAnnotations(await makePdf(1), { add: [{ id: 'k', page: 0, type: 'ink', points: paths[0], paths, stroke: '#ff0000', strokeWidth: 4 }] }, OPTS);
+    const [o] = (await readAnnotations(out)).objects;
+    assert.equal(o.paths.length, 2);
+    paths.forEach((p, i) => p.forEach(([x, y], k) => { near(o.paths[i][k][0], x, 0.01, `s${i}p${k}x`); near(o.paths[i][k][1], y, 0.01, `s${i}p${k}y`); }));
+    const flat = await renderPage(await flattenAnnotations(out));
+    assert.ok(isColor(flat.sample(55, 40), RED), 'stroke 1 drawn');
+    assert.ok(isColor(flat.sample(80, 110), RED), 'stroke 2 drawn');
+  });
+
+  test('a direct (non-reference) annotation dict is read and can be updated and removed', async () => {
+    const doc = await PDFDocument.create();
+    const page = doc.addPage([612, 792]);
+    page.node.set(PDFName.of('Annots'), doc.context.obj([doc.context.obj({ Type: 'Annot', Subtype: 'Square', Rect: [100, 100, 200, 150], C: [1, 0, 0], NM: PDFHexString.fromText('d') })]));
+    const src = await doc.save();
+    const [o] = (await readAnnotations(src)).objects;
+    assert.equal(o.id, 'd');
+    assert.equal(o.source.ref, null);
+    const upd = await writeAnnotations(src, { update: [{ ...o, w: 10 }] }, OPTS);
+    const back = (await readAnnotations(upd)).objects;
+    assert.equal(back.length, 1);
+    near(back[0].w, 10, 0.01, 'updated width');
+    assert.equal(await annotCount(await writeAnnotations(src, { remove: ['d'] }, OPTS)), 0);
+  });
+});

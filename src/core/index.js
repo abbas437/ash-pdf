@@ -5,4 +5,4 @@ export { listFields, fillFields, flattenForm } from './forms.js';
 export { pageGeometry, pdfToVisible, visibleUpMatrix } from './internal.js';
 export { addHeaderFooter, addWatermark, addBackground, addBates, removeMarks, listMarks, formatNumber, formatDate, expandTokens, MARK_KINDS } from './pagemarks.js';
 export { detectSignatures } from './signatures.js';
-export { writeAnnotations, readAnnotations } from './annots.js';
+export { writeAnnotations, readAnnotations, flattenAnnotations } from './annots.js';
