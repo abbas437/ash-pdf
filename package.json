@@ -76,8 +76,7 @@
           ]
         }
       ],
-      "icon": "build/icon.png",
-      "publisherName": "ASH Technical & Project Management Services (ASH PMCS)"
+      "icon": "build/icon.png"
     },
     "nsis": {
       "oneClick": false,

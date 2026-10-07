@@ -24,14 +24,33 @@ const MIN_DRAG_PX = 4;     // smaller drags are clicks
 const LINE_HEIGHT = 1.2;
 const FONTS = ['Helvetica', 'Times', 'Courier'];
 const FAMILY = {
-  Helvetica: 'Helvetica, Arial, "Liberation Sans", sans-serif',
-  Times: '"Times", "Times New Roman", "Liberation Serif", serif',
-  Courier: '"Courier", "Courier New", "Liberation Mono", monospace',
+  Helvetica: '"ASH Helvetica", Helvetica, Arial, "Liberation Sans", sans-serif',
+  Times: '"ASH Times", "Times", "Times New Roman", "Liberation Serif", serif',
+  Courier: '"ASH Courier", "Courier", "Courier New", "Liberation Mono", monospace',
 };
+// "ASH <font>" faces: a local look-alike with its ascent/descent overridden to the standard PDF
+// font's AFM metrics. CSS centres ascent+descent in each line box, so with the look-alike's own
+// (taller) metrics the editor's baseline sat ~0.08em below the core's firstBaseline (3 pt at 36 pt).
+const LOCAL = {
+  Helvetica: ['Helvetica', 'Arial', 'Liberation Sans', 'TeX Gyre Heros', 'Nimbus Sans'],
+  Times: ['Times', 'Times New Roman', 'Liberation Serif', 'TeX Gyre Termes', 'Nimbus Roman'],
+  Courier: ['Courier', 'Courier New', 'Liberation Mono', 'TeX Gyre Cursor', 'Nimbus Mono PS'],
+};
+function addMetricFaces() {
+  for (const font of FONTS) for (const bold of [false, true]) for (const italic of [false, true]) {
+    const { ascent, descent } = core.measureText('', { font, bold, italic, fontSize: 100 });
+    const sfx = (o) => `${bold ? ' Bold' : ''}${italic ? ` ${o}` : ''}`;
+    const names = LOCAL[font].flatMap((n) => (bold || italic ? [n + sfx('Italic'), n + sfx('Oblique')] : [n, `${n} Regular`, `${n} Roman`]));
+    const face = new FontFace(`ASH ${font}`, names.map((n) => `local("${n}")`).join(', '),
+      { weight: bold ? '700' : '400', style: italic ? 'italic' : 'normal', ascentOverride: `${ascent}%`, descentOverride: `${descent}%`, lineGapOverride: '0%', display: 'swap' });
+    document.fonts.add(face);
+    face.load().catch(() => document.fonts.delete(face));
+  }
+}
 const TEXT_KEYS = ['font', 'fontSize', 'bold', 'italic', 'color', 'align'];
 
 let core = null;
-const loadCore = () => import('../../src/core/index.js').then((m) => { core = m; return m; });
+const loadCore = () => import('../../src/core/index.js').then((m) => { core = m; addMetricFaces(); return m; });
 let editor = null;         // the open editor (one at a time)
 let editingId = null;      // text object hidden while it is being re-edited
 let replaceArmed = false;  // next drag of the Text tool is a "Replace text" rectangle
