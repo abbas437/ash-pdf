@@ -13,6 +13,7 @@ import {
   rgb,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreError } from './internal.js';
+import { calloutArrowHead } from './arrowhead.js';
 
 // ---------------------------------------------------------------- fonts & text
 
@@ -378,13 +379,17 @@ class PagePainter {
           const sx = Math.min(Math.max(o.tx, o.x), o.x + o.w);
           const sy = Math.min(Math.max(o.ty, o.y), o.y + o.h);
           if (sx !== o.tx || sy !== o.ty) {
+            const color = stroke || rgb(0, 0, 0);
+            const head = calloutArrowHead(sx, sy, o.tx, o.ty, sw);
             this.page.drawLine({
               start: { x: sx, y: this.uy(sy) },
-              end: { x: o.tx, y: this.uy(o.ty) },
+              end: { x: head.shaftEnd.x, y: this.uy(head.shaftEnd.y) },
               thickness: sw,
-              color: stroke || rgb(0, 0, 0),
+              color,
               dashArray: dashArray(o.dash, sw),
             });
+            const { tip, left, right } = head;
+            this.svg(`M ${f(tip.x)} ${f(tip.y)} L ${f(left.x)} ${f(left.y)} L ${f(right.x)} ${f(right.y)} Z`, { color, borderWidth: 0 });
           }
         }
         this.rectShape(o, { stroke, fill, strokeWidth: sw, opacity: opacityOf(o.opacity), dash: o.dash });

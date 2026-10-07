@@ -102,6 +102,17 @@ describe('flattenObjects styles and object types', () => {
     assert.ok(isColor(r.sample(240, 70), BLUE, 60), 'jpeg image pixels present');
   });
 
+  test('callout leader ends in a filled arrowhead at the tip, matching the on-screen geometry', async () => {
+    // Horizontal leader from the box's left edge (200,120) to the tip (100,120); strokeWidth 3 gives a
+    // head 12pt long and 4.8pt half-wide (calloutArrowHead), wider than the 1.5pt half-width line.
+    const obj = { id: 'c', page: 0, type: 'callout', x: 200, y: 100, w: 100, h: 40, text: 'x', tx: 100, ty: 120, stroke: '#ff0000', fill: null, strokeWidth: 3 };
+    const r = await renderPage(await flatten(await makePdf(1), [obj]), 0, 4);
+    assert.ok(isColor(r.sample(110.5, 123), RED), `head flank below the line should be red, got ${r.sample(110.5, 123)}`);
+    assert.ok(isColor(r.sample(110.5, 117), RED), `head flank above the line should be red, got ${r.sample(110.5, 117)}`);
+    assert.ok(isColor(r.sample(110.5, 125.5), WHITE), 'outside the head stays white');
+    assert.ok(isColor(r.sample(150, 123), WHITE), 'the shaft itself is no wider than the stroke');
+  });
+
   test('ink type is accepted as an alias of polyline', async () => {
     const out = await flatten(await makePdf(1), [{ id: 'i', page: 0, type: 'ink', points: [[10, 10], [50, 50]], stroke: '#000000' }]);
     assert.ok(out.length > 0);

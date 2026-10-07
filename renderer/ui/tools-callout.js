@@ -16,6 +16,7 @@ import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool } from './toolbar.js';
 import { annotations, resizeBox, dashArray } from './annotations.js';
 import { openTextEditor } from './tools-text.js';
+import { calloutArrowHead } from '../../src/core/arrowhead.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PAD = 4;            // points, same default as the core
@@ -76,11 +77,9 @@ const calloutType = {
     const stroke = paint(o.stroke ?? '#ff0000'), sw = swOf(o);
     const s = leaderStart(o);
     if (s) {
-      const dx = o.tx - s.x, dy = o.ty - s.y, len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
-      const hl = Math.min(Math.max(6, sw * 4), len), hw = hl * 0.4;
-      const bx = o.tx - ux * hl, by = o.ty - uy * hl;
-      svgEl('line', { class: 'ann-callout-leader', x1: r3(s.x), y1: r3(s.y), x2: r3(o.tx - ux * hl * 0.5), y2: r3(o.ty - uy * hl * 0.5), stroke, 'stroke-width': sw, 'stroke-dasharray': dashArray(o.dash, sw) }, g);
-      svgEl('path', { class: 'ann-callout-head', d: `M${r3(o.tx)} ${r3(o.ty)}L${r3(bx - uy * hw)} ${r3(by + ux * hw)}L${r3(bx + uy * hw)} ${r3(by - ux * hw)}Z`, fill: stroke, stroke: 'none' }, g);
+      const { tip, left, right, shaftEnd } = calloutArrowHead(s.x, s.y, o.tx, o.ty, sw);
+      svgEl('line', { class: 'ann-callout-leader', x1: r3(s.x), y1: r3(s.y), x2: r3(shaftEnd.x), y2: r3(shaftEnd.y), stroke, 'stroke-width': sw, 'stroke-dasharray': dashArray(o.dash, sw) }, g);
+      svgEl('path', { class: 'ann-callout-head', d: `M${r3(tip.x)} ${r3(tip.y)}L${r3(left.x)} ${r3(left.y)}L${r3(right.x)} ${r3(right.y)}Z`, fill: stroke, stroke: 'none' }, g);
     }
     svgEl('rect', { class: 'ann-callout-box', x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.fill === undefined ? '#ffffff' : o.fill), stroke, 'stroke-width': sw, 'stroke-dasharray': dashArray(o.dash, sw) }, g);
     if (o.text) {
