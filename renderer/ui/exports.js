@@ -1,7 +1,7 @@
 // File menu exports that run in the renderer (no Microsoft Office needed, unlike office.js):
 //   Export to Excel workbook (.xlsx)…  pdf.js text of a page range, grouped into rows and columns by
-//       table-extract.js, one worksheet "Page N" per page, plain numbers stored as numbers; written by
-//       the vendored write-excel-file and saved with api.saveFile.
+//       table-extract.js (helped by the page's ruling lines from pdf.js getOperatorList), one worksheet
+//       "Page N" per page, plain numbers stored as numbers; written by the vendored write-excel-file and saved with api.saveFile.
 //   Export page as image (PNG/JPEG)…   one page at 72/150/300 dpi; with "Include annotations", unsaved
 //       overlay objects are burnt in with the print path's flattenedCopy (viewextras.js). Saved with
 //       api.saveFile.
@@ -10,7 +10,7 @@ import { h } from './dom.js';
 import { showDialog, showError, toast } from './dialogs.js';
 import { viewer } from './viewer.js';
 import { flattenedCopy } from './viewextras.js';
-import { textItems, extractTable } from './table-extract.js';
+import { textItems, extractTable, rulesFromOps } from './table-extract.js';
 
 const ops = () => import('../../src/core/pdfOps.js');
 const baseName = (tab) => tab.name.replace(/\.pdf$/i, '');
@@ -27,7 +27,11 @@ function sheetData(rows) {
 /** Pages (0-based) -> xlsx bytes, one worksheet "Page N" per page. */
 export async function xlsxBytes(tab, indices) {
   const sheets = [];
-  for (const i of indices) sheets.push({ data: sheetData(extractTable(textItems(await viewer.getTextContent(tab, i)))), sheet: `Page ${i + 1}` });
+  for (const i of indices) {
+    let rules = null; // ruling lines give a table's columns; text alone still works without them
+    try { rules = rulesFromOps(await tab.pages[i].getOperatorList(), viewer.pdfjs.OPS); } catch { /* damaged page */ }
+    sheets.push({ data: sheetData(extractTable(textItems(await viewer.getTextContent(tab, i)), rules)), sheet: `Page ${i + 1}` });
+  }
   const { default: writeExcelFile } = await import('write-excel-file');
   const blob = await writeExcelFile(sheets).toBlob();
   return new Uint8Array(await blob.arrayBuffer());
