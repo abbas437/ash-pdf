@@ -679,6 +679,99 @@ export async function authorDialog() {
   if (v === 'ok') await setAuthor(input.value);
 }
 
+// ---------------------------------------------------------------- Reverse / Resize / Interleave
+/** "Apply to" fieldset: current page, selected pages, all pages. Returns [el, targets(dlg)]. */
+function applyTo(tab, name, preferAll) {
+  const sel = sorted(thumbs.selection).filter((i) => i < tab.numPages);
+  const el = h('fieldset.pt-fieldset', {}, h('legend', {}, 'Apply to'),
+    radio(name, 'selected', sel.length ? `Selected pages (${sel.length})` : 'Selected pages (none selected)', sel.length > 1),
+    radio(name, 'all', `All pages (${tab.numPages})`, sel.length <= 1 && preferAll),
+    preferAll ? null : radio(name, 'current', `Current page (${tab.currentPage + 1})`, sel.length <= 1));
+  if (!sel.length) el.querySelector('input[value="selected"]').disabled = true;
+  return [el, (dlg) => ({ all: range(tab.numPages), selected: sel, current: [tab.currentPage] })[radioValue(dlg, name)]];
+}
+
+export const reverseMap = (n, sel) => { const m = new Map(range(n).map((i) => [i, i])); sel.forEach((p, k) => m.set(p, sel[sel.length - 1 - k])); return m; };
+export function reverse(tab, sel) {
+  return runOp(tab, 'Reverse pages', async (bytes, n, c) => ({ bytes: await c.reversePages(bytes, sel), map: reverseMap(n, sel), select: sel.length < n ? sel : null }));
+}
+export async function reverseDialog(tab = activeTab()) {
+  if (!editable(tab)) return;
+  const [to, targets] = applyTo(tab, 'pt-rev-to', true);
+  const form = h('div.pt-form', {}, h('p.pt-hint', {}, 'The first page becomes the last. With a selection, the selected pages swap among their own positions.'), to);
+  let sel = null;
+  const v = await showDialog({
+    title: 'Reverse page order', body: form, className: 'pt-dialog',
+    buttons: [CANCEL, { label: 'Reverse', value: 'ok', primary: true, validate: (dlg) => { sel = targets(dlg); return true; } }],
+  });
+  if (v !== 'ok' || sel.length < 2) return;
+  return reverse(tab, sel);
+}
+
+const UNITS = { mm: MM, in: 72 };
+export async function resizeDialog(tab = activeTab()) {
+  if (!editable(tab)) return;
+  const err = errEl();
+  const c = await core();
+  const size = h('select.input', { id: 'pt-rs-size' }, ...Object.keys(c.PAPER_SIZES).map((k) => h('option', { value: k }, k)), h('option', { value: 'custom' }, 'Custom'));
+  const cw = h('input.input', { type: 'number', min: '1', step: 'any', value: '210', id: 'pt-rs-w' });
+  const ch = h('input.input', { type: 'number', min: '1', step: 'any', value: '297', id: 'pt-rs-h' });
+  const unit = h('select.input', { id: 'pt-rs-unit' }, h('option', { value: 'mm' }, 'mm'), h('option', { value: 'in' }, 'in'));
+  const custom = h('div.pt-margins.pt-rs-custom', {}, field('Width', cw), field('Height', ch), field('Unit', unit));
+  const sync = () => { custom.hidden = size.value !== 'custom'; };
+  size.addEventListener('change', sync); sync();
+  const [to, targets] = applyTo(tab, 'pt-rs-to', false);
+  const form = h('div.pt-form', {}, field('Page size', size), custom,
+    h('fieldset.pt-fieldset', {}, h('legend', {}, 'Orientation'), radio('pt-rs-or', 'portrait', 'Portrait', true), radio('pt-rs-or', 'landscape', 'Landscape', false)),
+    h('fieldset.pt-fieldset', {}, h('legend', {}, 'Content'),
+      radio('pt-rs-fit', 'fit', 'Scale to fit (keep proportions, centred)', true),
+      radio('pt-rs-fit', 'none', 'Do not scale (centred; may be clipped)', false)),
+    to, err);
+  let opts = null, sel = null;
+  const v = await showDialog({
+    title: 'Resize pages', body: form, className: 'pt-dialog', initialFocus: '#pt-rs-size',
+    buttons: [CANCEL, { label: 'Resize', value: 'ok', primary: true, validate: (dlg) => {
+      let w, hh;
+      if (size.value === 'custom') {
+        const f = UNITS[unit.value], max = 14400 / f; // PDF page limit: 200 in
+        for (const [inp, x] of [[cw, num(cw)], [ch, num(ch)]]) if (!(x > 0 && x <= max)) return setErr(err, `Enter a size from 1 to ${Math.round(max)} ${unit.value}.`, inp);
+        [w, hh] = [num(cw) * f, num(ch) * f];
+      } else [w, hh] = c.PAPER_SIZES[size.value];
+      if ((radioValue(dlg, 'pt-rs-or') === 'landscape') !== (w > hh)) [w, hh] = [hh, w];
+      opts = { width: w, height: hh, fit: radioValue(dlg, 'pt-rs-fit') === 'fit' };
+      sel = targets(dlg);
+      return setErr(err, null);
+    } }],
+  });
+  if (v !== 'ok') return;
+  return runOp(tab, 'Resize pages', async (bytes, n, cc) => ({ bytes: await cc.resizePages(bytes, sel, opts), map: shiftMap(n, n, 0), select: sel.length < n ? sel : null }));
+}
+
+/** A page i → i < m ? 2i : i + m, with m = min(nA, nB). */
+export const interleaveMap = (nA, nB) => new Map(range(nA).map((i) => [i, i < Math.min(nA, nB) ? 2 * i : i + Math.min(nA, nB)]));
+export async function interleaveDialog(tab = activeTab()) {
+  if (!editable(tab)) return;
+  let src = null;
+  const err = errEl();
+  const chosen = h('span.pt-file-name', { id: 'pt-il-file' }, 'No file chosen');
+  const pick = h('button.btn', { type: 'button', id: 'pt-il-pick' }, 'Choose PDF…');
+  pick.addEventListener('click', () => {
+    pickPdfs(false).then(([f]) => { if (f) { src = f; chosen.textContent = `${f.name} (${pagesLabel(f)})`; setErr(err, f.pages === tab.numPages ? null : `Page counts differ (${tab.numPages} and ${f.pages}): leftover pages are added at the end.`); } })
+      .catch((e) => setErr(err, e.message));
+  });
+  const rev = h('input', { type: 'checkbox', id: 'pt-il-rev' });
+  const form = h('div.pt-form', {},
+    h('p.pt-hint', {}, `Merges a second scan page by page: ${baseName(tab)} 1, second file 1, ${baseName(tab)} 2, second file 2, …`),
+    h('div.pt-row', {}, pick, chosen),
+    h('div.pt-radio', {}, rev, h('label', { for: rev.id }, 'Second file is in reverse order (back sides scanned last page first)')), err);
+  const v = await showDialog({
+    title: 'Interleave pages', body: form, className: 'pt-dialog', initialFocus: '#pt-il-pick',
+    buttons: [CANCEL, { label: 'Interleave', value: 'ok', primary: true, validate: () => (src ? true : setErr(err, 'Choose the PDF with the other sides.', pick)) }],
+  });
+  if (v !== 'ok') return;
+  return runOp(tab, 'Interleave pages', async (bytes, n, c) => ({ bytes: await c.interleavePdfs(bytes, src.bytes, { reverseB: rev.checked }), map: interleaveMap(n, src.pages) }));
+}
+
 // ---------------------------------------------------------------- init
 /** Wire page tools into the shell. `appApi` is the object exported as window.ashStudio. */
 export function initPageTools(appApi) {
@@ -708,9 +801,12 @@ export function initPageTools(appApi) {
   M('Edit', { id: 'annots-author', label: 'Author name…', action: () => authorDialog() });
   M('Tools', { separator: true });
   item('Tools', { id: 'insert-pages', label: 'Insert pages from PDF…', action: withTab(insertFromDialog) });
+  item('Tools', { id: 'interleave-pages', label: 'Interleave pages from PDF…', action: withTab(interleaveDialog) });
+  item('Tools', { id: 'reverse-pages', label: 'Reverse page order…', action: withTab(reverseDialog) }, (t) => t.numPages > 1);
   item('Tools', { id: 'crop', label: 'Crop pages…', action: withTab(cropDialog) });
+  item('Tools', { id: 'resize-pages', label: 'Resize pages…', action: withTab(resizeDialog) });
   item('Tools', { id: 'edit-properties', label: 'Edit properties…', action: withTab(propertiesDialog) });
   M('Document', { separator: true });
   item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
-  app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, flattenAnnotationsDialog, authorDialog };
+  app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
 }
