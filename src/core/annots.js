@@ -555,29 +555,6 @@ function scan(doc) {
   return { all, byRef, markups };
 }
 
-/** Entries flattenAnnotations deletes along with `target`: its popup, and every annotation in reply to it. */
-function dependents(sc, target) {
-  const out = [];
-  const popup = target.dict.get(N('Popup'));
-  for (const en of sc.all) {
-    if (en === target) continue;
-    if (popup instanceof PDFRef && en.ref && refKey(en.ref) === refKey(popup)) out.push(en);
-    else if (en.irt && target.ref) {
-      let cur = en;
-      for (let k = 0; cur && cur.irt && k < 64; k++) {
-        if (refKey(cur.irt) === refKey(target.ref)) {
-          out.push(en);
-          const p = en.dict.get(N('Popup'));
-          if (p instanceof PDFRef) for (const x of sc.all) if (x.ref && refKey(x.ref) === refKey(p)) out.push(x);
-          break;
-        }
-        cur = sc.byRef.get(refKey(cur.irt));
-      }
-    }
-  }
-  return out;
-}
-
 /** Current /Annots index of an entry (by identity, so earlier removals cannot make it stale). */
 function annotIndex(doc, en) {
   const annots = doc.getPages()[en.page].node.Annots();
@@ -804,9 +781,11 @@ function appearanceMatrix(stream, rect) {
 }
 
 /**
- * Burn markup annotations' normal appearances into the page content and remove them (with their
- * popups and replies). `pages` = page indices, `ids` = annotation ids (as readAnnotations reports
- * them); both default to everything. Widgets, Links and other non-markup annotations are untouched.
+ * Burn markup annotations' normal appearances into the page content and remove them. Each one's
+ * deps (popup, Text reply thread, Review state: not page content) go with it; its /RT /Group members
+ * (one unit with it) are burned in too. Other replies stay. `pages` = page indices, `ids` =
+ * annotation ids (as readAnnotations reports them); both default to everything. Widgets, Links and
+ * other non-markup annotations are untouched.
  */
 export async function flattenAnnotations(pdfBytes, { pages: pageSel, ids } = {}) {
   const doc = await loadPdf(pdfBytes);
@@ -816,7 +795,8 @@ export async function flattenAnnotations(pdfBytes, { pages: pageSel, ids } = {})
   const sc = scan(doc);
   const targets = sc.markups.filter((en) => (!pageSet || pageSet.has(en.page)) && (!idSet || idSet.has(en.id)));
   if (!targets.length) return pdfBytes;
-  for (const en of targets) {
+  const burn = new Set(targets.flatMap((en) => [en, ...en.group.filter((g) => g.kind === 'group')]));
+  for (const en of sc.all.filter((x) => burn.has(x))) { // /Annots order: what is drawn later stays on top
     const flags = en.dict.lookup(N('F'));
     if (flags instanceof PDFNumber && flags.asNumber() & HIDDEN) continue;
     const ap = normalAppearance(doc, en.dict);
@@ -828,8 +808,7 @@ export async function flattenAnnotations(pdfBytes, { pages: pageSel, ids } = {})
     const name = page.node.newXObject('ASHFlat', ap.ref);
     page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...A.map(r4)), drawObject(name), popGraphicsState());
   }
-  const kill = new Set(targets);
-  for (const en of targets) dependents(sc, en).forEach((d) => kill.add(d));
+  const kill = new Set(targets.flatMap((en) => [en, ...en.deps, ...en.group]));
   dropFromAnnots(doc, [...kill]);
   collectGarbage(doc);
   return saveEdited(doc);

@@ -11,7 +11,7 @@ import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
-import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened } from './annotations.js';
+import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors } from './annotations.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -642,12 +642,16 @@ export async function insertFromDialog(tab = activeTab()) {
 // Burns the annotations in tab.bytes (those already saved in the file) into the page content as one
 // page-op undo step and drops their unedited overlay mirrors (annotations.dropFlattened); objects not
 // saved yet stay editable. Page undo restores the bytes and the reload re-imports the annotations.
+// Annotations edited or deleted since the last save are skipped (the file holds their old state, not
+// what the user sees); the dialog says how many and offers Save first.
 export async function flattenAnnotationsDialog(tab = activeTab()) {
   if (!tab) return;
   if (tab.readOnly) { toast(RO_TIP); return; }
+  const skip = unsavedMirrors(tab).length;
   const form = h('div.pt-form', {},
     h('p.pt-hint', {}, 'This flattens the annotations already saved in the file: they become part of the page content and can no longer be edited, moved or deleted. Annotations drawn since the file was opened are not affected; they stay editable.'),
     tab.dirty ? h('p.pt-hint', {}, 'This document has unsaved changes. Choose Save first to save them before flattening.') : null,
+    skip ? h('p.pt-hint.pt-flat-skip', {}, `${skip} saved annotation${skip === 1 ? ' was' : 's were'} edited or deleted since the last save and ${skip === 1 ? 'is' : 'are'} skipped by Flatten. Choose Save first to flatten what you see.`) : null,
     h('fieldset.pt-fieldset', {}, h('legend', {}, 'Apply to'),
       radio('pt-flat-to', 'all', `All pages (${tab.numPages})`, true),
       radio('pt-flat-to', 'current', `Current page (${tab.currentPage + 1})`, false)));
@@ -658,10 +662,13 @@ export async function flattenAnnotationsDialog(tab = activeTab()) {
   if (v !== 'ok' && v !== 'save') return;
   const pages = radioValue(form, 'pt-flat-to') === 'current' ? [tab.currentPage] : null;
   if (v === 'save' && !(await app.saveTab(tab))) return;
-  const { flattenAnnotations } = await import('../../src/core/annots.js');
+  const { flattenAnnotations, readAnnotations } = await import('../../src/core/annots.js');
   let none = false;
   const ok = await runOp(tab, 'Flatten annotations', async (bytes, n) => {
-    const out = await flattenAnnotations(bytes, pages ? { pages } : {});
+    const unsaved = new Set(unsavedMirrors(tab));
+    let ids;
+    if (unsaved.size) { const r = await readAnnotations(bytes); ids = [...r.objects, ...r.skipped].map((x) => x.id).filter((id) => id && !unsaved.has(id)); }
+    const out = await flattenAnnotations(bytes, { ...(pages ? { pages } : {}), ...(ids ? { ids } : {}) });
     if (out === bytes) { none = true; return null; }
     await dropFlattened(tab, out); // the overlay mirrors of what is now page content go
     return { bytes: out, map: new Map(range(n).map((i) => [i, i])) };
