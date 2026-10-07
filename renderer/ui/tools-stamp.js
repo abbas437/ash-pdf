@@ -27,7 +27,7 @@ const PENS = [['#1a2b6d', 'Dark blue'], ['#111111', 'Black']];
 const SIG_FONT = 'italic 52px "Segoe Script", "Lucida Handwriting", "Brush Script MT", "URW Chancery L", "Z003", cursive';
 
 const opt = { text: 'APPROVED', color: '#1b7f3b', rotation: 0, addDate: false, imgOpacity: 1, imgRotation: 0 };
-let pending = null;           // armed image: {bytes, mime, url, nw, nh, frac}
+let pending = null;           // armed image: {bytes, mime, url, nw, nh, frac, width?, extra?, companions?, onPlaced?}
 let hasSignature = false;
 let shiftHeld = false;
 let app = null;
@@ -211,7 +211,16 @@ export function sniffImage(b) {
   if (b?.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
   return null;
 }
-async function arm(bytes, frac, label) {
+/**
+ * Arm the image tool with `bytes`; the next click on a page places it. `width` (points) overrides
+ * the default width fraction; `extra` fields are copied onto the image object; `companions(img)`
+ * returns further objects added in the SAME undo step (e.g. a signature block's name and date);
+ * `onPlaced(img)` runs afterwards.
+ */
+export function armImage(bytes, { frac = IMAGE_FRAC, label = 'image', width, extra, companions, onPlaced } = {}) {
+  return arm(bytes, frac, label, { width, extra, companions, onPlaced });
+}
+async function arm(bytes, frac, label, more = {}) {
   const mime = sniffImage(bytes);
   if (!mime) { app.toast('Only PNG and JPEG images can be placed'); return false; }
   const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
@@ -219,7 +228,7 @@ async function arm(bytes, frac, label) {
   img.src = url;
   try { await img.decode(); } catch { URL.revokeObjectURL(url); app.toast('The image could not be read'); return false; }
   if (pending?.url) URL.revokeObjectURL(pending.url);
-  pending = { bytes, mime, url, nw: img.naturalWidth || 1, nh: img.naturalHeight || 1, frac };
+  pending = { bytes, mime, url, nw: img.naturalWidth || 1, nh: img.naturalHeight || 1, frac, ...more };
   setTool('image');
   document.body.classList.add('img-armed');
   app.toast(`Click on a page to place the ${label}`);
@@ -242,13 +251,15 @@ const imageTool = {
     if (e.button !== 0 || !hit || tab.readOnly || !pending) return;
     e.preventDefault();
     const P = pageBox(tab, hit.pageIndex), p = annotations.toPage(tab, hit.pageIndex, e.clientX, e.clientY);
-    let w = P.width * pending.frac, hh = (w * pending.nh) / pending.nw;
+    let w = Math.min(pending.width ?? P.width * pending.frac, P.width), hh = (w * pending.nh) / pending.nw;
     if (hh > P.height) { w *= P.height / hh; hh = P.height; }
     const x = Math.min(Math.max(0, p.x - w / 2), P.width - w), y = Math.min(Math.max(0, p.y - hh / 2), P.height - hh);
-    const { bytes, mime } = pending;
+    const { bytes, mime, extra, companions, onPlaced } = pending;
     disarm();
-    addObjects(tab, [{ type: 'image', page: hit.pageIndex, x, y, w, h: hh, bytes, mime, opacity: opt.imgOpacity, rotation: opt.imgRotation }]);
+    const img = { ...extra, type: 'image', page: hit.pageIndex, x, y, w, h: hh, bytes, mime, opacity: opt.imgOpacity, rotation: opt.imgRotation };
+    const [id] = addObjects(tab, [img, ...(companions?.(img, P) ?? [])]);
     setTool('select');
+    onPlaced?.(annotations.getObject(tab, id));
   },
 };
 function imageOptions(c) {
