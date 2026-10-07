@@ -76,9 +76,87 @@ try {
     hidden: t.view.scrollEl.hidden, pane: t.view.scrollEl.dataset.pane ?? '', rect: t.view.scrollEl.getBoundingClientRect().toJSON(),
     rendered: t.view.pageEls.filter((p) => p.classList.contains('rendered')).length })));
 
-  step = 'open two documents';
+  // ---- the same document in both panes (one tab open)
+  step = 'same document: split with one tab';
   await boot();
   await openFile('main.pdf', mainPdf);
+  await menu('View', 'split-v');
+  await page.waitForFunction(() => document.querySelector('.viewer-host.split.split-v'));
+  const pane = (k) => `.viewer-scroll[data-pane="${k}"]`;
+  const paneInfo = () => page.evaluate(() => Object.fromEntries(['a', 'b'].map((k) => {
+    const el = document.querySelector(`.viewer-scroll[data-pane="${k}"]`);
+    const pages = [...el.querySelectorAll('.page')];
+    return [k, { top: el.scrollTop, hidden: el.hidden, rect: el.getBoundingClientRect().toJSON(), width: pages[0].offsetWidth,
+      rendered: pages.filter((p) => p.classList.contains('rendered')).map((p) => +p.dataset.pageIndex),
+      annots: pages.map((p) => p.querySelectorAll('g.ann-objects > *').length) }];
+  })));
+  const tab0 = () => page.evaluate(() => { const t = window.ashStudio.state.tabs[0]; return { page: t.currentPage, objs: t.objects?.map((o) => o.page) ?? [] }; });
+  await page.waitForFunction(() => [...document.querySelectorAll('.viewer-scroll[data-pane]')].filter((el) => !el.hidden && el.querySelector('.page.rendered')).length === 2, null, { timeout: 10_000 });
+  let pi = await paneInfo();
+  check(pi.a.rect.right <= pi.b.rect.left + 1 && pi.a.rect.width > 200 && pi.b.rect.width > 200, 'same document side by side');
+
+  step = 'same document: scroll pane B to page 3';
+  await page.evaluate((sel) => { const el = document.querySelector(sel); el.scrollTop = el.querySelectorAll('.page')[2].offsetTop; }, pane('b'));
+  await page.waitForFunction((sel) => document.querySelector(sel).querySelectorAll('.page')[2].classList.contains('rendered'), pane('b'), { timeout: 10_000 });
+  await settle();
+  pi = await paneInfo();
+  check(pi.a.top === 0 && pi.b.top > 1000, `pane B scrolled, pane A did not: ${pi.a.top} / ${pi.b.top}`);
+  check((await tab0()).page === 0, `pane A stays on page 1: current page ${(await tab0()).page + 1}`);
+
+  step = 'same document: zoom pane B only';
+  const bw0 = pi.b.width, aw0 = pi.a.width;
+  await page.mouse.move(pi.b.rect.left + 100, pi.b.rect.top + 200);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, -300);
+  await page.keyboard.up('Control');
+  await settle();
+  pi = await paneInfo();
+  check(pi.b.width > bw0 * 1.2 && pi.a.width === aw0, `only pane B zoomed: B ${bw0} -> ${pi.b.width}, A ${aw0} -> ${pi.a.width}`);
+
+  step = 'same document: annotate in pane A';
+  const dragOn = async (k, i) => {
+    const r = await page.evaluate(([sel, n]) => document.querySelector(sel).querySelectorAll('.page')[n].getBoundingClientRect().toJSON(), [pane(k), i]);
+    await page.mouse.move(r.left + 60, r.top + 60);
+    await page.mouse.down();
+    await page.mouse.move(r.left + 160, r.top + 120, { steps: 4 });
+    await page.mouse.up();
+  };
+  await page.evaluate(() => document.activeElement?.blur?.());
+  await page.keyboard.press('r');
+  await dragOn('a', 0);
+  check(JSON.stringify((await tab0()).objs) === '[0]', `rectangle on page 1: ${JSON.stringify((await tab0()).objs)}`);
+  await page.evaluate((sel) => { document.querySelector(sel).scrollTop = 0; }, pane('b'));
+  await page.waitForFunction((sel) => document.querySelector(sel).querySelectorAll('.page')[0].classList.contains('rendered'), pane('b'), { timeout: 10_000 });
+  await settle();
+  pi = await paneInfo();
+  check(pi.a.annots[0] === 1 && pi.b.annots[0] === 1, `pane A's rectangle shows in pane B: ${pi.a.annots[0]} / ${pi.b.annots[0]}`);
+
+  step = 'same document: focus pane B and annotate page 3';
+  await page.evaluate((sel) => { const el = document.querySelector(sel); el.scrollTop = el.querySelectorAll('.page')[2].offsetTop; }, pane('b'));
+  await page.waitForFunction((sel) => document.querySelector(sel).querySelectorAll('.page')[2].classList.contains('rendered'), pane('b'), { timeout: 10_000 });
+  await settle();
+  await dragOn('b', 2);
+  let t0 = await tab0();
+  check(JSON.stringify(t0.objs) === '[0,2]', `rectangle on page 3: ${JSON.stringify(t0.objs)}`);
+  check(t0.page === 2, `focused pane B is the tab: current page ${t0.page + 1}`);
+  check(await page.evaluate(() => document.querySelector('.split-head[data-pane="b"]').classList.contains('focused') && document.querySelector('.viewer-scroll[data-pane="b"]').classList.contains('pane-focused')), 'pane B marked focused');
+  await page.evaluate((sel) => { const el = document.querySelector(sel); el.scrollTop = el.querySelectorAll('.page')[2].offsetTop; }, pane('a'));
+  await page.waitForFunction((sel) => document.querySelector(sel).querySelectorAll('.page')[2].classList.contains('rendered'), pane('a'), { timeout: 10_000 });
+  await settle();
+  pi = await paneInfo();
+  check(pi.a.annots[2] === 1 && pi.b.annots[2] === 1, `pane B's rectangle shows in pane A: ${pi.a.annots[2]} / ${pi.b.annots[2]}`);
+  check((await tab0()).page === 2, 'scrolling unfocused pane A leaves the current page alone');
+
+  step = 'same document: unsplit';
+  await page.keyboard.press('Escape');
+  await menu('View', 'unsplit');
+  await settle();
+  check(await page.evaluate(() => document.querySelectorAll('.viewer-scroll').length === 1 && !document.querySelector('.viewer-host.split')), 'one pane left');
+  t0 = await tab0();
+  check(JSON.stringify(t0.objs) === '[0,2]', `both rectangles kept: ${JSON.stringify(t0.objs)}`);
+
+  // ---- two different documents
+  step = 'open two documents';
   await openFile('small.pdf', smallPdf);
 
   step = 'split vertically';
