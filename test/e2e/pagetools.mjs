@@ -93,13 +93,42 @@ try {
   check(await ev('return tab.dirty;'), 'tab not dirty after rotate');
 
   step = 'undo restores bytes';
+  await page.evaluate(() => window.ashStudio.bus.on('thumbs:rebuilt', ({ tab }) => { window.__thumbsDoc = tab.pdfDoc; }));
   await ev('await pt.undo(tab);');
   await thumbCount(6);
   eq(await ev('return Array.from(tab.bytes);'), original, 'undo did not restore bytes byte-for-byte');
   eq(await ev('return [tab.bytesUndo.length, tab.bytesRedo.length];'), [0, 1], 'undo/redo stack sizes');
+  // Let the undo's reload finish before redoing, so the two reloads cannot interleave.
+  await page.waitForFunction(() => { const t = window.ashStudio.state.tabs[0]; return t.pages?.[1]?.rotate === 0 && window.__thumbsDoc === t.pdfDoc; }, null, { timeout: 10_000 });
   await ev('await pt.redo(tab);');
   await thumbCount(6);
   eq(await rotations(), [0, 90, 0, 0, 0, 0], 'redo re-applies rotation');
+
+  step = 'thumbnails follow page and view rotation';
+  // Orientation ('L'/'P') of [canvas, box, main-view page] for thumbnails 1 and 2, once both
+  // have a canvas rendered since the last markOld().
+  const shapes = () => page.waitForFunction(() => {
+    const o = (w, hh) => (w > hh ? 'L' : 'P');
+    const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId);
+    const out = [0, 1].map((i) => {
+      const el = document.querySelector(`.thumb-list .thumb[data-page-index="${i}"]`);
+      const c = el?.querySelector('canvas'), b = el?.querySelector('.thumb-img').getBoundingClientRect();
+      const p = a.viewer.getPageEl(t, i).getBoundingClientRect();
+      return c && !c.__old ? [o(c.width, c.height), o(b.width, b.height), o(p.width, p.height)] : null;
+    });
+    return out.every(Boolean) && out;
+  }, null, { timeout: 10_000 }).then((hd) => hd.jsonValue());
+  // Wait for the thumbnail list to be rebuilt from the redone document (a late rebuild from the
+  // undo could otherwise land after the checks below).
+  await page.waitForFunction(() => { const t = window.ashStudio.state.tabs[0]; return t.pages?.[1]?.rotate === 90 && window.__thumbsDoc === t.pdfDoc; }, null, { timeout: 10_000 });
+  eq(await shapes(), [['P', 'P', 'P'], ['L', 'L', 'L']], 'thumbnails after page-tools rotate (/Rotate 90 on page 2)');
+  const markOld = () => page.evaluate(() => { for (const c of document.querySelectorAll('.thumb-list canvas')) c.__old = true; });
+  await markOld();
+  await ev('v.rotateView(tab, 90);');
+  eq(await shapes(), [['L', 'L', 'L'], ['P', 'P', 'P']], 'thumbnails re-rendered after view rotation 90');
+  await markOld();
+  await ev('v.rotateView(tab, -90);');
+  eq(await shapes(), [['P', 'P', 'P'], ['L', 'L', 'L']], 'thumbnails re-rendered after view rotation back');
   await fresh();
 
   step = 'delete 3-4 (context menu + confirm)';

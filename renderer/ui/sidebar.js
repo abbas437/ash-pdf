@@ -132,10 +132,8 @@ function renderThumbs(container, tab) {
     for (const e of entries) if (e.isIntersecting) enqueueThumb(Number(e.target.dataset.pageIndex));
   }, { root: container, rootMargin: '200px 0px' });
   for (let i = 0; i < tab.numPages; i++) {
-    const vp = tab.pages[i].getViewport({ scale: 1 });
-    const hgt = Math.round(THUMB_W * vp.height / vp.width);
     const el = h('div.thumb', { role: 'option', tabindex: i === tab.currentPage ? '0' : '-1', 'aria-selected': 'false', 'aria-label': `Page ${i + 1}`, dataset: { pageIndex: String(i) } },
-      h('div.thumb-img', { style: { width: `${THUMB_W}px`, height: `${hgt}px` } }),
+      h('div.thumb-img', { style: thumbBoxStyle(tab, i) }),
       h('span.thumb-label', {}, String(i + 1)));
     T.els.push(el);
     list.append(el);
@@ -149,6 +147,27 @@ function renderThumbs(container, tab) {
   markCurrent(tab.currentPage);
   T.els[tab.currentPage]?.scrollIntoView({ block: 'nearest' });
   bus.emit('thumbs:rebuilt', { tab, count: tab.numPages });
+}
+
+// Thumbnails show the page as the main view does: /Rotate plus the tab's view rotation.
+function thumbBoxStyle(tab, i) {
+  const vp = viewer.getViewport(tab, i, 1);
+  return { width: `${THUMB_W}px`, height: `${Math.round(THUMB_W * vp.height / vp.width)}px` };
+}
+
+// View rotation changed: resize every box and re-render the visible thumbnails in place
+// (a full rebuild would drop the selection).
+function rotateThumbs() {
+  T.gen++;
+  T.queue = [];
+  T.rendered = new Set();
+  T.observer?.disconnect();
+  T.els.forEach((el, i) => {
+    const img = el.querySelector('.thumb-img');
+    Object.assign(img.style, thumbBoxStyle(T.tab, i));
+    img.replaceChildren();
+    T.observer.observe(el);
+  });
 }
 
 function enqueueThumb(i) {
@@ -168,9 +187,9 @@ async function pumpThumbs() {
       if (!tab?.pdfDoc || T.stale || T.rendered.has(i)) continue;
       T.rendered.add(i);
       const page = tab.pages[i];
-      const vp1 = page.getViewport({ scale: 1 });
+      const vp1 = viewer.getViewport(tab, i, 1);
       const dpr = window.devicePixelRatio || 1;
-      const vp = page.getViewport({ scale: (THUMB_W / vp1.width) * dpr });
+      const vp = viewer.getViewport(tab, i, (THUMB_W / vp1.width) * dpr);
       const canvas = h('canvas.thumb-canvas', { 'aria-hidden': 'true' });
       canvas.width = Math.max(1, Math.floor(vp.width));
       canvas.height = Math.max(1, Math.floor(vp.height));
@@ -277,6 +296,7 @@ bus.on('page:changed', ({ tab, pageIndex }) => {
 // list is rebuilt on tab:loaded {reloaded:true} once the viewer has the new document.
 bus.on('tab:bytesChanged', ({ tab }) => { if (tab === T.tab) { T.stale = true; T.queue = []; } });
 bus.on('tab:opened', () => { if (state.sidebarTab === 'thumbs') syncTabs(); });
+bus.on('rotation:changed', ({ tab }) => { if (tab === T.tab && T.list && !T.stale) rotateThumbs(); });
 
 // ================================================================ outline
 let outlineGen = 0;
