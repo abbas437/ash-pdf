@@ -115,6 +115,11 @@ function step(tab, from, to) {
   chain = job.catch(() => {});
   return job;
 }
+/** Resolves once no page operation (or undo/redo) is queued or running. */
+export async function idle() {
+  for (let c = chain; ; c = chain) { await c; if (c === chain) return; }
+}
+
 export const undo = (tab = activeTab()) => step(tab, 'bytesUndo', 'bytesRedo');
 export const redo = (tab = activeTab()) => step(tab, 'bytesRedo', 'bytesUndo');
 

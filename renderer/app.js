@@ -15,7 +15,7 @@ import { initTextTools } from './ui/tools-text.js';
 import { initCalloutTools } from './ui/tools-callout.js';
 import { initStampTools } from './ui/tools-stamp.js';
 import { initForms } from './ui/forms.js';
-import { initPageTools } from './ui/pagetools.js';
+import { initPageTools, idle as pageOpsIdle } from './ui/pagetools.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -167,11 +167,15 @@ export async function saveTab(tab = activeTab(), asNew = false) {
   if (!tab) return false;
   if (tab.readOnly) { await showDialog({ title: 'Read-only document', body: 'This document is encrypted: viewing and printing only (editing is not supported).' }); return false; }
   try {
+    await pageOpsIdle();
+    const rev = tab.rev; // an edit landing while hooks/write run bumps it and keeps the tab dirty
     let bytes = tab.bytes;
     for (const hook of state.hooks.beforeSave) {
       // hook(tab, bytesSoFar); a hook flagged `transient` changes only the written bytes, not tab.bytes.
+      // A page op committed while the hook ran wins: its newer tab.bytes is kept.
+      const base = tab.bytes;
       const out = await hook(tab, bytes);
-      if (out instanceof Uint8Array) { bytes = out; if (!hook.transient) tab.bytes = out; }
+      if (out instanceof Uint8Array) { bytes = out; if (!hook.transient && tab.bytes === base) tab.bytes = out; }
     }
     let res;
     if (!asNew && tab.path && !String(tab.path).startsWith('dropped:')) res = await api.writeFile(tab.path, bytes);
@@ -179,7 +183,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     if (!res) return false;
     tab.path = res.path;
     tab.name = String(res.path).split(/[\\/]/).pop() || tab.name;
-    markDirty(tab, false);
+    if (tab.rev === rev) markDirty(tab, false);
     renderTabs();
     toast(`Saved ${tab.name}`);
     return true;

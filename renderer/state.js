@@ -46,6 +46,7 @@ export function createTab({ name, path = null, bytes, password = null }) {
     bytes,                 // Uint8Array: the CURRENT PDF bytes (what Save writes)
     password,              // password used to open, when encrypted
     dirty: false,
+    rev: 0,                // bumped by every markDirty(tab, true); saveTab clears dirty only if unchanged
     readOnly: false,       // true for encrypted PDFs
     encrypted: false,
     pdfDoc: null,          // pdf.js PDFDocumentProxy
@@ -71,7 +72,9 @@ export function getTab(id) {
 
 /** Flag a tab as having unsaved changes (or clear it with dirty=false). */
 export function markDirty(tab, dirty = true) {
-  if (!tab || tab.dirty === dirty) return;
+  if (!tab) return;
+  if (dirty) tab.rev = (tab.rev ?? 0) + 1;
+  if (tab.dirty === dirty) return;
   tab.dirty = dirty;
   bus.emit('tab:dirtyChanged', { tab, dirty });
 }
