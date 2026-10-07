@@ -60,6 +60,7 @@ export const viewer = {
   clientToPage,
   pageToClient,
   getTextContent,
+  optionalContent,
   rerender: (tab) => { for (let i = 0; i < tab.numPages; i++) release(tab, i); schedule(tab); },
   renderedPages: (tab) => (tab.view ? tab.view.ps.flatMap((p, i) => (p.rendered ? [i] : [])) : []),
 };
@@ -126,14 +127,20 @@ async function loadDocument(tab) {
   try {
     const meta = await doc.getMetadata().catch(() => null);
     const pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
-    return { doc, meta, pages, encrypted: needed || !!meta?.info?.EncryptFilterName };
+    const ocConfig = await doc.getOptionalContentConfig().catch(() => null);
+    return { doc, meta, pages, ocConfig, encrypted: needed || !!meta?.info?.EncryptFilterName };
   } catch (err) {
     destroyDoc(doc);
     throw err;
   }
 }
 
-function commitDocument(tab, { doc, meta, pages, encrypted }) {
+function commitDocument(tab, { doc, meta, pages, ocConfig, encrypted }) {
+  // Layers (optional content): keep the user's visibility across reloads of the same document.
+  if (tab.ocConfig && ocConfig) {
+    for (const [id, g] of tab.ocConfig) if (ocConfig.getGroup(id) && ocConfig.getGroup(id).visible !== g.visible) ocConfig.setVisibility(id, g.visible, false);
+  }
+  tab.ocConfig = ocConfig;
   tab.encrypted = encrypted;
   tab.readOnly = tab.encrypted;
   tab.metadata = meta;
@@ -458,6 +465,11 @@ function reportRenderError(tab, i, err) {
   }
 }
 
+/** Render params for the tab's current layer visibility (tab.ocConfig, display intent). */
+function optionalContent(tab) {
+  return tab.ocConfig ? { optionalContentConfigPromise: Promise.resolve(tab.ocConfig) } : {};
+}
+
 async function renderPage(tab, i) {
   const v = tab.view;
   const ps = v.ps[i];
@@ -471,7 +483,8 @@ async function renderPage(tab, i) {
   const canvas = h('canvas.page-canvas', { 'aria-hidden': 'true' });
   canvas.width = Math.max(1, Math.floor(vp.width * out));
   canvas.height = Math.max(1, Math.floor(vp.height * out));
-  const task = page.render({ canvas, viewport: vp, transform: out !== 1 ? [out, 0, 0, out, 0, 0] : undefined, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS });
+  const task = page.render({ canvas, viewport: vp, transform: out !== 1 ? [out, 0, 0, out, 0, 0] : undefined, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
+    ...optionalContent(tab) });
   ps.task = task;
   try {
     await task.promise;
