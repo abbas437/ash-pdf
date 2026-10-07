@@ -202,6 +202,8 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     if (!res) return false;
     tab.path = res.path;
     tab.name = String(res.path).split(/[\\/]/).pop() || tab.name;
+    // hook.saved(tab, clean): the file is written; clean = no edit landed since the save started.
+    for (const hook of state.hooks.beforeSave) hook.saved?.(tab, tab.rev === rev);
     if (tab.rev === rev) markDirty(tab, false);
     renderTabs();
     toast(`Saved ${tab.name}`);

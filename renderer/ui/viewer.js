@@ -35,6 +35,7 @@ export const viewer = {
   PDF_TO_CSS,
   mount,
   openDocument,
+  setViewBytes,
   build,
   activate,
   deactivate,
@@ -104,8 +105,10 @@ async function openDocument(tab) {
 async function loadDocument(tab) {
   let needed = false;
   let cancelled = false;
+  // The view copy (annotations.js): tab.bytes without the markup annotations the overlay mirrors.
+  const data = viewBytes ? await viewBytes(tab) : tab.bytes;
   const task = pdfjs.getDocument({
-    data: tab.bytes.slice(),   // pdf.js transfers the buffer to its worker
+    data: data.slice(),   // pdf.js transfers the buffer to its worker
     password: tab.password ?? undefined,
     cMapUrl: VENDOR + 'cmaps/', cMapPacked: true, standardFontDataUrl: VENDOR + 'standard_fonts/',
     wasmUrl: VENDOR + 'wasm/', iccUrl: VENDOR + 'iccs/', isEvalSupported: false, enableScripting: false,
@@ -134,6 +137,10 @@ async function loadDocument(tab) {
     throw err;
   }
 }
+
+let viewBytes = null;
+/** fn(tab) -> Promise<Uint8Array>: the bytes pdf.js renders instead of tab.bytes. */
+function setViewBytes(fn) { viewBytes = fn; }
 
 function commitDocument(tab, { doc, meta, pages, ocConfig, encrypted }) {
   // Layers (optional content): keep the user's visibility across reloads of the same document.
@@ -533,7 +540,8 @@ async function renderLinks(tab, i, vp) {
   try { annots = await tab.pages[i].getAnnotations({ intent: 'display' }); } catch { return; }
   for (const a of annots) {
     if (a.subtype !== 'Link' || (!a.url && !a.dest && !a.action)) continue;
-    const [x1, y1, x2, y2] = vp.convertToViewportRectangle(a.rect);
+    // pdf.js 6 has no PageViewport.convertToViewportRectangle.
+    const [x1, y1] = vp.convertToViewportPoint(a.rect[0], a.rect[1]), [x2, y2] = vp.convertToViewportPoint(a.rect[2], a.rect[3]);
     const left = Math.min(x1, x2), top = Math.min(y1, y2);
     const link = h('a.pdf-link', {
       href: '#',
