@@ -10,6 +10,11 @@ on:
         description: 'Publish a GitHub Release with this tag, e.g. v0.1.0 (leave empty to only build)'
         required: false
         default: ''
+      prerelease:
+        description: 'Mark the release as a pre-release (test build)'
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   windows:
@@ -84,8 +89,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.release_version }}
+          PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          gh release create "$VERSION" --target "$GITHUB_SHA" \
+          PRE=""; if [ "$PRERELEASE" = "true" ]; then PRE="--prerelease"; fi
+          gh release create "$VERSION" --target "$GITHUB_SHA" $PRE \
             dist/ASH-PDF-Studio-Setup-*.exe \
             dist/ASH-PDF-Studio-Portable-*.exe \
             dist/SHA256SUMS.txt \
