@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Runs the REAL Electron app (electron binary + a display, e.g. xvfb-run, as a non-root user) and opens a PDF
-// passed on the command line. env: ELECTRON_BIN (optional; defaults to the installed electron package).
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+// passed on the command line, then checks the main process's capability checks through window.api.
+// env: ELECTRON_BIN (optional; defaults to the installed electron package).
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
@@ -15,11 +18,43 @@ const tmp = await mkdtemp(join(tmpdir(), 'ash-pdf-e2e-'));
 const doc = await PDFDocument.create();
 const font = await doc.embedFont(StandardFonts.Helvetica);
 for (let n = 1; n <= 3; n++) doc.addPage([612, 792]).drawText(`Electron page ${n}`, { x: 72, y: 700, size: 28, font });
+const pdfBytes = await doc.save();
 const pdfPath = join(tmp, 'sample.pdf');
-await writeFile(pdfPath, await doc.save());
+await writeFile(pdfPath, pdfBytes);
+
+// Folder fixtures: grant <tmp>/x/a; <tmp>/x/ab shares the prefix but is outside it.
+const a = join(tmp, 'x', 'a'), ab = join(tmp, 'x', 'ab'), big = join(tmp, 'big');
+await mkdir(join(a, 'sub'), { recursive: true });
+await mkdir(ab, { recursive: true });
+await mkdir(big, { recursive: true });
+await writeFile(join(a, 'doc.pdf'), pdfBytes);
+await writeFile(join(a, 'sub', 'inner.PDF'), pdfBytes);
+await writeFile(join(a, 'note.txt'), 'secret');
+await writeFile(join(ab, 'f.pdf'), pdfBytes);
+await symlink(join(ab, 'f.pdf'), join(a, 'link.pdf'));       // inside the folder, pointing outside
+await symlink(join(a, 'note.txt'), join(a, 'note-alias.pdf')); // .pdf name, real file is .txt
+execFileSync('mkfifo', [join(a, 'pipe.pdf')]);
+for (let i = 0; i < 60; i++) await writeFile(join(big, `f${i}.txt`), '');
+const TEST_BUDGET = 50; // entries visited per listing; big/ has 60
+// Portable mode keeps userData (settings, library) inside tmp.
+const dataDir = join(tmp, 'ASH-PDF-Studio-data');
+const libDir = (kind) => join(dataDir, 'library', kind);
+await mkdir(libDir('signature'), { recursive: true });
+await mkdir(libDir('stamp'), { recursive: true });
+await writeFile(join(libDir('signature'), 'orphan.bin'), 'x');
+const old = new Date(Date.now() - 5 * 60_000);
+await utimes(join(libDir('signature'), 'orphan.bin'), old, old);
+await writeFile(join(libDir('signature'), 'fresh.bin'), 'x'); // young orphan: a put may be in progress
+for (let i = 0; i < 500; i++) {
+  await writeFile(join(libDir('stamp'), `s${i}.json`), '{}');
+  await writeFile(join(libDir('stamp'), `s${i}.bin`), 'x');
+}
 
 let step = 'launch';
-const app = await electron.launch({ executablePath: electronBin, args: ['--disable-gpu', root, pdfPath], cwd: root });
+const app = await electron.launch({
+  executablePath: electronBin, args: ['--disable-gpu', root, pdfPath], cwd: root,
+  env: { ...process.env, PORTABLE_EXECUTABLE_DIR: tmp, ASH_SEARCH_MAX_ENTRIES: String(TEST_BUDGET) },
+});
 try {
   const problems = [];
   const win = await app.firstWindow();
@@ -35,6 +70,77 @@ try {
   const pages = await win.locator('.viewer-scroll:not([hidden]) .page').count();
   if (pages !== 3) throw new Error(`expected 3 pages, saw ${pages}`);
   if (process.env.E2E_SHOTS) await win.screenshot({ path: join(process.env.E2E_SHOTS, 'electron_pdf.png') });
+
+  // window.api call in the page: 'ok:<summary>' or 'rejected:<message>'.
+  const call = (fn, ...args) => win.evaluate(async ([fn, args]) => {
+    try {
+      const r = await Promise.race([window.api[fn](...args), new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 5000))]);
+      return 'ok:' + JSON.stringify(r instanceof Uint8Array ? { bytes: r.length } : r);
+    } catch (e) { return 'rejected:' + e.message; }
+  }, [fn, args]);
+  const expect = (what, got, ok) => { if (!ok) throw new Error(`${what}: got ${got}`); };
+  const grantFolder = async (dir) => {
+    await app.evaluate(({ dialog }, d) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [d] }); }, dir);
+    const r = await call('openFolder');
+    expect('openFolder', r, r === `ok:${JSON.stringify({ path: dir })}`);
+  };
+
+  step = 'folder grant: PDFs only, inside the folder only';
+  await grantFolder(a);
+  let r = await call('readFile', join(a, 'doc.pdf'));
+  expect('read PDF in granted folder', r, r === `ok:${JSON.stringify({ bytes: pdfBytes.length })}`);
+  r = await call('readFile', join(a, 'sub', 'inner.PDF'));
+  expect('read .PDF (upper case) in a subfolder', r, r.startsWith('ok:'));
+  r = await call('readFile', join(ab, 'f.pdf'));
+  expect('read sibling folder sharing the prefix', r, r.startsWith('rejected:'));
+  r = await call('readFile', join(a, 'note.txt'));
+  expect('read .txt in granted folder', r, r.startsWith('rejected:'));
+  r = await call('readFile', join(a, 'note-alias.pdf'));
+  expect('read .pdf symlink to a .txt', r, r.startsWith('rejected:'));
+  r = await call('readFile', join(a, 'link.pdf'));
+  expect('read symlink pointing outside', r, r.startsWith('rejected:'));
+  r = await call('readFile', join(a, 'pipe.pdf'));
+  expect('read FIFO named .pdf (must not hang)', r, r.startsWith('rejected:') && !r.includes('timeout'));
+
+  step = 'listPdfs';
+  r = await call('listPdfs', a, { recursive: true });
+  const listed = JSON.parse(r.slice(3));
+  const names = listed.files.map((f) => f.name).sort().join(',');
+  expect('listPdfs names', r, names === 'doc.pdf,inner.PDF' && listed.truncated === false);
+  await grantFolder(big);
+  r = await call('listPdfs', big, { recursive: true });
+  expect('listPdfs over the entry budget', r, r.startsWith('ok:') && JSON.parse(r.slice(3)).truncated === true);
+  r = await call('cancelSearch');
+  expect('cancelSearch', r, r === 'ok:true');
+
+  step = 'library ids and limits';
+  for (const id of ['../x', 'CON', 'nul', 'Com1', 'LPT9']) {
+    r = await call('libraryPut', 'signature', id, { meta: {}, bytes: new Uint8Array([1]) });
+    expect(`libraryPut id ${id}`, r, r.startsWith('rejected:'));
+  }
+  r = await call('libraryPut', 'signature', 'CONSOLE', { meta: {}, bytes: new Uint8Array([1]) });
+  expect('libraryPut id CONSOLE', r, r === 'ok:true');
+  r = await call('libraryList', 'signature');
+  expect('libraryList', r, r === `ok:${JSON.stringify([{ id: 'CONSOLE', meta: {} }])}`);
+  expect('stale orphan .bin removed', 'present', !existsSync(join(libDir('signature'), 'orphan.bin')));
+  expect('young orphan .bin kept', 'missing', existsSync(join(libDir('signature'), 'fresh.bin')));
+  r = await call('libraryPut', 'stamp', 'one-more', { meta: {}, bytes: new Uint8Array([1]) });
+  expect('libraryPut past 500 items', r, r.startsWith('rejected:'));
+  r = await call('libraryPut', 'stamp', 's0', { meta: { v: 2 } });
+  expect('libraryPut updates an existing item when full', r, r === 'ok:true');
+
+  step = 'settings keys';
+  for (const key of ['__proto__', 'constructor', 'prototype']) {
+    r = await call('settingsSet', key, { polluted: true });
+    expect(`settingsSet ${key}`, r, r.startsWith('rejected:'));
+    r = await call('settingsGet', key);
+    expect(`settingsGet ${key}`, r, r.startsWith('rejected:'));
+  }
+  r = await call('settingsSet', 'plain', 1);
+  expect('settingsSet plain', r, r === 'ok:true');
+  r = await call('settingsGet', 'plain');
+  expect('settingsGet plain', r, r === 'ok:1');
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');

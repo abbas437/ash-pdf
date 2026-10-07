@@ -12,8 +12,8 @@
 //   - No new windows, no navigation away from the app page, every permission request denied.
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, session, shell } from 'electron';
 import { createHash, randomBytes } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants as fsConstants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
+import { lstat, mkdir, open, opendir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -51,6 +51,8 @@ function loadSettings() {
   try {
     const parsed = JSON.parse(readFileSync(settingsFile(), 'utf8'));
     settings = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    // Renderer keys live in a null-prototype object, so no key can reach Object.prototype.
+    settings.renderer = Object.assign(Object.create(null), isPlainObject(settings.renderer) ? settings.renderer : {});
   } catch {
     settings = {};
   }
@@ -73,12 +75,22 @@ const grantedPaths = new Set();
 const grant = (p) => grantedPaths.add(pathKey(p));
 const isGranted = (p) => typeof p === 'string' && p.length > 0 && p.length < 4096 && isAbsolute(p) && grantedPaths.has(pathKey(p));
 
-async function readGranted(p) {
-  const info = await stat(p);
-  if (!info.isFile()) throw new Error('Not a file');
-  if (info.size > MAX_FILE_BYTES) throw new Error('File is larger than 1 GiB');
-  const buf = await readFile(p);
-  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+// Reads through one FileHandle, so the checks and the read see the same file. O_NONBLOCK: opening a
+// FIFO must not park a threadpool thread. `check(fh, info)` (folder grants) runs after the open.
+async function readGranted(p, check = null) {
+  const fh = await open(p, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  try {
+    const info = await fh.stat({ bigint: true });
+    if (!info.isFile()) throw new Error('Not a file');
+    if (info.size > BigInt(MAX_FILE_BYTES)) throw new Error('File is larger than 1 GiB');
+    if (check) await check(info);
+    const buf = Buffer.alloc(Number(info.size));
+    let off = 0;
+    for (let n; off < buf.length && (n = (await fh.read(buf, off, buf.length - off, off)).bytesRead) > 0;) off += n;
+    return new Uint8Array(buf.buffer, buf.byteOffset, off);
+  } finally {
+    await fh.close();
+  }
 }
 async function describeFile(p) {
   return { path: p, name: basename(p), bytes: await readGranted(p) };
@@ -280,11 +292,17 @@ function toBytes(bytes) {
   throw new TypeError('bytes must be a Uint8Array');
 }
 const SETTINGS_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
+const RESERVED_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const isSettingsKey = (key) => typeof key === 'string' && SETTINGS_KEY.test(key) && !RESERVED_KEYS.has(key);
 
 // ---- advanced search: folder grants, PDF listing, search-index cache (renderer/ui/advsearch.js)
-// A folder chosen in api.openFolder() grants READ access to every file under its real path.
+// A folder chosen in api.openFolder() grants READ access to the PDF files (real path ends in .pdf)
+// under its real path, nothing else.
 const grantedFolders = new Set(); // pathKey(realpath)
 const MAX_LISTED = 20000;
+// Walk budget: entries visited (of any type) and directory depth. ASH_SEARCH_MAX_ENTRIES lets tests use a small budget.
+const MAX_VISITED = Number(process.env.ASH_SEARCH_MAX_ENTRIES) > 0 ? Number(process.env.ASH_SEARCH_MAX_ENTRIES) : 200000;
+const MAX_DEPTH = 32;
 const CACHE_CAP = 100 * 1024 * 1024;
 const cacheDir = () => join(app.getPath('userData'), 'search-index'); // userData follows portable mode
 const within = (realKey, rootKey) => realKey === rootKey || realKey.startsWith(rootKey.endsWith(sep) ? rootKey : rootKey + sep);
@@ -295,37 +313,68 @@ async function grantedRoot(p) {
   for (const root of grantedFolders) if (within(real, root)) return root;
   return null;
 }
-const inGrantedFolder = async (p) => (await grantedRoot(p)) !== null;
+// A folder-derived read: the real path must be a .pdf inside the root, checked before the open and again
+// on the open handle (same file as the real path), so a swapped symlink/junction cannot redirect the read.
+async function folderPdfReal(p, root) {
+  const real = await realpath(p);
+  if (!within(pathKey(real), root)) throw new Error('file:read: path is outside the opened folder');
+  if (extname(real).toLowerCase() !== '.pdf') throw new Error('file:read: only PDF files can be read from an opened folder');
+  return real;
+}
+async function readFolderPdf(p, root) {
+  await folderPdfReal(p, root);
+  return readGranted(p, async (info) => {
+    const now = await stat(await folderPdfReal(p, root), { bigint: true });
+    if (now.dev !== info.dev || now.ino !== info.ino) throw new Error('file:read: file changed while it was being opened');
+  });
+}
+const walks = new Map(); // root -> AbortController of the listing in flight (one per root)
 async function listPdfs(folder, recursive) {
   const root = await grantedRoot(folder);
   if (!root) throw new Error('listPdfs: folder was not opened in this session');
+  walks.get(root)?.abort(); // a new request for the same folder replaces the old one
+  const ctl = new AbortController();
+  walks.set(root, ctl);
   const out = [];
   const seen = new Set();
-  const walk = async (dir) => {
+  let visited = 0, truncated = false;
+  const stop = () => {
+    if (ctl.signal.aborted || visited >= MAX_VISITED || out.length >= MAX_LISTED) truncated = true;
+    return truncated;
+  };
+  const walk = async (dir, depth) => {
     const real = pathKey(await realpath(dir));
     if (seen.has(real) || !within(real, root)) return; // loops and symlinks leaving the folder
     seen.add(real);
     let entries;
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
-    for (const e of entries) {
-      if (out.length >= MAX_LISTED) return;
+    try { entries = await opendir(dir); } catch { return; }
+    for await (const e of entries) { // breaking out closes the directory
+      if (stop()) break;
+      visited++;
       const p = join(dir, e.name);
       try {
-        let isDir = e.isDirectory(), isFile = e.isFile();
+        let isDir = e.isDirectory(), isFile = e.isFile(), real = p;
         if (e.isSymbolicLink()) {
-          if (!within(pathKey(await realpath(p)), root)) continue;
+          real = await realpath(p);
+          if (!within(pathKey(real), root)) continue;
           const st = await stat(p); isDir = st.isDirectory(); isFile = st.isFile();
         }
-        if (isDir && recursive) await walk(p);
-        else if (isFile && extname(e.name).toLowerCase() === '.pdf') {
+        if (isDir && recursive) {
+          if (depth >= MAX_DEPTH) truncated = true;
+          else await walk(p, depth + 1);
+        } else if (isFile && extname(e.name).toLowerCase() === '.pdf' && extname(real).toLowerCase() === '.pdf') { // as file:read requires
           const st = await stat(p);
           out.push({ path: p, name: e.name, size: st.size, mtimeMs: st.mtimeMs });
         }
       } catch { /* vanished or unreadable entry: skip */ }
     }
   };
-  await walk(folder);
-  return out;
+  try {
+    await walk(folder, 0);
+  } finally {
+    if (walks.get(root) === ctl) walks.delete(root);
+  }
+  return { files: out, truncated };
 }
 const cacheFile = (key) => join(cacheDir(), createHash('sha256').update(key).digest('hex') + '.json');
 async function cacheSet(key, value) {
@@ -358,6 +407,7 @@ function registerAdvancedSearchIpc() {
     return { path: filePaths[0] };
   });
   handle('search:listPdfs', (folder, opts = {}) => listPdfs(folder, !!(isPlainObject(opts) && opts.recursive)));
+  handle('search:cancel', () => { for (const ctl of walks.values()) ctl.abort(); return true; });
   handle('search:cacheGet', async (key) => {
     if (typeof key !== 'string' || !key || key.length > 8192) throw new TypeError('invalid cache key');
     try { return await readFile(cacheFile(key), 'utf8'); } catch { return null; }
@@ -380,8 +430,10 @@ function registerIpc() {
   });
 
   handle('file:read', async (p) => {
-    if (!isGranted(p) && !(await inGrantedFolder(p))) throw new Error('file:read: path was not opened in this session');
-    return readGranted(p);
+    if (isGranted(p)) return readGranted(p);
+    const root = await grantedRoot(p);
+    if (!root) throw new Error('file:read: path was not opened in this session');
+    return readFolderPdf(p, root);
   });
 
   handle('dialog:save', async (opts) => {
@@ -434,15 +486,15 @@ function registerIpc() {
   });
 
   handle('app:settingsGet', (key) => {
-    if (typeof key !== 'string' || !SETTINGS_KEY.test(key)) throw new TypeError('invalid settings key');
-    return settings.renderer?.[key];
+    if (!isSettingsKey(key)) throw new TypeError('invalid settings key');
+    return settings.renderer && Object.hasOwn(settings.renderer, key) ? settings.renderer[key] : undefined;
   });
 
   handle('app:settingsSet', (key, value) => {
-    if (typeof key !== 'string' || !SETTINGS_KEY.test(key)) throw new TypeError('invalid settings key');
+    if (!isSettingsKey(key)) throw new TypeError('invalid settings key');
     const json = value === undefined ? undefined : JSON.stringify(value);
     if (json !== undefined && json.length > 64 * 1024) throw new RangeError('settings value too large (64 KiB max)');
-    settings.renderer = isPlainObject(settings.renderer) ? settings.renderer : {};
+    settings.renderer ??= Object.create(null);
     if (json === undefined) delete settings.renderer[key];
     else settings.renderer[key] = JSON.parse(json);
     saveSettings();
@@ -457,10 +509,13 @@ function registerIpc() {
 // Add a kind (e.g. 'stamp') to LIBRARY_KINDS to reuse the storage.
 const LIBRARY_KINDS = new Set(['signature', 'stamp']);
 const LIBRARY_ID = /^[A-Za-z0-9_-]{1,64}$/;
+const LIBRARY_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i; // Windows device names
 const LIBRARY_MAX_BYTES = 5 * 1024 * 1024;
+const LIBRARY_MAX_ITEMS = 500; // per kind
+const isLibraryId = (id) => typeof id === 'string' && LIBRARY_ID.test(id) && !LIBRARY_RESERVED.test(id);
 function libraryFile(kind, id, ext) {
   if (!LIBRARY_KINDS.has(kind)) throw new TypeError('invalid library kind');
-  if (typeof id !== 'string' || !LIBRARY_ID.test(id)) throw new TypeError('invalid library id');
+  if (!isLibraryId(id)) throw new TypeError('invalid library id');
   return join(app.getPath('userData'), 'library', kind, id + ext);
 }
 const ignoreMissing = (err) => { if (err?.code !== 'ENOENT') throw err; };
@@ -468,10 +523,19 @@ function registerLibraryIpc() {
   handle('library:list', async (kind) => {
     const dir = dirname(libraryFile(kind, 'x', '.json'));
     const names = await readdir(dir).catch((err) => { ignoreMissing(err); return []; });
+    const metas = new Set(names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)));
+    // Image bytes whose meta is gone (e.g. a delete interrupted half way). Only stale ones: library:put
+    // writes the .bin just before the .json, and a list in between must not delete it.
+    for (const n of names) {
+      if (!n.endsWith('.bin') || metas.has(n.slice(0, -4))) continue;
+      const f = join(dir, n);
+      try { if (Date.now() - (await lstat(f)).mtimeMs > 60_000) await unlink(f); } catch { /* raced */ }
+    }
     const out = [];
     for (const n of names) {
+      if (out.length >= LIBRARY_MAX_ITEMS) break;
       const id = n.endsWith('.json') ? n.slice(0, -5) : null;
-      if (!id || !LIBRARY_ID.test(id)) continue;
+      if (!id || !isLibraryId(id)) continue;
       try { out.push({ id, meta: JSON.parse(await readFile(join(dir, n), 'utf8')) }); } catch (err) { console.error('library: unreadable meta', n, err.message); }
     }
     return out;
@@ -490,6 +554,9 @@ function registerLibraryIpc() {
     const json = JSON.stringify(item.meta);
     if (json.length > 64 * 1024) throw new RangeError('library meta too large (64 KiB max)');
     await mkdir(dirname(metaFile), { recursive: true });
+    if (!existsSync(metaFile) && (await readdir(dirname(metaFile))).filter((n) => n.endsWith('.json')).length >= LIBRARY_MAX_ITEMS) {
+      throw new RangeError(`library is full (${LIBRARY_MAX_ITEMS} items max)`);
+    }
     if (item.bytes !== undefined) {
       const bytes = toBytes(item.bytes);
       if (bytes.length > LIBRARY_MAX_BYTES) throw new RangeError('library item too large (5 MB max)');

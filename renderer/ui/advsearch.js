@@ -19,6 +19,7 @@ let panel = null;
 let job = null;          // {cancelled}
 let results = [];        // [{name, path, tabId, mtimeMs, hits}]
 let folder = null;
+let incomplete = false;  // the folder listing hit its limits or was cancelled
 const els = {};
 
 export function initAdvancedSearch(appRef) {
@@ -47,7 +48,7 @@ export function initAdvancedSearch(appRef) {
     h('label.as-row', {}, 'Pattern ', sel('pattern', [['', 'None (use query)'], ['email', 'Email'], ['phone', 'Phone'], ['date', 'Date'], ['url', 'URL'], ['amount', 'Amount'], ['custom', 'Custom regex']])),
     els.custom,
     h('div.as-row', {}, opt('annotations', 'Comments'), opt('bookmarks', 'Bookmarks')),
-    h('div.as-row', {}, h('button.btn.primary', { type: 'submit', dataset: { as: 'search' } }, 'Search'), button('Cancel', () => { if (job) job.cancelled = true; }, 'cancel'), button('Export CSV', exportCsv, 'export')),
+    h('div.as-row', {}, h('button.btn.primary', { type: 'submit', dataset: { as: 'search' } }, 'Search'), button('Cancel', () => { if (job) job.cancelled = true; api.cancelSearch?.(); }, 'cancel'), button('Export CSV', exportCsv, 'export')),
     els.progress, els.status,
     h('label.as-row', {}, 'Sort by ', sel('sort', [['name', 'File name'], ['mtime', 'Modified date'], ['hits', 'Hits']])),
     els.list);
@@ -87,6 +88,13 @@ async function chooseFolder() {
   els.folderBox.hidden = false;
 }
 
+/** PDFs in the chosen folder: {files, truncated}. Electron returns that shape; the browser shim a bare array. */
+async function listFolder() {
+  const r = await api.listPdfs(folder, { recursive: els.recursive.checked });
+  return Array.isArray(r) ? { files: r, truncated: false } : r;
+}
+const INCOMPLETE = ' - results incomplete (folder too large or listing cancelled)';
+
 /** Run fn(job) with progress UI; only one job at a time. */
 async function withJob(fn) {
   if (job) job.cancelled = true;
@@ -111,11 +119,11 @@ async function folderIndex(my, update) {
   const key = indexKey(folder, els.recursive.checked);
   const idx = loadIndex((await api.cacheGet(key)) ?? '');
   if (!update) return idx;
-  const list = await api.listPdfs(folder, { recursive: els.recursive.checked });
+  const { files: list, truncated } = await listFolder();
   const changed = await updateIndex(idx, list, (f) => extractFile(f, my), (k, n) => progress(k, n, 'Indexing file'));
   if (changed === null) return null;
   await api.cacheSet(key, saveIndex(idx));
-  els.status.textContent = `Index up to date: ${list.length} files (${changed} re-read).`;
+  els.status.textContent = `Index up to date: ${list.length} files (${changed} re-read).` + (truncated ? INCOMPLETE : '');
   return idx;
 }
 const buildIndex = () => withJob((my) => folderIndex(my, true));
@@ -126,13 +134,16 @@ function runSearch() {
     const match = compile(query, o);
     const out = [];
     const scope = els.scope.value;
+    let truncated = false;
     if (scope === 'folder' && els.useIndex.checked) {
       const idx = await folderIndex(my, false);
       if (!Object.keys(idx.files).length) throw new Error('No index for this folder yet: use Build/Update index.');
       out.push(...searchIndex(idx, query, o, match));
     } else if (scope === 'folder') {
       if (!folder) throw new Error('Choose a folder first.');
-      const list = await api.listPdfs(folder, { recursive: els.recursive.checked });
+      const listed = await listFolder();
+      const list = listed.files;
+      truncated = listed.truncated;
       for (const [k, f] of list.entries()) {
         progress(k, list.length, 'Searching file');
         const doc = await extractFile(f, my);
@@ -155,6 +166,7 @@ function runSearch() {
       }
     }
     results = out;
+    incomplete = truncated;
     render(my.cancelled);
   });
 }
@@ -169,7 +181,7 @@ function render(cancelled) {
   results.sort(SORTS[els.sort.value] ?? SORTS.name);
   const n = results.reduce((a, r) => a + r.hits.length, 0);
   els.status.textContent = `${n} hit${n === 1 ? '' : 's'} in ${results.length} file${results.length === 1 ? '' : 's'}${cancelled ? ' (cancelled)' : ''}`
-    + (n > MAX_SHOWN ? ` - showing the first ${MAX_SHOWN}; Export CSV has all` : '');
+    + (incomplete ? INCOMPLETE : '') + (n > MAX_SHOWN ? ` - showing the first ${MAX_SHOWN}; Export CSV has all` : '');
   let budget = MAX_SHOWN;
   els.list.replaceChildren(...results.map((r, fi) => h('section.as-file', {},
     h('h3.as-file-name', { title: r.path ?? r.name }, h('span.as-file-title', {}, r.name), h('span.as-count', {}, String(r.hits.length))),
