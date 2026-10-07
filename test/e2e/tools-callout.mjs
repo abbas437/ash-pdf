@@ -180,6 +180,31 @@ try {
   await ev('an.select(tab, []);');
   await key('Escape');
 
+  // Selecting a callout must edit only that callout: the Shapes tool keeps its own fill/line defaults.
+  step = 'selection does not leak into Shapes defaults';
+  await key('r');
+  check(await ev('return app.state.tool;') === 'shapes', 'R did not pick Shapes');
+  const STYLE_KEYS = ['fill', 'dash', 'strokeWidth', 'color', 'opacity'];
+  const shapeDefaults = await ev('return Object.fromEntries(arg.map((k) => [k, app.state.toolStyle[k]]));', STYLE_KEYS);
+  const c100 = made['zoom 100%'];
+  check(c100.fill === '#ffffff' && shapeDefaults.fill !== '#ffffff', `fixture: callout fill ${c100.fill} vs Shapes fill ${shapeDefaults.fill}`);
+  await key('v');
+  await page.mouse.click(...await toClient(0, c100.x + c100.w / 2, c100.y + c100.h / 2));
+  check(JSON.stringify(await ev('return an.getSelection(tab);')) === JSON.stringify([c100.id]), 'click did not select the 100% callout');
+  await key('r');
+  const shapeAfter = await ev('return Object.fromEntries(arg.map((k) => [k, app.state.toolStyle[k]]));', STYLE_KEYS);
+  check(JSON.stringify(shapeAfter) === JSON.stringify(shapeDefaults), `Shapes defaults changed by selecting a callout: ${JSON.stringify(shapeDefaults)} -> ${JSON.stringify(shapeAfter)}`);
+  check(await ev('return document.querySelector(".options-bar .opt-fill").checked;') === !!shapeDefaults.fill, 'Shapes fill checkbox shows the callout fill');
+  check((await objs()).find((x) => x.id === c100.id).fill === '#ffffff', 'switching tools changed the selected callout');
+  const nr = (await objs()).length;
+  await drag(await toClient(0, 60, 600), await toClient(0, 120, 640));
+  const rect = (await objs()).slice(-1)[0];
+  check((await objs()).length === nr + 1 && rect.type === 'rect', 'Shapes drag did not add a rectangle');
+  check((rect.fill ?? null) === (shapeDefaults.fill ?? null) && rect.dash === shapeDefaults.dash && rect.strokeWidth === shapeDefaults.strokeWidth,
+    `new rectangle took the callout's style: ${JSON.stringify(rect)}`);
+  await ev('an.remove(tab, [arg]); an.select(tab, []);', rect.id);
+  await key('Escape');
+
   step = 'screenshot';
   await frames();
   const box = await page.locator('.page').first().boundingBox();

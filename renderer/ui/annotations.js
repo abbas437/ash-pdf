@@ -435,6 +435,8 @@ function capture(e) { try { e.target.setPointerCapture?.(e.pointerId); } catch {
 
 // Select tool handlers (installed by tools-shapes.js through registerTool).
 export const selectHandlers = {
+  onActivate: () => mirrorSelection(activeTab()),
+  onDeactivate: restoreToolDefaults,
   onPointerDown(e, { tab, hit }) {
     if (e.button !== 0 || !hit) return;
     const p = toPage(tab, hit.pageIndex, e.clientX, e.clientY);
@@ -519,16 +521,32 @@ function applyStyle(tab, keys) {
   }
   if (patches.size) updateMany(tab, patches, { coalesce: `style:${keys.join(',')}` });
 }
-function selectionChanged(tab) {
-  // Show the selection's style in the options bar (single stroked object only).
+// While the Select tool is active, a single selected stroked object's style is shown in the options
+// bar by copying it into state.toolStyle. Those keys are also the drawing tools' defaults, so the
+// values they had before are kept here and put back when the selection goes or the Select tool is
+// left: selecting (and restyling) an object never changes another tool's defaults.
+const MIRROR_KEYS = ['color', 'strokeWidth', 'dash', 'opacity', 'fill'];
+let toolDefaults = null;
+function restoreToolDefaults() {
+  if (!toolDefaults) return;
+  Object.assign(state.toolStyle, toolDefaults);
+  toolDefaults = null;
+  lastStyle = { ...state.toolStyle };
+}
+function mirrorSelection(tab) {
+  restoreToolDefaults();
+  if (state.tool !== 'select' || !tab) return;
   const ids = getSelection(tab);
   const o = ids.length === 1 ? getObject(tab, ids[0]) : null;
-  if (o && o.stroke !== undefined) {
-    Object.assign(state.toolStyle, { color: o.stroke ?? state.toolStyle.color, strokeWidth: o.strokeWidth ?? state.toolStyle.strokeWidth, dash: o.dash ?? 'solid', opacity: o.opacity ?? 1, ...('fill' in o ? { fill: o.fill ?? null } : {}) });
-    lastStyle = { ...state.toolStyle };
-  }
+  if (!o || o.stroke === undefined) return;
+  toolDefaults = Object.fromEntries(MIRROR_KEYS.map((k) => [k, state.toolStyle[k]]));
+  Object.assign(state.toolStyle, { color: o.stroke ?? state.toolStyle.color, strokeWidth: o.strokeWidth ?? state.toolStyle.strokeWidth, dash: o.dash ?? 'solid', opacity: o.opacity ?? 1, ...('fill' in o ? { fill: o.fill ?? null } : {}) });
+  lastStyle = { ...state.toolStyle };
+}
+function selectionChanged(tab) {
+  mirrorSelection(tab); // show the selection's style in the options bar (single stroked object only)
   if (state.tool === 'select') setTool('select'); // re-renders the options bar
-  bus.emit('annotations:selection', { tab, ids });
+  bus.emit('annotations:selection', { tab, ids: getSelection(tab) });
   updateChrome();
 }
 function copySel(tab) {
