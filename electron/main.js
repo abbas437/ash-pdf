@@ -11,9 +11,9 @@
 //     from an open/save dialog, the command line or an OS open-file event in this session.
 //   - No new windows, no navigation away from the app page, every permission request denied.
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, session, shell } from 'electron';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -281,7 +281,93 @@ function toBytes(bytes) {
 }
 const SETTINGS_KEY = /^[A-Za-z0-9_.-]{1,64}$/;
 
+// ---- advanced search: folder grants, PDF listing, search-index cache (renderer/ui/advsearch.js)
+// A folder chosen in api.openFolder() grants READ access to every file under its real path.
+const grantedFolders = new Set(); // pathKey(realpath)
+const MAX_LISTED = 20000;
+const CACHE_CAP = 100 * 1024 * 1024;
+const cacheDir = () => join(app.getPath('userData'), 'search-index'); // userData follows portable mode
+const within = (realKey, rootKey) => realKey === rootKey || realKey.startsWith(rootKey.endsWith(sep) ? rootKey : rootKey + sep);
+async function grantedRoot(p) {
+  if (typeof p !== 'string' || !p || p.length >= 4096 || !isAbsolute(p)) return null;
+  let real;
+  try { real = pathKey(await realpath(p)); } catch { return null; }
+  for (const root of grantedFolders) if (within(real, root)) return root;
+  return null;
+}
+const inGrantedFolder = async (p) => (await grantedRoot(p)) !== null;
+async function listPdfs(folder, recursive) {
+  const root = await grantedRoot(folder);
+  if (!root) throw new Error('listPdfs: folder was not opened in this session');
+  const out = [];
+  const seen = new Set();
+  const walk = async (dir) => {
+    const real = pathKey(await realpath(dir));
+    if (seen.has(real) || !within(real, root)) return; // loops and symlinks leaving the folder
+    seen.add(real);
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= MAX_LISTED) return;
+      const p = join(dir, e.name);
+      try {
+        let isDir = e.isDirectory(), isFile = e.isFile();
+        if (e.isSymbolicLink()) {
+          if (!within(pathKey(await realpath(p)), root)) continue;
+          const st = await stat(p); isDir = st.isDirectory(); isFile = st.isFile();
+        }
+        if (isDir && recursive) await walk(p);
+        else if (isFile && extname(e.name).toLowerCase() === '.pdf') {
+          const st = await stat(p);
+          out.push({ path: p, name: e.name, size: st.size, mtimeMs: st.mtimeMs });
+        }
+      } catch { /* vanished or unreadable entry: skip */ }
+    }
+  };
+  await walk(folder);
+  return out;
+}
+const cacheFile = (key) => join(cacheDir(), createHash('sha256').update(key).digest('hex') + '.json');
+async function cacheSet(key, value) {
+  if (typeof key !== 'string' || !key || key.length > 8192) throw new TypeError('invalid cache key');
+  if (typeof value !== 'string') throw new TypeError('cache value must be a string');
+  if (Buffer.byteLength(value) > CACHE_CAP) throw new RangeError('cache value too large (100 MB max)');
+  await mkdir(cacheDir(), { recursive: true });
+  const file = cacheFile(key);
+  await atomicWrite(file, value);
+  // Evict least recently written entries until the folder fits in the cap.
+  const files = [];
+  for (const name of await readdir(cacheDir())) {
+    if (!name.endsWith('.json')) continue;
+    try { const st = await lstat(join(cacheDir(), name)); files.push({ p: join(cacheDir(), name), size: st.size, t: st.mtimeMs }); } catch { /* raced */ }
+  }
+  let total = files.reduce((a, f) => a + f.size, 0);
+  for (const f of files.sort((a, b) => a.t - b.t)) {
+    if (total <= CACHE_CAP) break;
+    if (f.p === file) continue;
+    await unlink(f.p).catch(() => {});
+    total -= f.size;
+  }
+  return true;
+}
+function registerAdvancedSearchIpc() {
+  handle('dialog:openFolder', async () => {
+    const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] });
+    if (canceled || !filePaths[0]) return null;
+    grantedFolders.add(pathKey(await realpath(filePaths[0])));
+    return { path: filePaths[0] };
+  });
+  handle('search:listPdfs', (folder, opts = {}) => listPdfs(folder, !!(isPlainObject(opts) && opts.recursive)));
+  handle('search:cacheGet', async (key) => {
+    if (typeof key !== 'string' || !key || key.length > 8192) throw new TypeError('invalid cache key');
+    try { return await readFile(cacheFile(key), 'utf8'); } catch { return null; }
+  });
+  handle('search:cacheSet', (key, value) => cacheSet(key, value));
+}
+// ---- end advanced search
+
 function registerIpc() {
+  registerAdvancedSearchIpc();
   handle('dialog:open', async (opts = {}) => {
     if (!isPlainObject(opts)) throw new TypeError('dialog:open options must be an object');
     const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
@@ -294,7 +380,7 @@ function registerIpc() {
   });
 
   handle('file:read', async (p) => {
-    if (!isGranted(p)) throw new Error('file:read: path was not opened in this session');
+    if (!isGranted(p) && !(await inGrantedFolder(p))) throw new Error('file:read: path was not opened in this session');
     return readGranted(p);
   });
 

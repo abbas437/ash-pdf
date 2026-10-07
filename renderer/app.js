@@ -16,6 +16,7 @@ import { initCalloutTools } from './ui/tools-callout.js';
 import { initStampTools } from './ui/tools-stamp.js';
 import { initForms } from './ui/forms.js';
 import { initPageTools, idle as pageOpsIdle } from './ui/pagetools.js';
+import { initAdvancedSearch } from './ui/advsearch.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -448,6 +449,7 @@ initCalloutTools(app);
 initStampTools(app);
 app.annotations = annotations;
 initPageTools(app);
+initAdvancedSearch(app);
 
 (async () => {
   try {

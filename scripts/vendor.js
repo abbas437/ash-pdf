@@ -12,6 +12,7 @@
 //   renderer/vendor/pdfjs/iccs/            pdfjs-dist iccs/ (CMYK ICC profile)            -> getDocument({ iccUrl })
 //   renderer/vendor/pdf-lib.esm.min.js     pdf-lib dist/pdf-lib.esm.min.js (self-contained ES module) ("pdf-lib")
 //   renderer/vendor/fontkit.esm.js         generated ES wrapper around @pdf-lib/fontkit's UMD build ("@pdf-lib/fontkit")
+//   renderer/vendor/minisearch.js          minisearch dist/es/index.js (self-contained ES module) ("minisearch")
 //   renderer/vendor/licenses/              licence files of everything above
 //
 // Why fontkit is wrapped: @pdf-lib/fontkit's ES build (dist/fontkit.es.min.js) does
@@ -82,6 +83,10 @@ writeFileSync(
 copied.push('@pdf-lib/fontkit/dist/fontkit.umd.min.js -> renderer/vendor/fontkit.esm.js (ES wrapper)');
 const fkLicence = ['LICENSE', 'LICENSE.md', 'license'].map((f) => join(nm, '@pdf-lib/fontkit', f)).find(existsSync);
 if (fkLicence) cpSync(fkLicence, join(out, 'licenses', '@pdf-lib-fontkit-LICENSE.txt'));
+
+// --- MiniSearch (MIT) — dist/es/index.js is a self-contained ES module (advanced search index) ---
+copy('minisearch/dist/es/index.js', 'minisearch.js');
+copy('minisearch/LICENSE.txt', 'licenses/minisearch-LICENSE.txt');
 
 const count = (d) => readdirSync(d, { recursive: true }).length;
 for (const line of copied) console.log(`vendor: ${line}`);
