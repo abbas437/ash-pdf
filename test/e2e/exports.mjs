@@ -16,12 +16,34 @@ const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 const TABLE = [['Item', 'Qty', 'Price', 'Total'], ['Net amount', '2', '1,234.50', '2,469'], ['Pump', '10', '0.75', '7.5']];
 
+const REPORT_PARA = 'The table below gives the comment count by discipline and review code for the documents reviewed this period.';
+const REPORT_LABEL = ['G-01 / G-02', 'Status and maturity: content is concept-level and several sections are still placeholders.'];
+const REPORT_HEAD = ['Discipline', 'Code B', 'Code C', 'Code D', 'Total', 'Major', 'Docs reviewed', 'Docs coded C/D'];
+const REPORT_ROWS = [['Civil', 5, 12, 2, 19, 7, 6, 3], ['Electrical', 6, 27, 1, 34, 28, 4, 4], ['Mechanical', 9, 14, 0, 23, 11, 8, 2], ['Total', 124, 183, 26, 333, 209, 88, 71]];
+const REPORT_NOTE = 'Note: Code C/D counts include documents resubmitted under Rev.01 and Rev.02 in this review cycle.';
+
 async function makePdf() {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const page = doc.addPage([612, 792]);
   TABLE.forEach((row, i) => row.forEach((c, j) => page.drawText(c, { x: 72 + j * 110, y: 700 - i * 22, size: 11, font })));
   doc.addPage([612, 792]).drawText('Second page', { x: 72, y: 700, size: 11, font });
+  // Page 3: a report page - paragraph lines, a label + sentence row, a ruled 8-column table, a note.
+  const rp = doc.addPage([612, 792]);
+  const text = (s, x, y) => rp.drawText(s, { x, y, size: 9, font });
+  text(REPORT_PARA, 60, 740);
+  text(REPORT_LABEL[0], 60, 726);
+  text(REPORT_LABEL[1], 140, 726);
+  const xs = [60, 170, 225, 280, 335, 390, 445, 510, 580]; // column edges
+  const body = [REPORT_HEAD, ...REPORT_ROWS];
+  body.forEach((row, i) => row.forEach((c, j) => {
+    const s = String(c), y = 690 - i * 16;
+    text(s, typeof c === 'number' ? xs[j + 1] - 5 - font.widthOfTextAtSize(s, 9) : xs[j] + 4, y);
+  }));
+  const top = 702, bottom = 702 - body.length * 16;
+  for (const x of xs) rp.drawLine({ start: { x, y: top }, end: { x, y: bottom }, thickness: 0.5 });
+  for (let i = 0; i <= body.length; i++) rp.drawLine({ start: { x: xs[0], y: top - i * 16 }, end: { x: xs.at(-1), y: top - i * 16 }, thickness: 0.5 });
+  text(REPORT_NOTE, 60, bottom - 18);
   return Buffer.from(await doc.save());
 }
 
@@ -108,6 +130,17 @@ try {
   const rows = readSheet(files[sheetFile].toString(), shared);
   const want = [['Item', 'Qty', 'Price', 'Total'], ['Net amount', 2, 1234.5, 2469], ['Pump', 10, 0.75, 7.5]];
   check(JSON.stringify(rows) === JSON.stringify(want), `sheet 1 rows ${JSON.stringify(rows)}`);
+
+  step = 'Excel: export the report page (paragraphs + ruled table)';
+  await menu('export-xlsx');
+  await page.fill('#xp-xlsx-pages', '3');
+  const rep = await download(() => page.locator('.xp-xlsx-dialog button[data-value="export"]').click());
+  const rfiles = unzip(rep.bytes);
+  const rshared = [...(rfiles['xl/sharedStrings.xml']?.toString() ?? '').matchAll(/<si>([\s\S]*?)<\/si>/g)].map(([, si]) => [...si.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((m) => m[1]).join(''));
+  const rrows = readSheet(rfiles['xl/worksheets/sheet1.xml'].toString(), rshared);
+  const has = (want) => rrows.some((r) => JSON.stringify(r) === JSON.stringify(want));
+  for (const want of [REPORT_HEAD, ...REPORT_ROWS]) check(has(want), `report row ${JSON.stringify(want)} missing from ${JSON.stringify(rrows)}`);
+  check(rrows.some((r) => r[0] === REPORT_PARA) && rrows.some((r) => r[0] === REPORT_NOTE), `report prose rows ${JSON.stringify(rrows)}`);
 
   step = 'image: page 1, PNG, 150 dpi';
   await menu('export-image');
