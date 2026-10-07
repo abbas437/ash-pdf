@@ -153,6 +153,14 @@ describe('page operations', () => {
     assert.deepEqual(await pageLabels(out), ['Page 1', 'Page 3', 'Page 2', 'Page 2']);
   });
 
+  test('replacePages swaps a run of pages in place, keeping the page count', async () => {
+    const out = await ops.replacePages(await makePdf(4), await makePdf(3, [300, 400]), [2, 0], 1);
+    assert.deepEqual(await pageLabels(out), ['Page 1', 'Page 3', 'Page 1', 'Page 4']);
+    assert.deepEqual((await ops.getInfo(out)).pages.map((p) => [p.width, p.height]), [[612, 792], [300, 400], [300, 400], [612, 792]]);
+    await assert.rejects(ops.replacePages(await makePdf(4), await makePdf(3), [0, 1], 3), RangeError);
+    await assert.rejects(ops.replacePages(await makePdf(4), await makePdf(3), [], 0), RangeError);
+  });
+
   test('cropPages on an unrotated page sets CropBox from visible margins', async () => {
     const out = await ops.cropPages(await makePdf(1, [600, 800]), [0], { left: 10, top: 20, right: 30, bottom: 40 });
     assert.deepEqual((await ops.getInfo(out)).pages[0].cropBox, [10, 40, 570, 780]);
