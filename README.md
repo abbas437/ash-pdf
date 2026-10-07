@@ -10,7 +10,7 @@ ASH Technical & Project Management Services (ASH PMCS).
 - **Annotate**: shapes, lines and arrows, freehand, area highlight, text boxes, callouts, whiteout, sticky notes, text highlight / underline / strikeout. Annotations are saved as **real PDF annotations**, so they stay editable here and in other PDF apps, and annotations made in other apps open as editable objects. Flatten annotations into the page when you want them fixed.
 - **Comments panel**: every annotation by page with author, date, replies and status (Accepted, Rejected, Cancelled, Completed); filters and CSV export.
 - **Stamps**: 20 standard stamps, dynamic stamps (name, date and time filled in), your own text stamps.
-- **Signatures**: a signature library (draw, type with handwriting fonts, import an image with background removal, paste), initials, optional password lock, place on many pages at once, signature blocks with name and date. These are visual signatures, not digital certificates.
+- **Signatures**: a signature library (draw, type with handwriting fonts, import an image with background removal, paste), initials, saved signature images encrypted with your Windows account (an optional password adds a second lock; a portable folder copied to another PC or Windows user cannot open them, so re-create them there), place on many pages at once, signature blocks with name and date. These are visual signatures, not digital certificates.
 - **Pages**: rotate, reorder, delete, insert, duplicate, extract, crop, resize, reverse, interleave two scans, merge and split.
 - **Header & footer, page numbers, watermark, background, Bates numbering**: add, replace and remove later.
 - **Forms**: fill AcroForm fields and save.

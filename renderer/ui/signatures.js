@@ -16,9 +16,13 @@ const PENS = [['#1a2b6d', 'Dark blue'], ['#111111', 'Black']];
 const KINDS = [['signature', 'Signature'], ['initials', 'Initials']];
 const MAX_SIDE = 1200;        // imported / pasted images are scaled down to this
 const NOTE = 'A visual signature is an image of your handwriting or name. It is not a digital certificate: it does not prove who signed or protect the document from changes.';
+const PROTECT_NOTE = 'Saved signatures are protected by your Windows account; add a password for extra protection. '
+  + 'Signatures saved under another Windows user or computer (for example a copied portable folder) cannot be opened here: re-create them.';
+const UNAVAILABLE = 'Unavailable on this computer — re-create it';
 
 const api = () => window.api;
 const unlocked = new Map();   // id -> PNG bytes of password-locked items opened this session
+const warnedUnavailable = new Set(); // ids already reported as unavailable this session
 const listeners = new Set();
 const changed = () => { for (const cb of listeners) { try { cb(); } catch (err) { console.error(err); } } };
 const newId = () => `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
@@ -135,6 +139,10 @@ export const signatureLibrary = {
     if (unlocked.has(id)) return unlocked.get(id).slice();
     const item = await api().libraryGet(KIND, id);
     if (!item) return null;
+    if (item.unavailable) { // protected by another Windows account or computer (see electron/main.js)
+      if (!warnedUnavailable.has(id)) { warnedUnavailable.add(id); toast(`"${item.meta.name}": ${UNAVAILABLE} in Tools > Manage signatures.`); }
+      return null;
+    }
     if (!item.meta.lock) return item.bytes;
     const png = await unlockDialog(item);
     if (png) unlocked.set(id, png);
@@ -335,9 +343,12 @@ async function managerDialog() {
     if (!list.length) listEl.append(h('li.sigman-empty', {}, 'No saved signatures yet. Add one below.'));
     for (const [k, it] of list.entries()) {
       const m = it.meta;
-      const plain = !m.lock ? (await api().libraryGet(KIND, it.id))?.bytes : unlocked.get(it.id);
+      const got = unlocked.has(it.id) ? null : await api().libraryGet(KIND, it.id);
+      const unavailable = !!got?.unavailable;
+      const plain = !m.lock ? got?.bytes : unlocked.get(it.id);
       let preview;
-      if (plain) { const u = URL.createObjectURL(new Blob([plain], { type: 'image/png' })); urls.push(u); preview = h('img', { src: u, alt: `Preview of ${m.name}` }); }
+      if (unavailable) preview = h('span.sigman-locked.sigman-unavailable', {}, UNAVAILABLE);
+      else if (plain) { const u = URL.createObjectURL(new Blob([plain], { type: 'image/png' })); urls.push(u); preview = h('img', { src: u, alt: `Preview of ${m.name}` }); }
       else preview = h('span.sigman-locked', {}, 'Locked');
       const act = (fn) => async () => { try { await fn(); } catch (err) { toast(`Could not update the library: ${err.message}`); } await render(); };
       const save = (patch) => act(async () => { await putMeta(it.id, { ...m, ...patch }); changed(); });
@@ -357,7 +368,7 @@ async function managerDialog() {
         h('div.sigman-actions', {},
           h('button.btn.sigman-up', { type: 'button', disabled: k === 0, 'aria-label': `Move ${m.name} up`, title: 'Move up', onclick: move(-1) }, '↑'),
           h('button.btn.sigman-down', { type: 'button', disabled: k === list.length - 1, 'aria-label': `Move ${m.name} down`, title: 'Move down', onclick: move(1) }, '↓'),
-          m.lock ? h('button.btn.sigman-unlock', { type: 'button', onclick: act(() => unlockItem(it)) }, 'Remove password…')
+          unavailable ? null : m.lock ? h('button.btn.sigman-unlock', { type: 'button', onclick: act(() => unlockItem(it)) }, 'Remove password…')
             : h('button.btn.sigman-lock', { type: 'button', onclick: act(() => lockItem(it)) }, 'Lock…'),
           h('button.btn.danger.sigman-delete', { type: 'button', onclick: act(async () => {
             const ok = await showDialog({ title: 'Delete signature', body: `Delete "${m.name}" from the library? This cannot be undone.`, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Delete', value: 'delete', danger: true, primary: true }] });
@@ -372,6 +383,7 @@ async function managerDialog() {
   const add = (mode, file) => async () => { if (await createDialog(mode, file)) await render(); };
   const body = h('div.sigman', {},
     h('p.sig-note', {}, NOTE),
+    h('p.sig-note.sigman-protect', {}, PROTECT_NOTE),
     listEl,
     h('div.sigman-add', {}, h('span', {}, 'Add new:'),
       h('button.btn.sigman-add-draw', { type: 'button', onclick: add('draw') }, 'Draw…'),

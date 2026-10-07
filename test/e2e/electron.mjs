@@ -3,7 +3,7 @@
 // passed on the command line, then checks the main process's capability checks through window.api.
 // env: ELECTRON_BIN (optional; defaults to the installed electron package).
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -36,7 +36,8 @@ await symlink(join(a, 'note.txt'), join(a, 'note-alias.pdf')); // .pdf name, rea
 execFileSync('mkfifo', [join(a, 'pipe.pdf')]);
 for (let i = 0; i < 60; i++) await writeFile(join(big, `f${i}.txt`), '');
 const TEST_BUDGET = 50; // entries visited per listing; big/ has 60
-// Portable mode keeps userData (settings, library) inside tmp.
+// Portable mode keeps userData (settings, library) inside tmp. ASH_TEST_FAKE_SAFESTORAGE swaps the OS
+// keyring (absent here) for a reversible test cipher, so the at-rest encryption path runs.
 const dataDir = join(tmp, 'ASH-PDF-Studio-data');
 const libDir = (kind) => join(dataDir, 'library', kind);
 await mkdir(libDir('signature'), { recursive: true });
@@ -53,7 +54,7 @@ for (let i = 0; i < 500; i++) {
 let step = 'launch';
 const app = await electron.launch({
   executablePath: electronBin, args: ['--disable-gpu', root, pdfPath], cwd: root,
-  env: { ...process.env, PORTABLE_EXECUTABLE_DIR: tmp, ASH_SEARCH_MAX_ENTRIES: String(TEST_BUDGET) },
+  env: { ...process.env, PORTABLE_EXECUTABLE_DIR: tmp, ASH_SEARCH_MAX_ENTRIES: String(TEST_BUDGET), ASH_TEST_FAKE_SAFESTORAGE: '1' },
 });
 try {
   const problems = [];
@@ -128,6 +129,46 @@ try {
   expect('libraryPut past 500 items', r, r.startsWith('rejected:'));
   r = await call('libraryPut', 'stamp', 's0', { meta: { v: 2 } });
   expect('libraryPut updates an existing item when full', r, r === 'ok:true');
+
+  step = 'library: encrypted at rest';
+  const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const png = [...PNG_SIG, ...Array.from({ length: 200 }, (_, i) => (i * 37) & 255)];
+  const onDisk = (id) => readFileSync(join(libDir('signature'), `${id}.bin`));
+  const sealed = (buf) => buf.subarray(0, 4).toString('latin1') === 'ASE1' && !buf.includes(PNG_SIG);
+  // window.api.libraryGet in the page, bytes as a plain array.
+  const get = (id) => win.evaluate(async (id) => {
+    const r = await window.api.libraryGet('signature', id);
+    return r && { ...r, bytes: r.bytes && Array.from(r.bytes) };
+  }, id);
+  r = await win.evaluate((b) => window.api.libraryPut('signature', 'sealed', { meta: { name: 'Sealed' }, bytes: new Uint8Array(b) }), png);
+  expect('libraryPut sealed', r, r === true);
+  expect('no PNG bytes on disk after put', onDisk('sealed').subarray(0, 12).toString('hex'), sealed(onDisk('sealed')));
+  let got = await get('sealed');
+  expect('libraryGet returns the original bytes', JSON.stringify(got), got.encrypted === true && JSON.stringify(got.bytes) === JSON.stringify(png));
+
+  step = 'library: plain legacy item re-encrypted on first read';
+  await writeFile(join(libDir('signature'), 'legacy.json'), JSON.stringify({ name: 'Old' }));
+  await writeFile(join(libDir('signature'), 'legacy.bin'), Buffer.from(png));
+  got = await get('legacy');
+  expect('legacy item read', JSON.stringify(got), got.encrypted === true && JSON.stringify(got.bytes) === JSON.stringify(png));
+  expect('legacy .bin rewritten encrypted', onDisk('legacy').subarray(0, 12).toString('hex'), sealed(onDisk('legacy')));
+  got = await get('legacy');
+  expect('legacy item read again', JSON.stringify(got), JSON.stringify(got.bytes) === JSON.stringify(png));
+
+  step = 'library: undecryptable item is unavailable, not an error';
+  await writeFile(join(libDir('signature'), 'broken.json'), JSON.stringify({ name: 'Moved' }));
+  await writeFile(join(libDir('signature'), 'broken.bin'), Buffer.concat([Buffer.from('ASE1'), Buffer.from('junk from another computer')]));
+  r = await call('libraryGet', 'signature', 'broken');
+  expect('libraryGet undecryptable', r, r === `ok:${JSON.stringify({ id: 'broken', meta: { name: 'Moved' }, bytes: null, encrypted: true, unavailable: true })}`);
+  step = 'library: manager lists the unavailable item';
+  await win.click('.menu-btn:text-is("Tools")');
+  await win.click('.menu-item[data-id="signature-manage"]');
+  const badge = await win.textContent('.sigman-item[data-id="broken"] .sigman-unavailable', { timeout: 10000 });
+  expect('unavailable badge', badge, badge === 'Unavailable on this computer — re-create it');
+  const note = await win.textContent('.sigman-wrap .sigman-protect');
+  expect('manager note', note, note.startsWith('Saved signatures are protected by your Windows account; add a password for extra protection.'));
+  await win.keyboard.press('Escape');
+  await win.waitForSelector('.sigman-wrap', { state: 'detached', timeout: 5000 });
 
   step = 'settings keys';
   for (const key of ['__proto__', 'constructor', 'prototype']) {

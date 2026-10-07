@@ -10,7 +10,7 @@
 //   - Filesystem access is by capability: a path is readable/writable only after it came
 //     from an open/save dialog, the command line or an OS open-file event in this session.
 //   - No new windows, no navigation away from the app page, every permission request denied.
-import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, session, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, session, shell } from 'electron';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants as fsConstants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { lstat, mkdir, open, opendir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
@@ -507,6 +507,46 @@ function registerIpc() {
 // userData dir (the portable data dir in portable mode) as library/<kind>/<id>.bin (image bytes;
 // AES-GCM ciphertext when the item is password-locked, done in the renderer) and <id>.json (meta).
 // Add a kind (e.g. 'stamp') to LIBRARY_KINDS to reuse the storage.
+//
+// At rest the .bin is protected by the user's OS login (owner decision: the Windows login is the
+// lock; the per-item password stays an optional extra): Electron safeStorage (DPAPI on Windows)
+// wraps the bytes and the file is LIBRARY_MAGIC + ciphertext. A file without the magic is plain:
+// written by an older version (re-wrapped on its first read) or when encryption is unavailable
+// (e.g. Linux without a keyring: stored plain, reported as encrypted:false, never an error). DPAPI
+// binds to the Windows user and computer, so a portable data folder moved to another PC or user
+// cannot unwrap its items: library:get reports those (and corrupted files) as {unavailable: true}.
+const LIBRARY_MAGIC = Buffer.from('ASE1');
+const safeStorageCipher = {
+  available: () => safeStorage.isEncryptionAvailable(),
+  // safeStorage takes strings: carry the bytes as base64.
+  encrypt: (bytes) => safeStorage.encryptString(Buffer.from(bytes).toString('base64')),
+  decrypt: (data) => Buffer.from(safeStorage.decryptString(data), 'base64'),
+};
+// Tests only (unpackaged + ASH_TEST_FAKE_SAFESTORAGE=1): a reversible stand-in for CI machines
+// without an OS keyring. Not a cipher; it only has to hide the PNG signature and reject junk.
+const fakeCipher = {
+  available: () => true,
+  encrypt: (bytes) => Buffer.concat([Buffer.from('FAKE'), Buffer.from(bytes).map((b) => b ^ 0x5a)]),
+  decrypt: (data) => {
+    if (data.subarray(0, 4).toString('latin1') !== 'FAKE') throw new Error('fake safeStorage: cannot decrypt');
+    return Buffer.from(data.subarray(4)).map((b) => b ^ 0x5a);
+  },
+};
+const libraryCipher = !app.isPackaged && process.env.ASH_TEST_FAKE_SAFESTORAGE === '1' ? fakeCipher : safeStorageCipher;
+const isWrapped = (data) => data.length >= LIBRARY_MAGIC.length && data.subarray(0, LIBRARY_MAGIC.length).equals(LIBRARY_MAGIC);
+/** Bytes as stored: wrapped when the OS can encrypt, plain otherwise. */
+function wrapLibraryBytes(bytes) {
+  return libraryCipher.available() ? Buffer.concat([LIBRARY_MAGIC, libraryCipher.encrypt(bytes)]) : bytes;
+}
+// One library operation per file at a time, so a migrating read cannot overwrite a newer put.
+const libraryQueues = new Map();
+function withLibraryFile(file, fn) {
+  const run = (libraryQueues.get(file) ?? Promise.resolve()).then(fn);
+  const tail = run.catch(() => {});
+  libraryQueues.set(file, tail);
+  tail.then(() => { if (libraryQueues.get(file) === tail) libraryQueues.delete(file); });
+  return run;
+}
 const LIBRARY_KINDS = new Set(['signature', 'stamp']);
 const LIBRARY_ID = /^[A-Za-z0-9_-]{1,64}$/;
 const LIBRARY_RESERVED = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i; // Windows device names
@@ -540,12 +580,29 @@ function registerLibraryIpc() {
     }
     return out;
   });
+  // -> {id, meta, bytes, encrypted} | {id, meta, bytes: null, encrypted: true, unavailable: true} | null
   handle('library:get', async (kind, id) => {
     const metaFile = libraryFile(kind, id, '.json'), binFile = libraryFile(kind, id, '.bin');
-    try {
-      const [meta, bytes] = await Promise.all([readFile(metaFile, 'utf8'), readFile(binFile)]);
-      return { id, meta: JSON.parse(meta), bytes: new Uint8Array(bytes) };
-    } catch (err) { ignoreMissing(err); return null; }
+    return withLibraryFile(binFile, async () => {
+      let meta, data;
+      try {
+        [meta, data] = await Promise.all([readFile(metaFile, 'utf8'), readFile(binFile)]);
+      } catch (err) { ignoreMissing(err); return null; }
+      meta = JSON.parse(meta);
+      if (isWrapped(data)) {
+        try {
+          return { id, meta, bytes: new Uint8Array(libraryCipher.decrypt(data.subarray(LIBRARY_MAGIC.length))), encrypted: true };
+        } catch (err) {
+          console.error('library: cannot decrypt', kind, id, err.message);
+          return { id, meta, bytes: null, encrypted: true, unavailable: true };
+        }
+      }
+      let encrypted = false;
+      if (libraryCipher.available()) { // stored plain by an older version: protect it now
+        try { await atomicWrite(binFile, wrapLibraryBytes(data)); encrypted = true; } catch (err) { console.error('library: re-encrypt failed', kind, id, err.message); }
+      }
+      return { id, meta, bytes: new Uint8Array(data), encrypted };
+    });
   });
   // item = {meta, bytes?}: without bytes only the meta is replaced (the item must exist).
   handle('library:put', async (kind, id, item) => {
@@ -560,16 +617,18 @@ function registerLibraryIpc() {
     if (item.bytes !== undefined) {
       const bytes = toBytes(item.bytes);
       if (bytes.length > LIBRARY_MAX_BYTES) throw new RangeError('library item too large (5 MB max)');
-      await atomicWrite(binFile, bytes);
+      await withLibraryFile(binFile, () => atomicWrite(binFile, wrapLibraryBytes(bytes)));
     } else if (!existsSync(binFile)) throw new Error('library:put: no such item');
     await atomicWrite(metaFile, Buffer.from(json));
     return true;
   });
   handle('library:delete', async (kind, id) => {
     const metaFile = libraryFile(kind, id, '.json'), binFile = libraryFile(kind, id, '.bin');
-    await unlink(metaFile).catch(ignoreMissing);
-    await unlink(binFile).catch(ignoreMissing);
-    return true;
+    return withLibraryFile(binFile, async () => {
+      await unlink(metaFile).catch(ignoreMissing);
+      await unlink(binFile).catch(ignoreMissing);
+      return true;
+    });
   });
 }
 // ---- end signature library -------------------------------------------------------------------
