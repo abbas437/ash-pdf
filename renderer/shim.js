@@ -12,6 +12,8 @@
 if (!window.api) {
   const APP_NAME = 'ASH PDF Studio';
   const files = new Map(); // pseudo path -> Uint8Array
+  // Like main: only paths from the open dialog or a save dialog may be written; folder grants are read-only.
+  const writable = new Set();
   let seq = 0;
 
   const extensionsOf = (filters) =>
@@ -37,6 +39,7 @@ if (!window.api) {
           const bytes = new Uint8Array(await file.arrayBuffer());
           const path = `browser-file:${++seq}/${file.name}`;
           files.set(path, bytes);
+          writable.add(path);
           picked.push({ path, name: file.name, bytes });
         }
         resolve(picked);
@@ -110,10 +113,11 @@ if (!window.api) {
       download(name, bytes);
       const path = `browser-file:${++seq}/${name}`;
       files.set(path, bytes.slice());
+      writable.add(path);
       return { path };
     },
     async writeFile(path, bytes) {
-      if (!files.has(path)) throw new Error('writeFile: path was not opened or saved in this session');
+      if (!writable.has(path)) throw new Error('file:write: path was not opened or saved in this session');
       if (!(bytes instanceof Uint8Array)) throw new TypeError('writeFile: bytes must be a Uint8Array');
       files.set(path, bytes.slice());
       download(baseName(path), bytes);
