@@ -262,6 +262,8 @@ try {
   await app.evaluate(() => { process.env.ASH_TEST_FAKE_OFFICE = 'missing'; });
   await menuClick('export-docx');
   await win.waitForFunction(() => /Microsoft Word is not installed/.test(document.querySelector('dialog[open], .dialog')?.textContent ?? ''), null, { timeout: 15000 });
+  const errText = await win.evaluate(() => document.querySelector('.dialog')?.textContent ?? '');
+  expect('error dialog shows only the message', errText, !/Error invoking remote method|Error: /.test(errText));
   await win.keyboard.press('Escape');
   await app.evaluate(() => { process.env.ASH_TEST_FAKE_OFFICE = '1'; });
 
