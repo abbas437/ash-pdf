@@ -153,7 +153,7 @@ export const signatureLibrary = {
 };
 
 // ---------------------------------------------------------------- create dialog
-async function loadImage(bytes) {
+export async function loadImage(bytes) {
   const url = URL.createObjectURL(new Blob([bytes]));
   try {
     const img = new Image();

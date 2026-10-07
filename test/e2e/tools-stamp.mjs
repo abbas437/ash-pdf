@@ -32,6 +32,9 @@ async function makePdf() {
 const solid = (w, h, c) => sharp({ create: { width: w, height: h, channels: 3, background: c } });
 const PNG = await solid(2, 2, { r: 0, g: 200, b: 0 }).png().toBuffer();
 const JPEG = await solid(40, 20, { r: 0, g: 0, b: 230 }).jpeg({ quality: 95 }).toBuffer();
+// White background with a red block: after background removal the corner must be transparent.
+const STAMPPNG = await sharp({ create: { width: 60, height: 40, channels: 3, background: { r: 255, g: 255, b: 255 } } })
+  .composite([{ input: await solid(20, 20, { r: 200, g: 0, b: 0 }).png().toBuffer(), left: 20, top: 10 }]).png().toBuffer();
 const GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64');
 
 const server = createServer(async (req, res) => {
@@ -174,6 +177,34 @@ try {
   await page.click('.stamp-cat[data-cat="standard"]');
   await page.click('.stamp-palette .stamp-item[data-id="std-approved"]');
 
+  step = 'image stamp';
+  await page.click('.opt-stamp-pick');
+  await page.click('.stamp-cat[data-cat="custom"]');
+  await page.click('.stamp-create-image');
+  await pickFile(() => page.click('.stamp-img-pick'), { name: 'logo.png', mimeType: 'image/png', buffer: STAMPPNG });
+  await page.waitForFunction(() => document.querySelector('.stamp-img-preview')?.width === 60);
+  check(await page.$eval('#stamp-img-name', (i) => i.value) === 'logo', 'image stamp name not defaulted from the file');
+  await page.fill('#stamp-img-name', 'Logo stamp');
+  await page.click('.dialog-buttons button[data-value="ok"]');
+  await page.waitForFunction(() => document.body.classList.contains('img-armed'));
+  const imgLib = await ev('return await window.api.libraryList("stamp");');
+  check(imgLib.length === 1 && imgLib[0].meta.kind === 'image' && imgLib[0].meta.name === 'Logo stamp', `image stamp persists: ${JSON.stringify(imgLib)}`);
+  const px = await ev(`const it = await window.api.libraryGet("stamp", arg); const bmp = await createImageBitmap(new Blob([it.bytes], { type: 'image/png' }));
+    const c = document.createElement('canvas'); c.width = bmp.width; c.height = bmp.height; const x = c.getContext('2d'); x.drawImage(bmp, 0, 0);
+    return { corner: [...x.getImageData(0, 0, 1, 1).data], centre: [...x.getImageData(30, 20, 1, 1).data] };`, imgLib[0].id);
+  check(px.corner[3] === 0, `background not removed: corner ${px.corner}`);
+  check(px.centre[3] === 255 && px.centre[0] > 150 && px.centre[1] < 60, `image stamp content lost: ${px.centre}`);
+  await page.mouse.click(...await toClient(0, 150, 500));
+  await frames();
+  o = (await objs()).at(-1);
+  check(o.type === 'image' && o.mime === 'image/png' && o.page === 0, `image stamp placed ${JSON.stringify(o)}`);
+  near(o.w, 153, 'image stamp width 25%', 0.01);
+  const imgStamp = o;
+  await key('s');
+  await page.click('.opt-stamp-pick');
+  await page.click('.stamp-cat[data-cat="custom"]');
+  check(await page.$('.stamp-palette .stamp-item[title="Logo stamp"] img.stamp-preview'), 'image stamp preview missing');
+
   step = 'add date';
   await page.click('.opt-swatch[data-color="#1b7f3b"]');
   await page.check('.opt-stamp-date');
@@ -315,8 +346,10 @@ try {
   const stamps = final.filter((x) => x.type === 'stamp' && !x.subtext);
   const saved = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
   const ann = await ev(`const d = await v.pdfjs.getDocument({ data: new Uint8Array(arg) }).promise; const a = await (await d.getPage(1)).getAnnotations(); await d.loadingTask.destroy();
-    return a.filter((x) => x.subtype === 'Stamp').map((x) => ({ id: x.id, has: !!x.hasAppearance, c: x.contentsObj?.str }));`, Array.from(saved));
+    return a.filter((x) => x.subtype === 'Stamp').map((x) => ({ id: x.id, has: !!x.hasAppearance, c: x.contentsObj?.str, rect: x.rect }));`, Array.from(saved));
   check(ann.length >= 3 && ann.every((x) => x.has), `saved Stamp annotations ${JSON.stringify(ann)}`);
+  const cx = imgStamp.x + imgStamp.w / 2, cy = 792 - (imgStamp.y + imgStamp.h / 2);
+  check(ann.some((x) => x.has && Math.abs((x.rect[0] + x.rect[2]) / 2 - cx) < 2 && Math.abs((x.rect[1] + x.rect[3]) / 2 - cy) < 2), `image stamp not saved as a Stamp with an appearance: ${JSON.stringify(ann)}`);
   const rd = (await (await import('../../src/core/annots.js')).readAnnotations(saved)).objects.find((x) => x.id === dynId);
   check(rd?.subtext === final.find((x) => x.id === dynId).subtext, `dynamic subtext not saved: ${JSON.stringify(rd)}`);
   const img = { x: pngObj.x, y: pngObj.y, w: pngObj.w, h: pngObj.h };
