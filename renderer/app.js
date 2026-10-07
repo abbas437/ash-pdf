@@ -9,6 +9,10 @@ import { viewer } from './ui/viewer.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs } from './ui/sidebar.js';
 import { initSearch, search } from './ui/search.js';
+import { initAnnotations, annotations } from './ui/annotations.js';
+import { initShapeTools } from './ui/tools-shapes.js';
+import { initForms } from './ui/forms.js';
+import { initPageTools } from './ui/pagetools.js';
 
 const api = window.api;
 const root = document.getElementById('app');
@@ -346,6 +350,7 @@ M('View', { separator: true });
 M('View', { id: 'sidebar', label: 'Toggle sidebar', action: () => { state.sidebarOpen = !state.sidebarOpen; } });
 M('View', { id: 'theme', label: 'Toggle light / dark theme', action: () => setTheme(state.theme === 'dark' ? 'light' : 'dark') });
 M('Tools', { id: 'select', label: 'Select', shortcut: 'V', action: () => setTool('select') });
+initForms({ registerMenuItem });
 M('Help', { id: 'keys', label: 'Keyboard shortcuts', action: showShortcuts });
 M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => showDialog({ title: 'About ASH PDF Studio', body: `Version ${await api.version()}. Free and open source (MIT). Uses pdf.js (Apache-2.0) and pdf-lib (MIT).` }) });
 
@@ -414,6 +419,10 @@ bus.on('tab:dirtyChanged', refresh);
 // ---------------------------------------------------------------- start-up
 export const app = { state, bus, viewer, registerSidebarTab, showSidebarTab, thumbs, search, openBytes, openDialog, activate, closeTab, saveTab, printTab, showProperties, registerMenuItem, registerTool, setTool, showDialog, toast, markDirty, setTheme };
 window.ashStudio = app;
+initAnnotations();
+initShapeTools();
+app.annotations = annotations;
+initPageTools(app);
 
 (async () => {
   try {
