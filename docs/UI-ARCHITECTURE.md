@@ -398,3 +398,32 @@ Verify saved output by reading `tab.bytes` / the written bytes with pdf.js, not 
 * No OCR; PDF JavaScript is not run; XFA forms are unsupported; Windows x64 builds only (README).
 * `theme:changed`, `annotations:changed`, `annotations:selection` and `thumbs:selectionChanged` have no
   in-tree consumers; they are extension points.
+
+## 11. PDFium edit worker (`renderer/pdfium/`)
+
+PDFium (WebAssembly, from `@embedpdf/pdfium`, vendored to `renderer/vendor/pdfium/` by
+`scripts/vendor.js`) is the engine for edits pdf-lib cannot do (text objects, incremental save). See
+`docs/PDFIUM-SPIKE.md` for the evaluation. Reach it through `app.pdfium` (`window.ashStudio.pdfium`).
+
+* **RPC.** `client.js` exposes promise methods (`open(bytes)` -> doc id, `pageCount`, `textObjects`,
+  `save(id, { incremental })`, `close`); `worker.js` owns the single PDFium instance and runs every call
+  synchronously off the UI thread. `protocol.js` (pure, unit-tested) defines the messages:
+  `{ id, method, args }` -> `{ id, ok, result }` or `{ id, ok: false, error: { name, message } }`;
+  worker errors are rethrown in the page as `Error`s with the same name and message. Byte arrays are
+  transferred, not cloned: `open()` copies its input first so the caller's array stays usable, and
+  results (saved bytes) arrive transferred.
+* **Lazy loading.** Nothing is fetched, compiled or started until the first call, so viewing never
+  pays for the 4.6 MB wasm. A failed start rejects every pending call, terminates the worker and lets
+  the next call retry.
+* **Where the wasm is compiled, and the CSP change.** `client.js` fetches `vendor/pdfium/pdfium.wasm`
+  and compiles it with `WebAssembly.compile` in the document, then posts the compiled `Module` to the
+  worker in the `init` message. Compiling in the page keeps it under the page's `<meta>` CSP (a worker
+  served without a CSP header is not bound by it). Compiling WebAssembly needs
+  `'wasm-unsafe-eval'` in `script-src` of `renderer/index.html`; that is the only CSP change. It
+  allows WebAssembly compilation only, not JavaScript `eval`. The app:// protocol
+  (`electron/main.js`) serves `.wasm` as `application/wasm`.
+* **Tests.** `test/pdfium-protocol.test.js` (protocol), `test/e2e/pdfium.mjs` (Chromium under the real
+  CSP: lazy start, `selfTest()`, errors, no CSP violations) and `test/e2e/electron.mjs` (wasm MIME type
+  and `selfTest()` in the real app).
+* **Licences.** PDFium and the libraries compiled into the wasm (libpng, zlib, FreeType, OpenJPEG,
+  libjpeg-turbo, Little CMS) are listed as bundled components in `scripts/licenses.js`.
