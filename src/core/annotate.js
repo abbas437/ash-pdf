@@ -14,6 +14,7 @@ import {
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreError } from './internal.js';
 import { calloutArrowHead } from './arrowhead.js';
+import { stampLayout } from './stamps.js';
 
 // ---------------------------------------------------------------- fonts & text
 
@@ -407,11 +408,10 @@ class PagePainter {
         const text = sanitizeText(o.text ?? '').replace(/\n/g, ' ');
         const fontName = standardFontName('Helvetica', true, false);
         const font = this.font(fontName);
-        const pad = bw + 4;
-        const w1 = font.widthOfTextAtSize(text || ' ', 1);
+        const sub = sanitizeText(o.subtext ?? '').replace(/\n/g, ' ');
         const m = metricsFor(fontName);
         const capH = m.heightOfFontAtSize(1, { descender: false });
-        const size = Math.max(1, Math.min((o.w - 2 * pad) / w1, (o.h - 2 * pad) / capH));
+        const L = stampLayout({ ...o, borderWidth: bw, subtext: sub }, font.widthOfTextAtSize(text || ' ', 1), sub ? font.widthOfTextAtSize(sub, 1) : 0, capH);
         this.rotated(o.x + o.w / 2, o.y + o.h / 2, num(o.rotation, 0), () => {
           if (bw > 0) {
             this.page.drawRectangle({
@@ -424,15 +424,9 @@ class PagePainter {
               borderOpacity: opacityOf(o.opacity),
             });
           }
-          const tw = font.widthOfTextAtSize(text, size);
-          this.page.drawText(text, {
-            x: o.x + (o.w - tw) / 2,
-            y: this.uy(o.y + o.h / 2) - (capH * size) / 2, // centre the cap height
-            size,
-            font,
-            color,
-            opacity: opacityOf(o.opacity),
-          });
+          const line = (t, size, base) => this.page.drawText(t, { x: o.x + (o.w - font.widthOfTextAtSize(t, size)) / 2, y: this.uy(base), size, font, color, opacity: opacityOf(o.opacity) });
+          line(text, L.size, L.base);
+          if (sub) line(sub, L.subSize, L.subBase);
         });
         break;
       }

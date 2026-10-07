@@ -83,7 +83,7 @@ if (!window.api) {
   });
   const library = new Map(); // `${kind}/${id}` -> {meta, bytes}
   const libKey = (kind, id) => {
-    if (kind !== 'signature') throw new TypeError('invalid library kind');
+    if (kind !== 'signature' && kind !== 'stamp') throw new TypeError('invalid library kind');
     if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new TypeError('invalid library id');
     return `${kind}/${id}`;
   };

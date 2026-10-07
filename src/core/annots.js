@@ -381,6 +381,7 @@ function typeEntries(o, g, lay) {
         width = num(o.borderWidth, 3);
         e.Name = N(String(o.text ?? '').replace(/[^A-Za-z0-9]/g, '') || 'Draft');
         extra.text = o.text ?? '';
+        if (o.subtext) extra.subtext = String(o.subtext);
       } else {
         e.Name = N('Image');
         extra.kind = 'image';
@@ -867,6 +868,7 @@ function toObject(doc, en, g) {
       } else {
         o.type = 'stamp';
         o.text = extra.text ?? (nameOf(dict.lookup(N('Name'))) || 'Draft').replace(/([a-z])([A-Z])/g, '$1 $2').toUpperCase();
+        if (extra.subtext) o.subtext = extra.subtext;
         o.color = C;
         o.borderWidth = width;
       }
