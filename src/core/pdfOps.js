@@ -171,6 +171,73 @@ export async function reorderPages(bytes, newOrder) {
   return saveEdited(doc);
 }
 
+/** Reverse the order of `indices` (default: all pages) within the positions they occupy. */
+export async function reversePages(bytes, indices) {
+  const n = (await loadPdf(bytes)).getPageCount();
+  const sel = indices ? [...new Set(indices)].sort((a, b) => a - b) : Array.from({ length: n }, (_, i) => i);
+  assertPageIndices(sel, n);
+  const order = Array.from({ length: n }, (_, i) => i);
+  sel.forEach((pos, k) => { order[pos] = sel[sel.length - 1 - k]; });
+  return reorderPages(bytes, order);
+}
+
+/** Paper sizes in points, portrait. */
+export const PAPER_SIZES = { A4: [595.28, 841.89], A3: [841.89, 1190.55], Letter: [612, 792], Legal: [612, 1008] };
+
+/**
+ * Give pages a new visible size `width` x `height` (points, as displayed after /Rotate).
+ * fit: scale content uniformly to fit, centred; otherwise keep content at 100 %, centred.
+ * MediaBox/CropBox become the new page; Trim/Bleed/Art boxes are removed; annotation
+ * /Rect values follow the content.
+ */
+export async function resizePages(bytes, indices, { width, height, fit = true } = {}) {
+  if (!(width > 0 && height > 0)) throw new RangeError('width and height must be positive numbers');
+  const doc = await loadPdf(bytes);
+  assertPageIndices(indices, doc.getPageCount());
+  const ctx = doc.context;
+  for (const i of new Set(indices)) {
+    const page = doc.getPage(i);
+    const g = pageGeometry(page);
+    const swap = g.rotation === 90 || g.rotation === 270;
+    const [TW, TH] = swap ? [height, width] : [width, height];
+    const W = g.view.xMax - g.view.xMin, H = g.view.yMax - g.view.yMin;
+    const s = fit ? Math.min(TW / W, TH / H) : 1;
+    const tx = (TW - s * W) / 2 - s * g.view.xMin, ty = (TH - s * H) / 2 - s * g.view.yMin;
+    const f = (v) => +v.toFixed(6);
+    page.node.normalize();
+    const pre = ctx.register(ctx.stream(`q ${f(s)} 0 0 ${f(s)} ${f(tx)} ${f(ty)} cm\n`));
+    const post = ctx.register(ctx.stream('\nQ\n'));
+    if (!page.node.wrapContentStreams(pre, post)) page.node.set(PDFName.of('Contents'), ctx.obj([pre, post]));
+    page.setMediaBox(0, 0, TW, TH);
+    page.setCropBox(0, 0, TW, TH);
+    for (const k of ['TrimBox', 'BleedBox', 'ArtBox']) page.node.delete(PDFName.of(k));
+    const annots = page.node.lookupMaybe(PDFName.of('Annots'), PDFArray);
+    for (let a = 0; a < (annots?.size() ?? 0); a++) {
+      const rect = annots.lookupMaybe(a, PDFDict)?.lookupMaybe(PDFName.of('Rect'), PDFArray);
+      if (!rect || rect.size() !== 4) continue;
+      const v = rect.asArray().map((x, k) => ctx.lookup(x).asNumber() * s + (k % 2 ? ty : tx));
+      annots.lookup(a, PDFDict).set(PDFName.of('Rect'), ctx.obj(v.map(f)));
+    }
+  }
+  return saveEdited(doc);
+}
+
+/**
+ * Interleave two documents: A1, B1, A2, B2, ... Leftover pages of the longer one follow.
+ * reverseB: B was scanned last page first (back sides of a duplex stack).
+ * The result keeps document A's catalog; A page i ends at i < min(nA, nB) ? 2i : i + nB.
+ */
+export async function interleavePdfs(aBytes, bBytes, { reverseB = false } = {}) {
+  const a = await loadPdf(aBytes);
+  const b = await loadPdf(bBytes);
+  const nA = a.getPageCount();
+  let idx = b.getPageIndices();
+  if (reverseB) idx = idx.reverse();
+  const copied = await a.copyPages(b, idx);
+  copied.forEach((p, k) => (k < nA ? a.insertPage(2 * k + 1, p) : a.addPage(p)));
+  return saveEdited(a);
+}
+
 export async function insertBlankPage(bytes, atIndex, { width, height } = {}) {
   const doc = await loadPdf(bytes);
   const n = doc.getPageCount();

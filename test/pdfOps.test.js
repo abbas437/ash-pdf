@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument, PDFHexString, degrees } from 'pdf-lib';
 import * as ops from '../src/core/pdfOps.js';
-import { makePdf, visibleText, makeImage, near } from './helpers.js';
+import { makePdf, visibleText, makeImage, near, renderPage } from './helpers.js';
 
 const pageLabels = async (bytes) => {
   const info = await ops.getInfo(bytes);
@@ -200,6 +200,53 @@ describe('page operations', () => {
 
   test('garbage input fails with code INVALID_PDF', async () => {
     await assert.rejects(ops.getInfo(new Uint8Array([1, 2, 3, 4])), (e) => e.code === 'INVALID_PDF');
+  });
+});
+
+describe('reverse, resize, interleave', () => {
+  test('reversePages: all pages, and a selection within its positions', async () => {
+    const src = await makePdf(5);
+    assert.deepEqual(await pageLabels(await ops.reversePages(src)), ['Page 5', 'Page 4', 'Page 3', 'Page 2', 'Page 1']);
+    assert.deepEqual(await pageLabels(await ops.reversePages(src, [3, 1, 2])), ['Page 1', 'Page 4', 'Page 3', 'Page 2', 'Page 5']);
+  });
+
+  test('resizePages fit: new size, content scaled uniformly and centred', async () => {
+    const [W, H] = ops.PAPER_SIZES.A4;
+    const out = await ops.resizePages(await makePdf(2), [0], { width: H, height: W, fit: true }); // A4 landscape
+    const info = await ops.getInfo(out);
+    near(info.pages[0].width, H, 0.01); near(info.pages[0].height, W, 0.01);
+    assert.deepEqual([info.pages[1].width, info.pages[1].height], [612, 792], 'other page untouched');
+    const s = Math.min(H / 612, W / 792);
+    const [t] = await visibleText(out, 0);
+    near(t.x, (H - 612 * s) / 2 + 50 * s, 0.5, 'text x centred and scaled');
+    near(t.y, W - (W - 792 * s) / 2 - 50 * s, 0.5, 'text y centred and scaled');
+    // the page's own centre maps to the new page's centre
+    const r = await renderPage(await ops.resizePages(await (async () => {
+      const d = await PDFDocument.create(); d.addPage([200, 100]).drawRectangle({ x: 0, y: 0, width: 200, height: 100 }); return d.save();
+    })(), [0], { width: 400, height: 400 }));
+    assert.deepEqual(r.sample(200, 200).slice(0, 3), [0, 0, 0], 'centre is content');
+    assert.deepEqual(r.sample(200, 95).slice(0, 3), [255, 255, 255], 'band above content is empty');
+    assert.deepEqual(r.sample(200, 105).slice(0, 3), [0, 0, 0], 'content height scaled to 200');
+  });
+
+  test('resizePages without fit keeps 100 % and centres; rotated page uses visible size', async () => {
+    const out = await ops.resizePages(await makePdf(1), [0], { width: 812, height: 992, fit: false });
+    const [t] = await visibleText(out, 0);
+    near(t.x, 150, 0.5); near(t.y, 992 - 100 - 50, 0.5);
+    const d = await PDFDocument.load(await makePdf(1)); d.getPage(0).setRotation(degrees(90));
+    const info = await ops.getInfo(await ops.resizePages(await d.save(), [0], { width: 595.28, height: 841.89 }));
+    near(info.pages[0].width, 595.28, 0.01); near(info.pages[0].height, 841.89, 0.01);
+  });
+
+  test('interleavePdfs: A1,B1,A2,B2 and the reverse option; leftovers follow', async () => {
+    const a = await makePdf(3);
+    const bDoc = await PDFDocument.create();
+    for (const k of [1, 2, 3]) bDoc.addPage([612, 792]).drawText(`Back ${k}`, { x: 50, y: 50, size: 12 });
+    const b = await bDoc.save();
+    assert.deepEqual(await pageLabels(await ops.interleavePdfs(a, b)), ['Page 1', 'Back 1', 'Page 2', 'Back 2', 'Page 3', 'Back 3']);
+    assert.deepEqual(await pageLabels(await ops.interleavePdfs(a, b, { reverseB: true })), ['Page 1', 'Back 3', 'Page 2', 'Back 2', 'Page 3', 'Back 1']);
+    assert.deepEqual(await pageLabels(await ops.interleavePdfs(await makePdf(1), b)), ['Page 1', 'Back 1', 'Back 2', 'Back 3']);
+    assert.deepEqual(await pageLabels(await ops.interleavePdfs(a, await makePdf(1))), ['Page 1', 'Page 1', 'Page 2', 'Page 3']);
   });
 });
 
