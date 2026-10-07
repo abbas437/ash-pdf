@@ -10,6 +10,8 @@ $names = @{ word = 'Microsoft Word'; excel = 'Microsoft Excel'; powerpoint = 'Mi
 $processNames = @{ word = 'WINWORD'; excel = 'EXCEL'; powerpoint = 'POWERPNT' }
 if (-not $progIds.ContainsKey($Kind)) { [Console]::Error.WriteLine("Unknown kind: $Kind"); exit 1 }
 $appObj = $null
+$keepApp = $false
+$prevAlerts = $null
 $doc = $null
 $m = [Type]::Missing
 function Get-OneLine([string]$s) { return ($s -replace '\s*[\r\n]+\s*', ' ').Trim() }
@@ -53,6 +55,9 @@ try {
       $doc.ExportAsFixedFormat(0, $Out) # xlTypePDF, the whole workbook (all sheets)
     }
     'powerpoint' {
+      # PowerPoint is single-instance: if the user already has presentations open, this is their PowerPoint.
+      # Leave it running (never Quit it) and put their alert setting back afterwards.
+      if ($appObj.Presentations.Count -gt 0) { $keepApp = $true; $prevAlerts = $appObj.DisplayAlerts }
       $appObj.DisplayAlerts = 1 # ppAlertsNone; PowerPoint refuses Visible = false, the window stays hidden through WithWindow
       try { $doc = $appObj.Presentations.Open($In, -1, 0, 0) } # ReadOnly, Untitled:=false, WithWindow:=false
       catch { throw (Get-OpenAdvice $names.powerpoint $_.Exception.Message) }
@@ -65,5 +70,6 @@ try {
   exit 1
 } finally {
   if ($doc) { try { if ($Kind -eq 'excel') { $doc.Close($false) } elseif ($Kind -eq 'word') { $doc.Close($false) } else { $doc.Close() } } catch {} }
-  if ($appObj) { try { $appObj.Quit() | Out-Null } catch {}; [void][Runtime.InteropServices.Marshal]::ReleaseComObject($appObj) }
+  if ($appObj -and $keepApp) { try { $appObj.DisplayAlerts = $prevAlerts } catch {} }
+  if ($appObj) { if (-not $keepApp) { try { $appObj.Quit() | Out-Null } catch {} }; [void][Runtime.InteropServices.Marshal]::ReleaseComObject($appObj) }
 }

@@ -191,3 +191,9 @@ test('the .ps1 scripts: PDF-reflow prompt off, Mark of the Web removed, macros o
   assert.match(office, /\$m, \$false, \$m, 1\)/, 'the retry passes CorruptLoad = xlRepairFile as the 15th argument');
   assert.match(office, /could not open this file\. If it opens in Protected View or asks to repair/);
 });
+
+test('office-to-pdf.ps1 never quits a PowerPoint the user already had open', async () => {
+  const src = await readFile(new URL('../electron/office/office-to-pdf.ps1', import.meta.url), 'utf8');
+  assert.match(src, /Presentations\.Count -gt 0\) \{ \$keepApp = \$true/);
+  assert.match(src, /if \(-not \$keepApp\) \{ try \{ \$appObj\.Quit\(\)/);
+});
