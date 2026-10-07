@@ -3,8 +3,8 @@
 // that PNG encrypted with a password (meta.lock, see src/core/siglib.js). Meta:
 //   {name, kind: 'signature'|'initials', isDefault, order, lock?}
 // The listing comes back in readdir order, so `order` is kept dense (0..n-1) and sorted on.
-// Also owns the drawing pad (createPad / cropToInk), shared with the old Draw signature dialog.
-// Exports `signatureLibrary` {list, getPng, onChange} for placement code.
+// Also owns the drawing pad (createPad / cropToInk).
+// Exports `signatureLibrary` {list, getPng, onChange} and openSignatureManager() for ui/sign.js.
 import { h } from './dom.js';
 import { showDialog, toast } from './dialogs.js';
 import { encryptBytes, decryptBytes, removeBackground, WrongPasswordError } from '../../src/core/siglib.js';
@@ -324,6 +324,7 @@ async function unlockItem(it) {
 }
 
 // ---------------------------------------------------------------- manager dialog
+export async function openSignatureManager() { return managerDialog(); }
 async function managerDialog() {
   const listEl = h('ul.sigman-list', { 'aria-label': 'Saved signatures' });
   const urls = [];

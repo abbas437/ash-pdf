@@ -2,9 +2,9 @@
 // End-to-end test of the Stamp, Image and Signature tools (renderer/ui/tools-stamp.js) in
 // Chromium via playwright-core: stamps by preset / custom text / with date (one undo), stamp
 // geometry at 100 %, 150 %, view rotation 90 and on a /Rotate 90 page, PNG and JPEG placement
-// (aspect, clamping, signature-based type check), signature pad + typed name -> settings ->
-// placement, then saves through app.saveTab and checks the output with pdf.js (stamp text
-// position, image pixels). Prints "TOOLS-STAMP OK".
+// (aspect, clamping, signature-based type check), signature drawn through Sign > Manage
+// signatures… > Draw… -> library -> placement from the Sign menu, then saves through
+// app.saveTab and checks the output with pdf.js (stamp text position, image pixels). Prints "TOOLS-STAMP OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -181,44 +181,45 @@ try {
   await ev('v.scrollToPage(tab, 0);'); await frames();
 
   // ------------------------------------------------------------ signature
-  step = 'signature menu disabled';
-  await openTools();
-  check(await page.$eval('.menu-item[data-id="signature-place"]', (b) => b.disabled), 'Place saved signature enabled without a signature');
-
-  step = 'typed signature';
-  await menu('signature-draw');
-  await page.waitForSelector('.sig-pad');
-  check(/not a cryptographic digital signature/.test(await page.textContent('.sig-note')), 'signature disclaimer missing');
-  await page.fill('.sig-name', 'A. Example');
-  await page.click('.sig-type');
-  await page.click('.dialog-buttons button[data-value="save"]');
-  await page.waitForSelector('.sig-pad', { state: 'detached' });
-  const typed = await ev('return await window.api.settingsGet("signature");');
-  check(typeof typed === 'string' && typed.startsWith('data:image/png'), 'typed signature not saved');
+  const top = '.dialog-backdrop:last-child .dialog';
+  const openSign = async () => { if (await page.$eval('.sign-menu', (m) => m.hidden)) await page.click('#btn-sign'); await page.waitForSelector('.sign-menu:not([hidden])'); };
+  step = 'sign menu empty';
+  await openSign();
+  check(!(await page.$('.sign-menu .sign-pick')) && await page.isVisible('.sign-menu .sign-empty'), 'Sign menu lists a signature before any was saved');
+  check(await page.$eval('.sign-menu .sign-block', (b) => b.disabled), 'Signature block enabled without a signature');
+  check(/not digital certificates/.test(await page.textContent('.sign-menu .sign-note')), 'Sign menu disclaimer missing');
 
   step = 'drawn signature';
-  await menu('signature-draw');
-  const pad = await (await page.waitForSelector('.sig-pad')).boundingBox();
-  await page.click('.dialog-buttons button[data-value="save"]');
-  check(/empty/.test(await page.textContent('.sig-status')), 'empty pad was accepted');
+  await page.click('.sign-menu .sign-manage');
+  await page.click('.sigman-wrap .sigman-add-draw');
+  const pad = await (await page.waitForSelector(`${top} .sig-pad`)).boundingBox();
+  check(/not a digital certificate/.test(await page.textContent(`${top} .sig-note`)), 'signature disclaimer missing');
+  await page.click(`${top} .dialog-buttons button:text-is("Add to library")`);
+  check(/empty/.test(await page.textContent(`${top} .sig-status`)), 'empty pad was accepted');
   const P = (fx, fy) => [pad.x + pad.width * fx, pad.y + pad.height * fy];
   await page.mouse.move(...P(0.15, 0.7)); await page.mouse.down();
   for (const [fx, fy] of [[0.25, 0.3], [0.35, 0.75], [0.45, 0.35], [0.55, 0.7], [0.7, 0.4], [0.85, 0.55]]) await page.mouse.move(...P(fx, fy), { steps: 8 });
   await page.mouse.up();
-  await page.click('.dialog-buttons button[data-value="save"]');
+  await page.fill(`${top} .sigman-new-name`, 'A. Example');
+  await page.click(`${top} .dialog-buttons button:text-is("Add to library")`);
   await page.waitForSelector('.sig-pad', { state: 'detached' });
-  const sig = await ev('return await window.api.settingsGet("signature");');
-  check(typeof sig === 'string' && sig.startsWith('data:image/png') && sig !== typed, 'drawn signature not saved');
-  const dims = await page.evaluate(async (u) => { const i = new Image(); i.src = u; await i.decode(); return [i.naturalWidth, i.naturalHeight]; }, sig);
+  await page.waitForSelector('.sigman-wrap .sigman-item');
+  await page.click('.sigman-wrap .dialog-buttons button:text-is("Close")');
+  await page.waitForSelector('.sigman-wrap', { state: 'detached' });
+  const lib = await ev('const { signatureLibrary: L } = await import("/renderer/ui/signatures.js"); return L.list();');
+  check(lib.length === 1 && lib[0].name === 'A. Example' && lib[0].kind === 'signature', `library after Draw: ${JSON.stringify(lib)}`);
+  const dims = await ev(`const { signatureLibrary: L } = await import("/renderer/ui/signatures.js"); const b = await L.getPng(arg);
+    const bmp = await createImageBitmap(new Blob([b], { type: 'image/png' })); return [bmp.width, bmp.height];`, lib[0].id);
   // Ink spans 70 % x 45 % of a 480x160 pad at 2x; cropped with 4 px padding.
   near(dims[0], 0.7 * 960 + 8, 'signature crop width', 12); near(dims[1], 0.45 * 320 + 8, 'signature crop height', 12);
 
   step = 'place signature';
-  await menu('signature-place');
+  await openSign();
+  await page.click(`.sign-menu .sign-pick[data-id="${lib[0].id}"]`);
   await page.waitForFunction(() => document.body.classList.contains('img-armed'));
   await page.mouse.click(...await toClient(0, 200, 640));
   o = (await objs()).at(-1);
-  check(o.type === 'image' && o.mime === 'image/png', 'signature not placed as PNG image');
+  check(o.type === 'image' && o.mime === 'image/png' && o.sig === lib[0].id, 'signature not placed as PNG image');
   near(o.w, 612 * 0.25, 'signature width 25%', 0.01); near(o.h, o.w * dims[1] / dims[0], 'signature aspect', 0.5);
 
   step = 'screenshot';

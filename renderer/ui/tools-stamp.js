@@ -4,8 +4,7 @@
 //   Stamp (S): preset or custom text in an outlined box; click places a default-size stamp,
 //              drag sets the box. "Add date" places a second stamp `DATE: YYYY-MM-DD` below it.
 //   Image (I): pick a PNG/JPEG (type from the file signature), click a page to place it.
-//   Signature: Tools > Draw signature… (pad or typed name) saved as a transparent PNG in the
-//              settings; Tools > Place saved signature arms the image tool with it.
+//   Signatures are placed through ui/sign.js (Sign button), which arms the image tool via armImage.
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
@@ -13,7 +12,6 @@ import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, resizeBox } from './annotations.js';
-import { createPad, cropToInk } from './signatures.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PRESETS = ['APPROVED', 'APPROVED AS NOTED', 'REVISE AND RESUBMIT', 'REJECTED', 'FOR INFORMATION', 'DRAFT', 'CONFIDENTIAL', 'VOID'];
@@ -23,13 +21,9 @@ const STAMP_BORDER = 2;
 const CAP_H = 0.718;          // Helvetica-Bold cap height per unit font size (as the core uses)
 const MIN_PX = 3;             // smaller drags are clicks
 const IMAGE_FRAC = 0.4;       // default image width, fraction of page width
-const SIGN_FRAC = 0.25;       // default signature width
-const PENS = [['#1a2b6d', 'Dark blue'], ['#111111', 'Black']];
-const SIG_FONT = 'italic 52px "Segoe Script", "Lucida Handwriting", "Brush Script MT", "URW Chancery L", "Z003", cursive';
 
 const opt = { text: 'APPROVED', color: '#1b7f3b', rotation: 0, addDate: false, imgOpacity: 1, imgRotation: 0 };
 let pending = null;           // armed image: {bytes, mime, url, nw, nh, frac, width?, extra?, companions?, onPlaced?}
-let hasSignature = false;
 let shiftHeld = false;
 let app = null;
 
@@ -272,61 +266,6 @@ function imageOptions(c) {
   );
 }
 
-// ---------------------------------------------------------------- signature
-function dataUrlBytes(url) {
-  const bin = atob(url.slice(url.indexOf(',') + 1));
-  const b = new Uint8Array(bin.length);
-  for (let k = 0; k < bin.length; k++) b[k] = bin.charCodeAt(k);
-  return b;
-}
-async function drawSignatureDialog() {
-  const W = 480, H = 160;
-  const { canvas, ctx, clear: clearPad, setPen } = createPad({ W, H, pen: PENS[0][0] });
-  canvas.setAttribute('aria-label', 'Signature pad: draw with the mouse, pen or finger. Keyboard users can type their name below instead.');
-  const status = h('p.sig-status', { role: 'status' });
-  const clear = () => { clearPad(); status.textContent = ''; };
-  const penSel = h('select.sig-pen', { 'aria-label': 'Pen colour', onchange: (e) => setPen(e.target.value) }, PENS.map(([v, l]) => h('option', { value: v }, l)));
-  const nameIn = h('input.input.sig-name', { type: 'text', maxlength: '60', 'aria-label': 'Type your name' });
-  const typeBtn = h('button.btn.sig-type', { type: 'button', onclick: () => {
-    const name = nameIn.value.trim();
-    if (!name) { status.textContent = 'Type a name first.'; nameIn.focus(); return; }
-    clear();
-    ctx.font = SIG_FONT;
-    let size = 52;
-    while (size > 12 && ctx.measureText(name).width > W - 24) { size -= 2; ctx.font = SIG_FONT.replace('52px', `${size}px`); }
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(name, W / 2, H / 2);
-    status.textContent = 'Typed name rendered on the pad.';
-  } }, 'Use typed name');
-  nameIn.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); typeBtn.click(); } });
-  const body = h('div.sig-dialog', {},
-    h('p.sig-note', {}, 'This is a simple visual signature (an image of your handwriting or name). It is not a cryptographic digital signature and does not prove who signed or protect the document from changes.'),
-    canvas,
-    h('div.row.sig-row', {}, h('label.opt', {}, h('span', {}, 'Pen'), penSel), h('button.btn.sig-clear', { type: 'button', onclick: clear }, 'Clear')),
-    h('label.field', {}, h('span', {}, 'Or type your name (keyboard alternative)'), h('div.row', {}, nameIn, typeBtn)),
-    status);
-  let dataUrl = null;
-  const v = await app.showDialog({
-    title: 'Draw signature',
-    body,
-    className: 'sig-dialog-wrap',
-    initialFocus: '.sig-pen',
-    buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, {
-      label: 'Save signature', value: 'save', primary: true,
-      validate: () => { dataUrl = cropToInk(canvas); if (!dataUrl) status.textContent = 'The pad is empty: draw or type a signature first.'; return !!dataUrl; },
-    }],
-  });
-  if (v !== 'save' || !dataUrl) return;
-  await window.api.settingsSet('signature', dataUrl);
-  hasSignature = true;
-  app.toast('Signature saved. Use Tools > Place saved signature to add it to a page.');
-}
-async function placeSavedSignature() {
-  const url = await window.api.settingsGet('signature');
-  if (typeof url !== 'string' || !url.startsWith('data:image/png')) { hasSignature = false; app.toast('No saved signature: use Tools > Draw signature… first'); return; }
-  await arm(dataUrlBytes(url), SIGN_FRAC, 'signature');
-}
-
 // ---------------------------------------------------------------- init
 const STAMP_ICON = '<svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="3" y="7" width="18" height="10" rx="1.5"/><path d="M7 12h10"/></svg>';
 export function initStampTools(a) {
@@ -339,9 +278,6 @@ export function initStampTools(a) {
   app.registerMenuItem('Tools', { separator: true });
   app.registerMenuItem('Tools', { id: 'stamp', label: 'Stamp', shortcut: 'S', action: () => setTool('stamp') });
   app.registerMenuItem('Tools', { id: 'image', label: 'Insert image…', shortcut: 'I', action: () => (state.tool === 'image' ? pickImage() : setTool('image')), enabled: () => !!activeTab() });
-  app.registerMenuItem('Tools', { id: 'signature-draw', label: 'Draw signature…', action: () => drawSignatureDialog() });
-  app.registerMenuItem('Tools', { id: 'signature-place', label: 'Place saved signature', action: () => placeSavedSignature(), enabled: () => hasSignature && !!activeTab() });
-  window.api.settingsGet('signature').then((v) => { hasSignature = typeof v === 'string' && v.startsWith('data:image/png'); }, () => {});
   const track = (e) => { shiftHeld = e.shiftKey; };
   for (const t of ['pointermove', 'pointerdown', 'keydown', 'keyup']) document.addEventListener(t, track, true);
   bus.on('tool:changed', ({ tool }) => document.body.classList.toggle('ann-drawing', tool === 'stamp' || tool === 'image' || document.body.classList.contains('ann-drawing')));
