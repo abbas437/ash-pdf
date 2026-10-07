@@ -16,6 +16,7 @@ import { constants as fsConstants, existsSync, mkdirSync, readFileSync, renameSy
 import { lstat, mkdir, open, opendir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { registerOfficeIpc } from './office.js'; // office conversions
 
 const APP_NAME = 'ASH PDF Studio';
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // app.asar root when packaged
@@ -647,6 +648,9 @@ app.whenReady().then(() => {
   protocol.handle(SCHEME, serveAppFile);
   registerIpc();
   registerLibraryIpc(); // signature library
+  // ---- office conversions (electron/office.js): Word/Excel/PowerPoint <-> PDF through Microsoft Office
+  registerOfficeIpc({ handle, dialog, getWindow: () => mainWindow, grant, describeFile, isPackaged: app.isPackaged });
+  // ---- end office conversions
   createWindow();
 });
 

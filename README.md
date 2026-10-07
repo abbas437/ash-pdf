@@ -120,6 +120,9 @@ All methods return Promises except `onOpenFile`. A *file* object is `{ path, nam
 | `setTitle(text)` | — | Window title becomes `<text> — ASH PDF Studio`; empty resets it. |
 | `showItem(path)` | `boolean` | Reveal a granted file in Explorer. Browser: `false`. |
 | `settingsGet(key)` / `settingsSet(key, value)` | value / `true` | Key `/^[A-Za-z0-9_.-]{1,64}$/`, JSON value up to 64 KiB; `undefined` deletes. |
+| `officeStatus()` | `{ available, reason }` | Office conversions need Microsoft Office on Windows; elsewhere `available: false`. Browser shim: not provided (items disabled). |
+| `officeExportDocx({ bytes, defaultPath? })` | `{ path }` or `null` | Save As (.docx), then Microsoft Word converts `bytes` (the current PDF) through PDF Reflow (`electron/office.js`). |
+| `officeToPdf()` | `file` or `null` | Pick a .doc/.docx/.rtf/.xls/.xlsx/.ppt/.pptx, Save As (.pdf); Word/Excel/PowerPoint export it. |
 | `cancelSearch()` | `true` | Aborts every running folder walk of the advanced search (`listPdfs`). Browser shim: not provided (callers use `api.cancelSearch?.()`). |
 
 Restrictions the UI must respect: new windows and navigation are blocked (external links cannot be
@@ -129,6 +132,7 @@ opened), and every permission request is denied, including `navigator.clipboard`
 ## Limitations
 
 - Cannot edit the existing text of a page in place yet (you can add text, annotations and form values; Replace text covers simple cases).
+- Office conversions (File > Export to Word document, Create PDF from Office file) drive the Microsoft Office installed on the PC through PowerShell COM automation, so they work only on Windows with Office; Word's PDF Reflow keeps text and simple layouts best. A run is stopped after 120 s.
 - No OCR: scanned pages stay images; text search only works on PDFs that contain text.
 - No digital-signature validation or certificate signing yet; signed PDFs open, signatures are not verified, and saving changes invalidates them (the app warns before overwriting).
 - Encrypted PDFs: password-protected files can be viewed after entering the password; editing and saving encrypted files is limited.
