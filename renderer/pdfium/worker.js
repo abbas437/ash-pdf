@@ -4,6 +4,7 @@
 import { init } from '../vendor/pdfium/index.browser.js';
 import { encodeError, encodeResult } from './protocol.js';
 import { redactDocument } from './redact.js';
+import { pageImages, transformImage, deleteImage, replaceImage } from './imgedit.js';
 
 const OBJ_TEXT = 1, FPDF_INCREMENTAL = 1;
 let m = null;
@@ -88,6 +89,17 @@ const methods = {
   /** True redaction (redact.js), then a FULL save: returns the new bytes. areas: [{ pageIndex, rects: [[x0,y0,x1,y1]] }], fill [r,g,b] | null. */
   redact(docId, areas, { fill = [0, 0, 0] } = {}) {
     redactDocument(m, getDoc(docId).doc, areas, { fill });
+    return methods.save(docId, { incremental: false });
+  },
+  /** Image objects of a page (imgedit.js). */
+  pageImages(docId, pageIndex) { return pageImages(m, getDoc(docId).doc, pageIndex); },
+  /** Image edits (imgedit.js), then a FULL save: return the new bytes. op: {transform: matrix} | {remove: true} | {replace: {bytes, kind}}. */
+  editImage(docId, pageIndex, id, op) {
+    const doc = getDoc(docId).doc;
+    if (op.transform) transformImage(m, doc, pageIndex, id, op.transform);
+    else if (op.remove) deleteImage(m, doc, pageIndex, id);
+    else if (op.replace) replaceImage(m, doc, pageIndex, id, op.replace);
+    else throw new Error('pdfium: editImage needs transform, remove or replace');
     return methods.save(docId, { incremental: false });
   },
   save(docId, { incremental = false } = {}) {
