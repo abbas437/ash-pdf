@@ -2,7 +2,8 @@
 // (pdfium/imgedit.js). Hover outlines and the selection (8 handles) are drawn in the page overlay SVG,
 // which uses page space; PDF-space boxes go through imgedit-lib.js with the page's view box and /Rotate.
 // Each gesture is one page-operation undo step (runOp, identity map) applied to the bytes directly.
-// After the viewer reloads the new bytes the selection is found again by id and box.
+// When the bytes change (tab:bytesChanged, also for Undo/Redo) the selection is found again in the new
+// bytes by id and box; a selection the user makes meanwhile wins over that pending re-find.
 // Images inside form XObjects are outlined in grey and cannot be edited (the engine refuses them).
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
@@ -28,7 +29,9 @@ const cache = new WeakMap(); // tab -> { bytes, ready: Map<page, imgs>, loading:
 let sel = null;     // { tab, page, img }
 let hover = null;   // { tab, page, img }
 let gesture = null; // { tab, page, img, handle, cx, cy, inv, box0, box, moved }
-let pending = null; // { tab, page, id, bbox }: selection to find again after the reload
+let pending = null; // { tab, page, id, bbox }: placement an apply expects; claimed by its own commit
+let refinding = null; // { tab, want }: selection being found again in the new bytes; any select() drops it
+let pointer = null; // { tab, hit }: last pointer position, to restore the hover once the images load
 
 const geom = (tab, i) => ({ view: tab.pages[i].view, rotate: tab.pages[i].rotate });
 const identity = (n) => new Map(Array.from({ length: n }, (_, k) => [k, k]));
@@ -113,6 +116,7 @@ function setHover(tab, i, img) {
   redraw(tab);
 }
 function select(next) {
+  refinding = null;
   sel = next;
   if (state.tool === TOOL) setTool(TOOL); // re-render the options bar
   redraw(next?.tab ?? activeTab());
@@ -120,12 +124,15 @@ function select(next) {
 
 // ---------------------------------------------------------------- apply
 async function apply(tab, page, img, label, op, expect) {
-  pending = expect ? { tab, page, id: img.id, bbox: expect } : null;
-  // Show the result at once: the selection takes the new placement until the reload finds it again.
+  // Show the result at once: the selection takes the new placement until it is found again in the new bytes.
   select(expect ? { tab, page, img: { ...img, bbox: expect, matrix: op.transform } } : null);
   const ok = await runOp(tab, label, async (bytes, n) => {
     const id = await pdfium.open(bytes);
-    try { return { bytes: await pdfium.editImage(id, page, img.id, op), map: identity(n) }; } finally { await pdfium.close(id).catch(() => {}); }
+    try {
+      const out = await pdfium.editImage(id, page, img.id, op);
+      pending = expect ? { tab, page, id: img.id, bbox: expect } : null; // set just before runOp commits these bytes
+      return { bytes: out, map: identity(n) };
+    } finally { await pdfium.close(id).catch(() => {}); }
   });
   if (!ok) { pending = null; redraw(tab); }
   return ok;
@@ -136,15 +143,27 @@ function deleteSelected() {
   apply(tab, page, img, 'Delete image', { remove: true }, null);
 }
 const near = (a, b) => a.every((v, k) => Math.abs(v - b[k]) <= 1);
-/** After a reload: the selected image again (same id and box, else same box, else same id). */
+/** The tab's bytes changed: find the selection again (same id and box, else same box, else same id).
+ *  Taken when the bytes change, not when the viewer reloads: superseded reloads emit no tab:loaded, and a
+ *  late re-find must not replace a selection the user made in the meantime (select() drops `refinding`). */
 async function refind(tab) {
   const want = pending?.tab === tab ? pending : sel?.tab === tab ? { page: sel.page, id: sel.img.id, bbox: sel.img.bbox } : null;
   pending = null;
-  hover = null;
-  if (!want) { redraw(tab); return; }
-  const imgs = want.page < tab.numPages ? await loadImages(tab, want.page).catch(() => []) : [];
+  if (hover?.tab === tab) setHover(tab, hover.page, null); // its image is from the old bytes
+  if (!want) { rehover(tab); return; }
+  const r = refinding = { tab, want };
+  const imgs = await loadImages(tab, want.page).catch(() => []);
+  if (refinding !== r) return; // a newer change or the user's own selection
   const img = imgs.find((m) => m.id === want.id && near(m.bbox, want.bbox)) ?? imgs.find((m) => near(m.bbox, want.bbox)) ?? imgs.find((m) => m.id === want.id) ?? null;
   select(img ? { tab, page: want.page, img } : null);
+  rehover(tab);
+}
+/** Hover the image under the last pointer position once the page's images are loaded. */
+function rehover(tab) {
+  if (pointer?.tab !== tab || gesture || state.tool !== TOOL) return;
+  const { hit } = pointer;
+  if (!readyImages(tab, hit.pageIndex)) { loadImages(tab, hit.pageIndex).then(() => rehover(tab)).catch(() => {}); return; }
+  setHover(tab, hit.pageIndex, hit.inside ? imageAt(tab, hit.pageIndex, hit.x, hit.y) : null);
 }
 
 // ---------------------------------------------------------------- pointer
@@ -204,9 +223,8 @@ function onGestureUp(e) {
 }
 function onPointerMove(e, { tab, hit }) {
   if (gesture || !hit) return;
-  const imgs = readyImages(tab, hit.pageIndex);
-  if (!imgs) { loadImages(tab, hit.pageIndex).then(() => redraw(tab)).catch(() => {}); return; }
-  setHover(tab, hit.pageIndex, hit.inside ? imageAt(tab, hit.pageIndex, hit.x, hit.y) : null);
+  pointer = { tab, hit };
+  rehover(tab);
 }
 
 // ---------------------------------------------------------------- options, keys, init
@@ -220,6 +238,8 @@ function reset() {
   if (tab) setHover(tab, hover.page, null);
   sel = null;
   pending = null;
+  refinding = null;
+  pointer = null;
   clearLayers(activeTab());
 }
 
@@ -227,9 +247,10 @@ export function initImageEdit() {
   registerTool({ id: TOOL, label: 'Edit image', icon: 'image-edit', shortcut: 'J', cursor: 'default', options: [options], onPointerDown, onPointerMove,
     onActivate: () => { const tab = activeTab(); if (tab) loadImages(tab, tab.currentPage ?? 0).catch(() => {}); },
     onDeactivate: reset });
-  bus.on('tab:loaded', ({ tab, reloaded }) => { if (reloaded && state.tool === TOOL) refind(tab); });
+  bus.on('tab:bytesChanged', ({ tab }) => { if (state.tool === TOOL) refind(tab); else pending = null; });
+  bus.on('tab:loaded', ({ tab, reloaded }) => { if (reloaded && state.tool === TOOL) redraw(tab); });
   bus.on('page:rendered', ({ tab }) => { if (state.tool === TOOL && (sel?.tab === tab || hover?.tab === tab)) redraw(tab); });
-  bus.on('tab:activated', () => { if (state.tool === TOOL) { sel = null; hover = null; setTool(TOOL); } });
+  bus.on('tab:activated', () => { if (state.tool === TOOL) { sel = null; hover = null; refinding = null; pointer = null; setTool(TOOL); } });
   // Capture: Esc deselects before annotations.js turns it into "back to Select".
   window.addEventListener('keydown', (e) => {
     if (state.tool !== TOOL || e.ctrlKey || e.metaKey || e.altKey || dialogOpen() || isTyping(e.target)) return;

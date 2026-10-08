@@ -55,6 +55,8 @@ try {
   const ev = (body, arg) => page.evaluate(new AsyncFunction('arg', `${S}\n${body}`), arg);
   const frames = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   const settle = () => page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t?.pdfDoc && !t.loading; }, null, { timeout: 10_000 }).then(frames);
+  /** The viewer has reloaded the tab's current bytes (tab:loaded seen since the last tab.bytes change). */
+  const viewed = () => page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t && t.viewedBytes === t.bytes; }, null, { timeout: 15_000 }).then(frames);
   const undos = (n) => page.waitForFunction((k) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return (t?.bytesUndo?.length ?? 0) === k; }, n, { timeout: 15_000 }).then(settle);
   /** Images of page i in tab.bytes, each with its page-space box (true /Rotate). */
   const imgs = (i) => ev(`const { pdfium } = await import('/renderer/pdfium/client.js');
@@ -93,6 +95,9 @@ try {
   await page.click('#btn-open');
   await (await chooser).setFiles({ name: 'images.pdf', mimeType: 'application/pdf', buffer: pdf });
   await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs[0]; return t?.numPages === 2 && a.viewer.getOverlaySvg(t, 0); }, null, { timeout: 10_000 });
+  await ev(`const { bus } = await import('/renderer/bus.js');
+    bus.on('tab:loaded', ({ tab: t }) => { t.viewedBytes = t.bytes; });
+    tab.viewedBytes = tab.bytes;`);
   await ev('v.setZoom(tab, 1);');
   await settle();
   await page.evaluate(() => document.activeElement?.blur?.());
@@ -142,7 +147,10 @@ try {
   check(await ev('return app.state.tool;') === 'image-edit', 'Esc with a selection left the tool');
 
   step = 'delete key';
+  // Select while the viewer may still be reloading the undone bytes, then let the reload land: the
+  // selection the user made must survive it (a late re-find used to move it back to the JPEG).
   await selectAt(0, byFilter(back ? await imgs(0) : orig, 'FlateDecode').box);
+  await viewed();
   await page.keyboard.press('Delete');
   await undos(1);
   const left = await imgs(0);
