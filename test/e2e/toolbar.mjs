@@ -66,6 +66,27 @@ try {
   await page.keyboard.press('p');
   check((await tool()) === 'select', `P twice: tool ${await tool()}`);
 
+  step = 'options row after drawing a shape';
+  const optRow = () => page.evaluate(() => { const o = document.querySelector('.options-bar'); return { hidden: o.hidden || o.offsetHeight === 0, sel: window.ashStudio.annotations.getSelection(window.ashStudio.state.tabs[0]).length }; });
+  const scrollTop = () => page.evaluate(() => document.querySelector('.viewer-scroll:not([hidden])').scrollTop);
+  const st0 = await scrollTop();
+  await page.click('.tb-btn[data-tool="shapes"]');
+  check((await tool()) === 'shapes', 'Shapes selected');
+  const pb = await (await page.$('.viewer-scroll:not([hidden]) .page')).boundingBox();
+  const cx = pb.x + pb.width / 2, cy = pb.y + 200;
+  await page.mouse.move(cx - 60, cy - 40); await page.mouse.down(); await page.mouse.move(cx + 60, cy + 40, { steps: 5 }); await page.mouse.up();
+  await page.click('.tb-btn[data-tool="shapes"]');
+  check((await tool()) === 'select', 'second click on Shapes returns to Select');
+  let orow = await optRow();
+  check(orow.sel === 0 && orow.hidden, `after second click: selection ${orow.sel}, options hidden ${orow.hidden}`);
+  await page.mouse.click(cx, cy - 40); // the rectangle's top edge
+  orow = await optRow();
+  check(orow.sel === 1 && !orow.hidden, `selected rectangle: selection ${orow.sel}, options hidden ${orow.hidden}`);
+  await page.mouse.click(cx + 150, cy + 150);
+  orow = await optRow();
+  check(orow.sel === 0 && orow.hidden, `empty click: selection ${orow.sel}, options hidden ${orow.hidden}`);
+  check((await scrollTop()) === st0, 'scrollTop changed while the options row appeared/disappeared');
+
   // Opens dropdown #id (via More when it has overflowed) and picks item data-id=item.
   const inMore = (id) => page.evaluate((s) => !!document.querySelector(s).closest('.tb-more-panel'), `#${id}`);
   const pick = async (id, item) => {
