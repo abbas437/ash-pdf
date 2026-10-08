@@ -309,6 +309,8 @@ function windowsIpc(run, out) {
 /** A powershell.exe stand-in that writes part of the output (last argument), then runs until cancelled. */
 const partialRun = async (command, args, { signal }) => {
   await writeFile(args[args.length - 1], 'partial');
+  // A slow writeFile can let the cancel land first: an already-aborted signal never fires 'abort' again.
+  if (signal.aborted) throw new Error(CANCELLED);
   await new Promise((res, rej) => signal.addEventListener('abort', () => rej(new Error(CANCELLED)), { once: true }));
 };
 const bytes = new Uint8Array([37, 80, 68, 70]);
