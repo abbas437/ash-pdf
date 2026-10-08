@@ -846,6 +846,7 @@ export function initAnnotations() {
     if (tab) selectionChanged(tab);
     updateChrome();
   });
+  bus.on('annotations:clearSelection', () => { const tab = activeTab(); if (tab && getSelection(tab).length) select(tab, []); });
   bus.on('pages:remapped', ({ tab, map }) => remapPages(tab, map));
   bus.on('state:changed', ({ key }) => {
     if (key !== 'toolStyle') return;

@@ -136,7 +136,8 @@ function creator(toolId) {
 export function initShapeTools() {
   Object.assign(state.toolStyle, { color: '#d62828', strokeWidth: 1.5, dash: state.toolStyle.dash ?? 'solid', fill: null, opacity: 1, hlColor: '#ffff00', hlOpacity: 0.35 });
   bus.emit('state:changed', { key: 'toolStyle', value: state.toolStyle });
-  registerTool({ id: 'select', label: 'Select', icon: 'select', shortcut: 'V', cursor: 'auto', ...selectHandlers, options: ['color', 'strokeWidth', 'dash', fillCtl, opacityCtl, onlyWithSelection] });
+  registerTool({ id: 'select', label: 'Select', icon: 'select', shortcut: 'V', cursor: 'auto', ...selectHandlers, options: ['color', 'strokeWidth', 'dash', fillCtl, opacityCtl, onlyWithSelection],
+    optionsWhen: () => { const tab = activeTab(); return !!tab && annotations.getSelection(tab).length > 0; } });
   const mk = (id, label, icon, shortcut, options) => {
     const c = creator(id);
     registerTool({ id, label, icon, shortcut, cursor: 'crosshair', options, onPointerDown: c.onPointerDown, onPointerMove: c.onPointerMove, onPointerUp: c.onPointerUp, onDeactivate: () => c.cancel(activeTab()) });

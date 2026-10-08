@@ -99,6 +99,8 @@ export function listTools() { return [...tools.values()]; }
 
 /** Toolbar click / shortcut: a second activation of the active tool returns to Select (the default). */
 export function toggleTool(id) {
+  const leaving = id !== 'select' && id === state.tool;
+  if (leaving) bus.emit('annotations:clearSelection'); // the object just drawn must not keep Select's options row open
   setTool(id !== 'select' && id === state.tool ? 'select' : id);
 }
 
@@ -142,7 +144,7 @@ function renderOptions() {
     if (typeof o === 'function') o(optionsEl, state);
     else if (STD[o]) optionsEl.append(STD[o]());
   }
-  optionsEl.hidden = !optionsEl.childElementCount;
+  optionsEl.hidden = !optionsEl.childElementCount || (def.optionsWhen && !def.optionsWhen());
 }
 
 // ---------------------------------------------------------------- groups, dropdowns, overflow
