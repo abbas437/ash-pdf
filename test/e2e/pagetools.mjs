@@ -301,6 +301,7 @@ try {
   await (await chooser).setFiles([{ name: 'a.png', mimeType: 'image/png', buffer: png }, { name: 'b.png', mimeType: 'image/png', buffer: png }]);
   await page.waitForFunction(() => document.querySelectorAll('.pt-filelist li:not(.pt-empty)').length === 2);
   await page.selectOption('#pt-img-size', 'A4');
+  await page.uncheck('#pt-img-ocr'); // default on: OCR is covered by ocr.mjs
   await page.click('.dialog button[data-value="ok"]');
   await page.waitForFunction(() => window.ashStudio.state.tabs.length === 2 && window.ashStudio.state.tabs[1].numPages === 2);
   eq(await ev('return [tab.name, Math.round(v.pageSize(tab, 0).width)];'), ['a-images.pdf', 595], 'images tab');

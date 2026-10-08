@@ -624,8 +624,10 @@ export async function imagesDialog() {
     }).catch((e) => setErr(err, e.message));
   });
   const size = h('select.input', { id: 'pt-img-size' }, h('option', { value: 'fit' }, 'Fit to image'), h('option', { value: 'A4' }, 'A4'), h('option', { value: 'Letter' }, 'Letter'));
+  const searchable = h('input', { type: 'checkbox', id: 'pt-img-ocr', checked: true });
   const form = h('div.pt-form', {}, h('p.pt-hint', {}, 'One page per image, in the order listed. The result opens in a new tab.'),
-    h('div.pt-row', {}, add), list.ul, field('Page size', size), err);
+    h('div.pt-row', {}, add), list.ul, field('Page size', size),
+    h('label.ocr-check', {}, searchable, h('span', {}, 'Make searchable (recognize text, English)')), err);
   const v = await showDialog({
     title: 'Images to PDF', body: form, className: 'pt-dialog', initialFocus: '#pt-img-add',
     buttons: [CANCEL, { label: 'Create PDF', value: 'ok', primary: true, validate: () => (imgs.length ? setErr(err, null) : setErr(err, 'Add at least one PNG or JPG image.', add)) }],
@@ -633,7 +635,9 @@ export async function imagesDialog() {
   if (v !== 'ok') return;
   try {
     const bytes = await (await core()).imagesToPdf(imgs.map(({ bytes, type }) => ({ bytes, type })), { pageSize: size.value, margin: size.value === 'fit' ? 0 : 18 });
-    return await app.openBytes({ name: `${imgs[0].name.replace(/\.[^.]+$/, '')}${imgs.length > 1 ? '-images' : ''}.pdf`, bytes });
+    const tab = await app.openBytes({ name: `${imgs[0].name.replace(/\.[^.]+$/, '')}${imgs.length > 1 ? '-images' : ''}.pdf`, bytes });
+    if (tab && searchable.checked) await app.ocr.recognize(tab, range(tab.numPages));
+    return tab;
   } catch (e) { showError('Could not create the PDF from images', e); }
 }
 

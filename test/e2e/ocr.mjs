@@ -110,6 +110,54 @@ try {
   const p2 = items.filter((t) => t.page === 1).map((t) => t.str);
   check(p2.length === 1 && p2[0] === 'Existing text layer', `page 2 was not skipped: ${JSON.stringify(p2)}`);
 
+  step = 'scanned-document banner';
+  const fullPage = async (withText) => { // one page the size of the image, which covers it entirely
+    const c = createCanvas(IMG.px, IMG.py), ctx = c.getContext('2d');
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, IMG.px, IMG.py);
+    ctx.fillStyle = '#000000'; ctx.font = '84px sans-serif'; ctx.fillText(LINE, LEFT, BASE);
+    const doc = await PDFDocument.create();
+    const png = await doc.embedPng(new Uint8Array(c.toBuffer('image/png')));
+    const p = doc.addPage([IMG.w, IMG.py * K]);
+    p.drawImage(png, { x: 0, y: 0, width: IMG.w, height: IMG.py * K });
+    if (withText) p.drawText('Existing text layer', { x: 72, y: 20, size: 14, font: await doc.embedFont(StandardFonts.Helvetica) });
+    return [...(await doc.save())];
+  };
+  const bar = page.locator('.scan-bar');
+  await page.evaluate((b) => window.ashStudio.openBytes({ name: 'text.pdf', bytes: new Uint8Array(b) }), await fullPage(true));
+  await page.waitForFunction(() => window.ashStudio.state.tabs.length === 2);
+  await page.waitForTimeout(1500);
+  check(await bar.isHidden(), 'banner shown for a PDF with text');
+  await page.evaluate((b) => window.ashStudio.openBytes({ name: 'scan2.pdf', bytes: new Uint8Array(b) }), await fullPage(false));
+  await bar.waitFor({ state: 'visible', timeout: 10000 });
+  check((await bar.innerText()).includes('This looks like a scanned document. Recognize text to make it searchable and copyable.'), 'banner text');
+  const before2 = await undos();
+  await bar.locator('.scan-bar-go').click();
+  const dlg2 = page.locator('.ocr-dialog');
+  await dlg2.waitFor();
+  check(await page.isChecked('#ocr-all'), '"All pages" not preselected');
+  await dlg2.locator('button[data-value="ok"]').click();
+  await page.locator('.ocr-progress').waitFor({ timeout: 10000 });
+  await page.locator('.ocr-progress').waitFor({ state: 'detached', timeout: 180000 });
+  await page.waitForFunction((n) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return (t.bytesUndo?.length ?? 0) > n; }, before2, { timeout: 10000 });
+  check((await textItems()).map((t) => t.str).join(' ').includes('HV-101'), 'banner OCR: no "HV-101"');
+  check(await bar.isHidden(), 'banner still shown after Recognize text');
+
+  step = 'Create PDF from images with "Make searchable"';
+  const tabsBefore = await ev('return app.state.tabs.length;');
+  await page.locator('.menu-btn', { hasText: 'File' }).click();
+  await page.locator('.menu-item[data-id="images-to-pdf"]').click();
+  const chooser = page.waitForEvent('filechooser');
+  await page.click('#pt-img-add');
+  await (await chooser).setFiles([{ name: 'scan.png', mimeType: 'image/png', buffer: Buffer.from(await (async () => { const c = createCanvas(IMG.px, IMG.py), ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, IMG.px, IMG.py); ctx.fillStyle = '#000'; ctx.font = '84px sans-serif'; ctx.fillText(LINE, LEFT, BASE); return c.toBuffer('image/png'); })()) }]);
+  await page.waitForFunction(() => document.querySelectorAll('.pt-filelist li:not(.pt-empty)').length === 1);
+  check(await page.isChecked('#pt-img-ocr'), '"Make searchable" not on by default');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.locator('.ocr-progress').waitFor({ timeout: 20000 });
+  await page.locator('.ocr-progress').waitFor({ state: 'detached', timeout: 180000 });
+  check(await ev('return app.state.tabs.length;') === tabsBefore + 1, 'no new tab for the images PDF');
+  await page.waitForFunction(() => { const a = window.ashStudio; return a.state.tabs.at(-1).name === 'scan.pdf' && (a.state.tabs.at(-1).bytesUndo?.length ?? 0) > 0; }, null, { timeout: 10000 });
+  check((await textItems()).map((t) => t.str).join(' ').includes('HV-101'), 'images PDF: no "HV-101"');
+
   check(!problems.length, `console problems:\n${problems.join('\n')}`);
   console.log('OCR E2E OK');
 } catch (err) {
