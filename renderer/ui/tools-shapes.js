@@ -1,5 +1,5 @@
 // Markup tools for the annotation layer: Select, Shapes (rectangle / ellipse / cloud / line / arrow),
-// Draw (freehand ink), Highlight and Whiteout. Objects go through ui/annotations.js.
+// Draw (freehand ink), Highlight, Whiteout and Redact (marks only, saved as /Redact). Objects go through ui/annotations.js.
 // Defaults suit review mark-up of drawings: red #d62828, 1.5 pt, no fill; dotted is one click away.
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
@@ -7,6 +7,7 @@ import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { annotations, selectHandlers } from './annotations.js';
+import { redactOptions } from './redact.js';
 
 const SHAPES = [
   ['rect', 'Rectangle', 'R', '<rect x="4" y="6" width="16" height="12" rx="1"/>'],
@@ -17,7 +18,7 @@ const SHAPES = [
 ];
 const MIN_PX = 3;        // smaller drags are treated as clicks
 const INK_MIN_STEP = 1.5; // points between ink samples
-const MARKUP_TOOLS = new Set(['shapes', 'draw', 'highlight', 'whiteout']);
+const MARKUP_TOOLS = new Set(['shapes', 'draw', 'highlight', 'whiteout', 'redact']);
 let shapeKind = 'rect';
 
 const svgIcon = (inner) => `<svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${inner}</svg>`;
@@ -81,6 +82,7 @@ const BUILD = {
   },
   highlight: (a, b, shift) => ({ type: 'highlight', ...constrainBox(a, b, shift), color: state.toolStyle.hlColor, opacity: state.toolStyle.hlOpacity }),
   whiteout: (a, b, shift) => ({ type: 'whiteout', ...constrainBox(a, b, shift), color: '#ffffff' }),
+  redact: (a, b, shift) => ({ type: 'redactMark', ...constrainBox(a, b, shift), fill: '#000000' }),
 };
 function bigEnough(o, scale) {
   if ('x1' in o) return Math.hypot(o.x2 - o.x1, o.y2 - o.y1) * scale >= MIN_PX;
@@ -146,6 +148,7 @@ export function initShapeTools() {
   mk('draw', 'Draw (freehand)', 'draw', 'P', ['dash', 'color', 'strokeWidth', opacityCtl]);
   mk('highlight', 'Highlight area', 'highlight', 'H', [hlColorCtl, hlOpacityCtl]);
   mk('whiteout', 'Whiteout (covers, does not redact)', 'whiteout', 'W', null);
+  mk('redact', 'Redact: mark areas to remove', 'redact', 'X', [redactOptions]);
   bus.on('tool:changed', ({ tool }) => document.body.classList.toggle('ann-drawing', MARKUP_TOOLS.has(tool)));
   document.body.classList.toggle('ann-drawing', MARKUP_TOOLS.has(state.tool));
   document.addEventListener('keydown', (e) => {
@@ -153,7 +156,7 @@ export function initShapeTools() {
     const k = e.key.toLowerCase();
     const shape = SHAPES.find((s) => s[2].toLowerCase() === k);
     if (shape) { e.preventDefault(); const again = state.tool === 'shapes' && shapeKind === shape[0]; shapeKind = shape[0]; if (again) setTool('select'); else { setTool('shapes'); setTool('shapes'); } return; }
-    const tool = { v: 'select', p: 'draw', h: 'highlight', w: 'whiteout' }[k];
+    const tool = { v: 'select', p: 'draw', h: 'highlight', w: 'whiteout', x: 'redact' }[k];
     if (tool) { e.preventDefault(); toggleTool(tool); }
   });
 }

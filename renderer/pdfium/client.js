@@ -55,6 +55,8 @@ export const pdfium = {
   pageCount: (docId) => call('pageCount', docId),
   textObjects: (docId, pageIndex) => call('textObjects', docId, pageIndex),
   save: (docId, { incremental = false } = {}) => call('save', docId, { incremental }),
+  /** True redaction + full save; resolves to the new bytes. See redact.js. */
+  redact: (docId, areas, { fill = [0, 0, 0] } = {}) => call('redact', docId, areas, { fill }),
   get started() { return !!worker; },
   /** Diagnostics for tests: open a generated 2-page PDF, read it back, save incrementally. */
   async selfTest() {

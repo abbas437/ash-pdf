@@ -226,6 +226,10 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     // hook.saved(tab, clean): the file is written; clean = no edit landed since the save started.
     for (const hook of state.hooks.beforeSave) hook.saved?.(tab, tab.rev === rev);
     if (tab.rev === rev) markDirty(tab, false);
+    // tab.requiresFullSave (set by Apply redactions, ui/redact.js): any incremental save path must
+    // write in full while it is set. This save wrote the whole file, so the redaction is final: drop
+    // the page undo/redo entries (they hold the pre-redaction bytes) and clear the flag.
+    if (tab.requiresFullSave) { tab.bytesUndo = []; tab.bytesRedo = []; tab.requiresFullSave = false; }
     renderTabs();
     toast(`Saved ${tab.name}`);
     return true;

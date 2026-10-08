@@ -3,6 +3,7 @@
 // by client.js in the document (where the page's CSP applies) and handed over in the 'init' message.
 import { init } from '../vendor/pdfium/index.browser.js';
 import { encodeError, encodeResult } from './protocol.js';
+import { redactDocument } from './redact.js';
 
 const OBJ_TEXT = 1, FPDF_INCREMENTAL = 1;
 let m = null;
@@ -83,6 +84,11 @@ const methods = {
       }
       return out;
     } finally { m.FPDFText_ClosePage(tp); m.FPDF_ClosePage(page); }
+  },
+  /** True redaction (redact.js), then a FULL save: returns the new bytes. areas: [{ pageIndex, rects: [[x0,y0,x1,y1]] }], fill [r,g,b] | null. */
+  redact(docId, areas, { fill = [0, 0, 0] } = {}) {
+    redactDocument(m, getDoc(docId).doc, areas, { fill });
+    return methods.save(docId, { incremental: false });
   },
   save(docId, { incremental = false } = {}) {
     const doc = getDoc(docId).doc;

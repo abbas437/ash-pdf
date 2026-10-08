@@ -16,6 +16,7 @@
 //   deleted together: select() widens to every member; paste gives copies a fresh group.
 //   annotations.remapPages(tab, Map<oldIndex, newIndex|null>)  (also on bus 'pages:remapped' {tab, map})
 //   restorePageObjects(tab, items)  page undo/redo puts back the objects a page operation dropped
+//   dropPageObjects(tab, ids) -> items  a page operation's `res.remove` (no annotation undo step)
 //   annotations.registerObjectType(type, { render(obj, svgParent) -> SVGElement,
 //       bbox(obj) -> {x,y,w,h}, handles(obj) -> [{id,x,y}], hit?(obj,x,y,tol) -> bool,
 //       move(obj, dx, dy) -> patch, resize(obj, handleId, dx, dy) -> patch,
@@ -47,7 +48,7 @@ import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
-import { restoreDropped } from './pagehistory-lib.js';
+import { restoreDropped, takeObjects } from './pagehistory-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -213,6 +214,16 @@ function registerBuiltins() {
     svgEl('rect', { class: 'ann-whiteout-hint', x: o.x, y: o.y, width: o.w, height: o.h, fill: 'none' }, g);
     return g;
   }, { style: () => ({}) }));
+  // Redaction mark (saved as /Redact): red outline over a light hatch; the content goes on Apply.
+  registerObjectType('redactMark', boxType((o, p) => { ensureHatch(); return svgEl('rect', { class: 'ann-redact', x: o.x, y: o.y, width: o.w, height: o.h }, p); }, { style: () => ({}) }));
+}
+/** The hatch pattern of redaction marks, once per document (url(#id) is document-wide). */
+function ensureHatch() {
+  if (document.getElementById('ann-redact-hatch')) return;
+  const svg = svgEl('svg', { width: 0, height: 0, 'aria-hidden': 'true', style: 'position:absolute;width:0;height:0' }, document.body);
+  const pat = svgEl('pattern', { id: 'ann-redact-hatch', width: 6, height: 6, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, svgEl('defs', {}, svg));
+  svgEl('rect', { width: 6, height: 6, fill: 'rgba(214,40,40,0.08)' }, pat);
+  svgEl('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: 'rgba(214,40,40,0.45)', 'stroke-width': 1.5 }, pat);
 }
 
 export function registerObjectType(type, def) {
@@ -377,6 +388,21 @@ export function restorePageObjects(tab, items) {
   ensureTab(tab);
   tab.objects = restoreDropped(tab.objects, items);
   changed(tab);
+}
+
+/**
+ * Page operation `res.remove` (e.g. Apply redactions): take out the objects with these ids without an
+ * annotation undo step. Returns restorePageObjects items, so page undo puts them back.
+ */
+export function dropPageObjects(tab, ids) {
+  ensureTab(tab);
+  const { objects, items } = takeObjects(tab.objects, ids);
+  if (!items.length) return items;
+  tab.objects = objects;
+  for (const it of items) selOf(tab).delete(it.obj.id);
+  changed(tab);
+  selectionChanged(tab);
+  return items;
 }
 
 // ---------------------------------------------------------------- rendering

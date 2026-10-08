@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument, PDFName, PDFDict } from 'pdf-lib';
-import { flattenObjects, measureText, sanitizeText } from '../src/core/annotate.js';
+import { flattenObjects, measureText, sanitizeText, KNOWN_TYPES } from '../src/core/annotate.js';
 import { getInfo } from '../src/core/pdfOps.js';
 import { makePdf, makeGeometryFixture, visibleText, renderPage, pageContent, makeImage, near, isColor } from './helpers.js';
 
@@ -234,7 +234,9 @@ describe('flattenObjects draws every overlay type the app creates', () => {
   };
 
   test('every registered type is accepted, and notes/markups are painted', async () => {
-    const types = await registeredObjectTypes();
+    // redactMark is a mark only: print/flatten skip it (skipUnknown), it never becomes page content.
+    const types = new Set([...(await registeredObjectTypes())].filter((t) => t !== 'redactMark'));
+    assert.ok(!KNOWN_TYPES.has('redactMark'), 'redaction marks are never flattened');
     for (const t of ['note', 'underline', 'strikeout', 'squiggly', 'textHighlight', 'stamp', 'image']) assert.ok(types.has(t), `registered types found: ${[...types]}`);
     const missing = [...types].filter((t) => !SAMPLES[t]);
     assert.deepEqual(missing, [], 'every registered type has a sample here');
