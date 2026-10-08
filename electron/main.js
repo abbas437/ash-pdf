@@ -940,6 +940,16 @@ app.whenReady().then(() => {
 // request except that file and data: URLs; the window is destroyed and the file deleted whatever the outcome.
 const MAX_HTML_CHARS = 256 * 1024 * 1024;
 const MM15 = 15 / 25.4; // printToPDF margins are in inches
+// One in-memory session for every conversion (a new partition per call would live until the app quits).
+const htmlAllowed = new Set();
+let htmlSes = null;
+function htmlSession() {
+  if (!htmlSes) {
+    htmlSes = session.fromPartition('ash-html'); // no "persist:": in memory only
+    htmlSes.webRequest.onBeforeRequest((d, cb) => cb({ cancel: !(htmlAllowed.has(d.url) || d.url.startsWith('data:')) }));
+  }
+  return htmlSes;
+}
 function registerHtmlToPdfIpc() {
   handle('office:htmlToPdf', async (opts) => {
     if (!isPlainObject(opts) || typeof opts.html !== 'string' || !opts.html || opts.html.length > MAX_HTML_CHARS) throw new TypeError('office:htmlToPdf: {html: string} required');
@@ -947,8 +957,8 @@ function registerHtmlToPdfIpc() {
     const dir = await mkdtemp(join(app.getPath('temp'), 'ash-html-'));
     const file = join(dir, 'document.html');
     const fileUrl = pathToFileURL(file).href;
-    const ses = session.fromPartition(`ash-html-${randomBytes(8).toString('hex')}`); // no "persist:": in memory only
-    ses.webRequest.onBeforeRequest((d, cb) => cb({ cancel: !(d.url === fileUrl || d.url.startsWith('data:')) }));
+    const ses = htmlSession();
+    htmlAllowed.add(fileUrl);
     let win = null;
     try {
       await writeFile(file, opts.html, 'utf8');
@@ -959,7 +969,8 @@ function registerHtmlToPdfIpc() {
       return new Uint8Array(pdf);
     } finally {
       win?.destroy();
-      await rm(dir, { recursive: true, force: true });
+      htmlAllowed.delete(fileUrl);
+      await rm(dir, { recursive: true, force: true }).catch(() => {}); // a locked temp file must not fail a finished conversion
     }
   });
 }

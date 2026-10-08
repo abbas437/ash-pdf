@@ -115,6 +115,13 @@ try {
   await page.keyboard.press('Space'); await settle();
   check((await ev('return tab.currentPage;')) === 2, 'Space did not advance a page');
 
+  step = 'Esc with an annotation selected only clears the selection';
+  await ev("const an = app.annotations; const o = an.add(tab, { type: 'rect', page: tab.currentPage, x: 100, y: 100, w: 80, h: 60, stroke: '#ff0000', strokeWidth: 2 }); an.select(tab, [o.id]);");
+  await page.keyboard.press('Escape');
+  await settle();
+  check(await page.evaluate(() => document.body.classList.contains('reading-mode')), 'Esc with a selection left reading mode');
+  check((await ev('return app.annotations.selection ? app.annotations.selection(tab).length : document.querySelectorAll(".ann-selected, .sel-box").length;')) === 0, 'Esc did not clear the selection');
+
   step = 'exit with Esc restores layout and zoom';
   await page.keyboard.press('Escape');
   await settle();

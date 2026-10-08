@@ -86,8 +86,12 @@ export function initReadMode({ registerMenuItem, api }) {
     if (ctrl && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'h') { setReading(!inReading()); return true; }
     if (e.key === 'F11') { setFullScreen(!fullScreen); return true; }
     if (e.key === 'Escape' && !typing) {
-      if (inReading()) { setReading(false); return true; }
-      if (fullScreen) { setFullScreen(false); return true; }
+      // Esc first clears an annotation selection or tool (annotations.js marks the event handled);
+      // only an unclaimed Esc leaves reading mode / full screen. Decided after dispatch, so listener order does not matter.
+      if (inReading() || fullScreen) setTimeout(() => {
+        if (e.defaultPrevented) return;
+        if (inReading()) setReading(false); else if (fullScreen) setFullScreen(false);
+      }, 0);
       return false;
     }
     if (!inReading() || ctrl || e.altKey || typing) return false;
