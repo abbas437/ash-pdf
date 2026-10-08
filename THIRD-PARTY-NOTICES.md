@@ -35,6 +35,7 @@ their own licences. Their full notices ship next to the executable as `LICENSE.e
 | docx | 9.7.2 | MIT |
 | duck | 0.1.12 | BSD-2-Clause |
 | fflate | 0.8.3 | MIT |
+| graceful-fs | 4.2.11 | ISC |
 | hash.js | 1.1.7 | MIT |
 | idb-keyval | 6.3.0 | Apache-2.0 |
 | immediate | 3.0.6 | MIT |
@@ -49,6 +50,7 @@ their own licences. Their full notices ship next to the executable as `LICENSE.e
 | minisearch | 7.2.0 | MIT |
 | nanoid | 6.0.2 | MIT |
 | node-fetch | 2.7.0 | MIT |
+| node-int64 | 0.4.0 | MIT |
 | opencollective-postinstall | 2.0.3 | MIT |
 | option | 0.2.4 | BSD-2-Clause |
 | pako | 1.0.11 | (MIT AND Zlib) |
@@ -56,10 +58,12 @@ their own licences. Their full notices ship next to the executable as `LICENSE.e
 | pdf-lib | 1.17.1 | MIT |
 | pdfjs-dist | 6.4.299 | Apache-2.0 |
 | process-nextick-args | 2.0.1 | MIT |
+| read-excel-file | 9.3.10 | MIT |
 | readable-stream | 2.3.8 | MIT |
 | regenerator-runtime | 0.13.11 | MIT |
 | safe-buffer | 5.1.2 | MIT |
 | sax | 1.6.1 | BlueOak-1.0.0 |
+| saxen | 11.2.0 | MIT |
 | setimmediate | 1.0.5 | MIT |
 | sprintf-js | 1.0.3 | BSD-3-Clause |
 | string_decoder | 1.1.1 | MIT |
@@ -69,10 +73,12 @@ their own licences. Their full notices ship next to the executable as `LICENSE.e
 | tslib | 1.14.1 | 0BSD |
 | underscore | 1.13.8 | MIT |
 | undici-types | 7.24.6 | MIT |
+| unzipper-esm | 0.13.3 | MIT |
 | util-deprecate | 1.0.2 | MIT |
 | wasm-feature-detect | 1.9.0 | Apache-2.0 |
 | webidl-conversions | 3.0.1 | BSD-2-Clause |
 | whatwg-url | 5.0.0 | MIT |
+| worker-f | 0.1.20 | MIT |
 | write-excel-file | 4.1.1 | MIT |
 | xml | 1.0.1 | MIT |
 | xml-js | 1.6.11 | MIT |
@@ -1131,6 +1137,31 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## graceful-fs 4.2.11
+
+Licence: ISC  
+Source: https://github.com/isaacs/node-graceful-fs
+
+From `LICENSE`:
+
+```text
+The ISC License
+
+Copyright (c) 2011-2022 Isaac Z. Schlueter, Ben Noordhuis, and Contributors
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted, provided that the above
+copyright notice and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
+IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+```
+
 ## hash.js 1.1.7
 
 Licence: MIT  
@@ -2073,6 +2104,35 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## node-int64 0.4.0
+
+Licence: MIT  
+Source: https://github.com/broofa/node-int64
+
+From `LICENSE`:
+
+```text
+Copyright (c) 2014 Robert Kieffer
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
 ## opencollective-postinstall 2.0.3
 
 Licence: MIT  
@@ -2444,6 +2504,37 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.**
 ```
 
+## read-excel-file 9.3.10
+
+Licence: MIT  
+Source: https://gitlab.com/catamphetamine/read-excel-file
+
+From `LICENSE`:
+
+```text
+MIT License
+
+Copyright (c) 2018 gitlab.com/catamphetamine
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## readable-stream 2.3.8
 
 Licence: MIT  
@@ -2626,6 +2717,37 @@ No contributor can revoke this license.
 without any warranty or condition, and no contributor
 will be liable to anyone for any damages related to this
 software or this license, under any kind of legal claim.***
+```
+
+## saxen 11.2.0
+
+Licence: MIT  
+Source: https://github.com/nikku/saxen
+
+From `LICENSE`:
+
+```text
+The MIT License (MIT)
+Copyright (c) 2012 Vopilovskii Konstantin   <flash.vkv@gmail.com>
+Copyright (c) 2017-present Nico Rehwaldt
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 ```
 
 ## setimmediate 1.0.5
@@ -3263,6 +3385,41 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## unzipper-esm 0.13.3
+
+Licence: MIT  
+Source: https://github.com/catamphetamine/node-unzipper.git
+
+From `LICENSE`:
+
+```text
+Copyright (c) 2012 - 2013 Near Infinity Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+Commits in this fork are (c) Nikolay Kuchumov (kuchumovn@gmail.com)
+and fall under same licence structure as the original repo (MIT)
+```
+
 ## util-deprecate 1.0.2
 
 Licence: MIT  
@@ -3560,6 +3717,13 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
+
+## worker-f 0.1.20
+
+Licence: MIT  
+Source: https://gitlab.com/catamphetamine/worker-f
+
+The package does not ship a licence file; its package.json declares `MIT`. The standard text of that licence applies.
 
 ## write-excel-file 4.1.1
 

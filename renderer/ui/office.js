@@ -3,8 +3,8 @@
 //                                  Office needed) or "Microsoft Word (better layout, needs Word)", offered only when
 //                                  Office is available: the current document, annotations included, converted by Word
 //                                  through window.api.officeExportDocx (electron/office.js).
-//   Create PDF from Office…        asks for the engine the same way. Built-in (default): a .docx becomes HTML here
-//                                  (office-html.js, mammoth) and main prints it to PDF (window.api.officeHtmlToPdf);
+//   Create PDF from Office…        asks for the engine the same way. Built-in (default): a .docx (mammoth) or .xlsx
+//                                  (read-excel-file) becomes HTML here (office-html.js) and main prints it to PDF (window.api.officeHtmlToPdf);
 //                                  the PDF opens as a new unsaved tab named after the file. Word / Excel / PowerPoint
 //                                  through Microsoft Office (Windows): any Office file, saved where the user chooses.
 import { state, activeTab } from '../state.js';
@@ -15,7 +15,7 @@ import { viewer } from './viewer.js';
 import { flattenedCopy } from './viewextras.js';
 import { encodeImage } from './exports.js';
 import { pdfToDocx } from './docx-export.js';
-import { docxToHtml } from './office-html.js';
+import { docxToHtml, sheetsToHtml } from './office-html.js';
 
 const UNAVAILABLE = 'Requires Microsoft Office on Windows';
 let status = { available: false, reason: UNAVAILABLE };
@@ -136,18 +136,21 @@ export async function officeToPdf(app) {
   } catch (err) { showError('Could not create the PDF', { message: officeMessage(err) }); return null; }
 }
 
-const BUILTIN_NOTE = 'The built-in engine converts Word documents (.docx): headings, paragraphs, lists, tables and images. '
-  + 'Excel, PowerPoint (.pptx) and older .doc files need Microsoft Office.';
+const BUILTIN_NOTE = 'The built-in engine converts Word documents (.docx: headings, paragraphs, lists, tables and images) '
+  + 'and Excel workbooks (.xlsx: every sheet as a table). Older .xls, PowerPoint (.pptx) and .doc files need Microsoft Office.';
 
-/** Built-in Office -> PDF: pick a .docx, convert it here, print it in main -> the new tab, or null. */
+/** Built-in Office -> PDF: pick a .docx or .xlsx, convert it here, print it in main -> the new tab, or null. */
 export async function builtinOfficeToPdf(app) {
-  const [file] = await window.api.openFiles({ filters: [{ name: 'Word document', extensions: ['docx'] }] });
+  const [file] = await window.api.openFiles({ filters: [{ name: 'Word or Excel', extensions: ['docx', 'xlsx'] }] });
   if (!file) return null;
   const base = file.name.replace(/\.[^.]+$/, '');
   try {
-    if (!/\.docx$/i.test(file.name)) throw new Error('The built-in engine converts .docx files; other Office files need Microsoft Office');
-    const { default: mammoth } = await import('mammoth');
-    const { html, landscape } = await docxToHtml(file.bytes, mammoth, base);
+    const ext = /\.(docx|xlsx)$/i.exec(file.name)?.[1].toLowerCase();
+    if (!ext) throw new Error('The built-in engine converts .docx and .xlsx files; other Office files need Microsoft Office');
+    let out;
+    if (ext === 'docx') out = await docxToHtml(file.bytes, (await import('mammoth')).default, base);
+    else out = sheetsToHtml(await (await import('read-excel-file')).default(new Blob([file.bytes])), base);
+    const { html, landscape } = out;
     const bytes = await window.api.officeHtmlToPdf({ html, landscape });
     return await app.openBytes({ name: `${base}.pdf`, path: null, bytes });
   } catch (err) { showError('Could not create the PDF', { message: officeMessage(err) }); return null; }

@@ -11,6 +11,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import writeXlsxFile from 'write-excel-file/node';
 import { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow } from 'docx';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
@@ -311,6 +312,27 @@ try {
   expect('hidden window closed', '', (await winCountNow()) === before.wins);
   expect('temp file removed', await htmlTemps(), (await htmlTemps()) === before.temps);
   await win.evaluate(() => { const a = window.ashStudio; a.closeTab(a.state.tabs.find((x) => x.name === 'Fixture Report.pdf')); }); // back to sample.pdf
+  step = 'office (built-in): Create PDF from an .xlsx -> new tab with the sheet name and cell values';
+  const xlsxPath = join(tmp, 'Fixture Book.xlsx');
+  await writeFile(xlsxPath, await writeXlsxFile([
+    { sheet: 'Blowers', data: [[{ type: String, value: 'Tag' }, { type: String, value: 'Duty' }], [{ type: String, value: 'B-301' }, { type: Number, value: 1875 }]] },
+    { sheet: 'Pumps', data: [[{ type: String, value: 'P-410' }]] },
+  ]).toBuffer());
+  await app.evaluate(({ dialog }, d) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [d] }); }, xlsxPath);
+  await menuClick('office-to-pdf');
+  await win.waitForSelector('.office-engine-dialog #office-engine');
+  expect('xlsx: engine defaults to built-in', '', (await win.inputValue('#office-engine')) === 'ash');
+  await win.click('.office-engine-dialog .btn.primary');
+  await win.waitForFunction(() => window.ashStudio.state.tabs.some((t) => t.name === 'Fixture Book.pdf' && t.pdfDoc), null, { timeout: 30000 });
+  const xlsxText = await win.evaluate(async () => {
+    const t = window.ashStudio.state.tabs.find((x) => x.name === 'Fixture Book.pdf');
+    let text = '';
+    for (let i = 1; i <= t.pdfDoc.numPages; i++) text += (await (await t.pdfDoc.getPage(i)).getTextContent()).items.map((x) => x.str).join(' ') + ' ';
+    return { path: t.path, pages: t.pdfDoc.numPages, text };
+  });
+  expect('PDF text from the .xlsx', JSON.stringify(xlsxText), xlsxText.path === null && xlsxText.pages === 2 && /Blowers/.test(xlsxText.text) && /B-301/.test(xlsxText.text) && /1875/.test(xlsxText.text) && /Pumps/.test(xlsxText.text));
+  expect('hidden window closed after .xlsx', '', (await winCountNow()) === before.wins);
+  await win.evaluate(() => { const a = window.ashStudio; a.closeTab(a.state.tabs.find((x) => x.name === 'Fixture Book.pdf')); });
   step = 'office (built-in): office:htmlToPdf rejects bad input and foreign senders';
   r = await call('officeHtmlToPdf', { html: 5 });
   expect('non-string html', r, /^rejected:.*\{html: string\} required/.test(r));

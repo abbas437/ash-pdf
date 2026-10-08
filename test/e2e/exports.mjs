@@ -255,6 +255,17 @@ try {
   check(!Object.keys(noImgs.f).some((n) => n.startsWith('xl/media/') || n.startsWith('xl/drawings/')), `images written with "Include images" off: ${Object.keys(noImgs.f)}`);
   check(JSON.stringify(noImgs.rows) === JSON.stringify(withImgs.rows), `cells differ without images: ${JSON.stringify(noImgs.rows)}`);
 
+  step = 'Word: built-in engine is the default and writes the page text into word/document.xml';
+  await menu('export-docx');
+  const engine = page.locator('.office-engine-dialog #office-engine');
+  check(await engine.inputValue() === 'ash', 'Export to Word engine does not default to the built-in one');
+  const docx = await download(() => page.locator('.office-engine-dialog .btn.primary').click());
+  check(docx.name === 'photos.docx', `docx name ${docx.name}`);
+  const docParts = unzip(docx.bytes);
+  const docXml = docParts['word/document.xml']?.toString() ?? '';
+  const docText = [...docXml.matchAll(/<w:t[^>]*>([^<]*)<\/w:t>/g)].map((m) => m[1]).join(' ');
+  check(docText.includes('P-101') && docText.includes('Tag'), `word/document.xml text ${JSON.stringify(docText.slice(0, 200))}`);
+
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('EXPORTS OK');
 } catch (err) {
