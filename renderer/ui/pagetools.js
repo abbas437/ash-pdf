@@ -12,8 +12,8 @@ import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
-import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects } from './annotations.js';
-import { invertMap, droppedBy, swapObjs } from './pagehistory-lib.js';
+import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects, setHistoryRouter } from './annotations.js';
+import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan } from './pagehistory-lib.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -22,6 +22,7 @@ const MM = 72 / 25.4;
 const PDF_FILTER = [{ name: 'PDF', extensions: ['pdf'] }];
 let app = null;
 let chain = Promise.resolve();
+let queued = 0; // page operations and page undo/redo steps queued or running
 let pendingSelect = null;  // {tab, indices, focus} applied when the thumbnails are rebuilt
 
 const range = (n, from = 0) => Array.from({ length: n }, (_, i) => i + from);
@@ -60,7 +61,10 @@ function commit(tab, bytes, map, select, restore = null, remove = null) {
   return taken;
 }
 
-function pushCapped(stack, entry) { stack.push(entry); if (stack.length > UNDO_CAP) stack.shift(); }
+/** Push; returns the entry the cap dropped, if any. */
+function pushCapped(stack, entry) { stack.push(entry); return stack.length > UNDO_CAP ? stack.shift() : null; }
+/** Count `job` in `queued` until it settles. */
+function track(job) { queued++; job.finally(() => { queued--; }).catch(() => {}); return job; }
 
 /**
  * Queue a page operation. fn(bytes, pageCount, core) → {bytes, map, select?, remove?} | null.
@@ -80,9 +84,9 @@ export function runOp(tab, label, fn) {
       if (!res) return false;
       tab.bytesUndo ??= [];
       // `dropped`: the objects on pages this op removes, put back by its Undo.
-      const entry = { bytes: before, map: res.map, dropped: droppedBy(tab.objects ?? [], res.map) };
-      pushCapped(tab.bytesUndo, entry);
-      tab.bytesRedo = [];
+      // `seq`/`label`: its place in the tab's one timeline with the annotation history (pagehistory-lib).
+      const entry = { bytes: before, map: res.map, dropped: droppedBy(tab.objects ?? [], res.map), seq: newEntry(tab), label };
+      dropOlderThan(tab, pushCapped(tab.bytesUndo, entry));
       const taken = commit(tab, res.bytes, res.map, res.select, null, res.remove);
       if (res.remove) entry.objs = { restore: taken, remove: [] };
       offerUndo(tab);
@@ -93,7 +97,7 @@ export function runOp(tab, label, fn) {
     }
   });
   chain = job.catch(() => {});
-  return job;
+  return track(job);
 }
 
 function step(tab, from, to) {
@@ -110,7 +114,7 @@ function step(tab, from, to) {
       // The objects `map` drops go with the opposite entry; the ones entry.map dropped come back.
       const map = invertMap(entry.map, curCount);
       tab[to] ??= [];
-      const back = { bytes: cur, map, dropped: droppedBy(tab.objects ?? [], map) };
+      const back = { bytes: cur, map, dropped: droppedBy(tab.objects ?? [], map), seq: entry.seq, label: entry.label };
       pushCapped(tab[to], back);
       const { objs } = entry;
       const taken = commit(tab, entry.bytes, map, null, objs ? [...entry.dropped, ...objs.restore] : entry.dropped, objs?.remove);
@@ -120,11 +124,12 @@ function step(tab, from, to) {
     } catch (err) {
       tab[from].push(entry);
       showError('Could not undo the page change', err);
+      bus.emit('history:changed', { tab });
       return false;
     }
   });
   chain = job.catch(() => {});
-  return job;
+  return track(job);
 }
 /** Resolves once no page operation (or undo/redo) is queued or running. */
 export async function idle() {
@@ -134,12 +139,30 @@ export async function idle() {
 export const undo = (tab = activeTab()) => step(tab, 'bytesUndo', 'bytesRedo');
 export const redo = (tab = activeTab()) => step(tab, 'bytesRedo', 'bytesUndo');
 
+/**
+ * Undo (dir 'undo') or Redo ('redo') the most recent entry of either history: annotations or page /
+ * bytes changes (Edit text, Edit image, redaction, OCR, page operations), in time order. Waits for a
+ * queued page change first, so a second Ctrl+Z sees the history the first one left.
+ */
+function undoRedo(tab, dir) {
+  if (!tab) return Promise.resolve(false);
+  if (queued) return idle().then(() => undoRedo(tab, dir));
+  const kind = nextHistory(tab, dir);
+  if (kind === 'ann') return Promise.resolve(dir === 'undo' ? annotations.undo(tab) : annotations.redo(tab));
+  if (kind === 'bytes') return dir === 'undo' ? undo(tab) : redo(tab);
+  return Promise.resolve(false);
+}
+export const undoAny = (tab = activeTab()) => undoRedo(tab, 'undo');
+export const redoAny = (tab = activeTab()) => undoRedo(tab, 'redo');
+
 function offerUndo(tab) {
   for (const old of document.querySelectorAll('.pt-toast')) old.remove(); // one undo toast at a time
   const b = h('button.toast-action', { type: 'button', 'aria-label': 'Undo page change' }, 'Undo');
   const t = toast(h('span.toast-row', {}, h('span', {}, 'Pages changed'), b), { timeout: 6000 });
   t.classList.add('pt-toast');
-  b.addEventListener('click', () => { t.remove(); undo(tab); });
+  const entry = tab.bytesUndo[tab.bytesUndo.length - 1];
+  // Only while this change is still the newest one: older entries are undone in time order.
+  b.addEventListener('click', () => { t.remove(); if (peekHistory(tab, 'undo') === entry) undoAny(tab); });
 }
 
 // ---------------------------------------------------------------- page operations
@@ -162,7 +185,7 @@ export async function deletePages(tab, sel, { confirm = true } = {}) {
   if (confirm) {
     const what = sel.length === 1 ? `page ${sel[0] + 1}` : `${sel.length} pages (${sel.map((i) => i + 1).join(', ')})`;
     const v = await showDialog({
-      title: 'Delete pages', body: `Delete ${what}? You can undo this with Edit › Undo page change.`,
+      title: 'Delete pages', body: `Delete ${what}? You can undo this with Edit › Undo.`,
       buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Delete', value: 'ok', primary: true, danger: true }],
     });
     if (v !== 'ok') return false;
@@ -861,8 +884,11 @@ export function initPageTools(appApi) {
   item('File', { id: 'split', label: 'Split PDF…', action: withTab(splitDialog) });
   M('File', { id: 'images-to-pdf', label: 'Images to PDF…', action: () => imagesDialog() });
   M('Edit', { separator: true });
-  item('Edit', { id: 'undo-pages', label: 'Undo page change', action: withTab(undo) }, (t) => !!t.bytesUndo?.length);
-  item('Edit', { id: 'redo-pages', label: 'Redo page change', action: withTab(redo) }, (t) => !!t.bytesRedo?.length);
+  // One Undo / Redo for both histories (same as the toolbar buttons and Ctrl+Z / Ctrl+Y), named after the entry.
+  const named = (dir, verb) => () => { const t = activeTab(), e = t && peekHistory(t, dir); return e?.label ? `${verb} ${e.label}` : verb; };
+  M('Edit', { id: 'undo', label: 'Undo', labelFn: named('undo', 'Undo'), shortcut: 'Ctrl+Z', action: withTab(undoAny), enabled: () => !!activeTab() && !!peekHistory(activeTab(), 'undo') });
+  M('Edit', { id: 'redo', label: 'Redo', labelFn: named('redo', 'Redo'), shortcut: 'Ctrl+Y', action: withTab(redoAny), enabled: () => !!activeTab() && !!peekHistory(activeTab(), 'redo') });
+  setHistoryRouter({ undo: undoAny, redo: redoAny });
   M('Edit', { separator: true });
   M('Edit', { id: 'annots-author', label: 'Author name…', action: () => authorDialog() });
   M('Tools', { separator: true });
@@ -877,5 +903,5 @@ export function initPageTools(appApi) {
   item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
   item('Document', { id: 'apply-redactions', label: 'Apply redactions…', action: withTab((t) => import('./redact.js').then((m) => m.applyRedactionsDialog(t))) },
     (t) => !!t.objects?.some((o) => o.type === 'redactMark'));
-  app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
+  app.pageTools = { runOp, undo, redo, undoAny, redoAny, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
 }

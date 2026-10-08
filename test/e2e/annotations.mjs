@@ -281,7 +281,7 @@ try {
   const expected = before.filter((o) => o.page !== 1).map((o) => [o.id, o.page === 2 ? 1 : 0]);
   check(JSON.stringify(after.map((o) => [o.id, o.page])) === JSON.stringify(expected), 'remap dropped/renumbered objects wrongly');
   check(after.length === before.length - before.filter((o) => o.page === 1).length && before.filter((o) => o.page === 1).length >= 6 && after.some((o) => o.page === 1), 'remap counts');
-  check(await ev('return tab.undo.length === 0 && document.getElementById("btn-undo").disabled;'), 'remap did not reset history');
+  check(await ev('return tab.undo.length > 0 && !document.getElementById("btn-undo").disabled;'), 'remap dropped the annotation history (page changes keep it: undo runs in time order)');
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('ANNOTATIONS OK');

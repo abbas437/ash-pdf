@@ -6,6 +6,7 @@ import { h, $, isTyping, formatBytes } from './ui/dom.js';
 import { icon } from './ui/icons.js';
 import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, dialogOpen } from './ui/dialogs.js';
 import { signedSaveMode } from './ui/save-lib.js';
+import { clearBytesHistory } from './ui/pagehistory-lib.js';
 import { viewer } from './ui/viewer.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
@@ -70,7 +71,7 @@ initSearch(viewerHost);
 
 // ---------------------------------------------------------------- menus
 const menus = new Map(); // name -> {button, list, items: []}
-/** registerMenuItem('View', {id, label, shortcut, action, enabled?: () => bool, separator?}) */
+/** registerMenuItem('View', {id, label, shortcut, action, enabled?: () => bool, labelFn?: () => string, separator?}) */
 export function registerMenuItem(menu, item) {
   let m = menus.get(menu);
   if (!m) {
@@ -95,7 +96,11 @@ export function registerMenuItem(menu, item) {
 function openMenu(name, focusFirst) {
   closeMenus();
   const m = menus.get(name);
-  for (const it of m.items) if (it.el) it.el.disabled = it.enabled ? !it.enabled() : false;
+  for (const it of m.items) {
+    if (!it.el) continue;
+    it.el.disabled = it.enabled ? !it.enabled() : false;
+    if (it.labelFn) it.el.firstChild.textContent = it.labelFn(); // e.g. Edit › Undo Edit text
+  }
   m.list.hidden = false;
   m.button.setAttribute('aria-expanded', 'true');
   if (focusFirst) m.list.querySelector('button:not([disabled])')?.focus();
@@ -259,7 +264,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     // write in full while it is set. A full save wrote the whole file, so the redaction is final: drop
     // the page undo/redo entries (they hold the pre-redaction bytes) and clear the flag. An edit that
     // landed during the save does not bring the redacted content back, so this does not wait on tab.rev.
-    if (!signedUpdate && tab.requiresFullSave) { tab.bytesUndo = []; tab.bytesRedo = []; tab.requiresFullSave = false; }
+    if (!signedUpdate && tab.requiresFullSave) { clearBytesHistory(tab); tab.requiresFullSave = false; bus.emit('history:changed', { tab }); }
     renderTabs();
     toast(signedUpdate ? 'Saved as an update; the signature is kept' : `Saved ${tab.name}`);
     return true;

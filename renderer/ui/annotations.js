@@ -48,7 +48,7 @@ import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
-import { restoreDropped, takeObjects } from './pagehistory-lib.js';
+import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from './pagehistory-lib.js';
 import { objectsSummary, unionBox, pasteDelta } from './clipboard-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -255,15 +255,25 @@ function applyCmd(tab, cmd, dir) { // dir: 'do' | 'undo'
 function commit(tab, cmd, coalesce = null) {
   if (batchDepth) { batchCmds.push(cmd); return; }
   const top = tab.undo[tab.undo.length - 1];
-  if (coalesce && cmd.kind === 'update' && top?.kind === 'update' && top.coalesce === coalesce
+  // Coalesce only into the newest entry of either history (not across a page change).
+  if (coalesce && cmd.kind === 'update' && top?.kind === 'update' && top.coalesce === coalesce && nextHistory(tab, 'undo') === 'ann'
       && top.changes.length === cmd.changes.length && top.changes.every((c, k) => c.id === cmd.changes[k].id)) {
     top.changes.forEach((c, k) => { c.before = { ...cmd.changes[k].before, ...c.before }; c.after = { ...c.after, ...cmd.changes[k].after }; });
   } else {
-    tab.undo.push({ ...cmd, coalesce });
+    const seq = newEntry(tab); // also clears the redo entries of both histories
+    tab.undo.push({ ...cmd, coalesce, seq, label: cmdLabel(cmd) });
     if (tab.undo.length > MAX_HISTORY) tab.undo.shift();
   }
   tab.redo.length = 0;
+  tab.bytesRedo = [];
   changed(tab);
+}
+const KIND_LABEL = { add: 'Add annotation', remove: 'Delete annotation', update: 'Edit annotation' };
+/** Name of an annotation history entry for the Undo / Redo tooltips and menu items. */
+function cmdLabel(cmd) {
+  if (cmd.kind !== 'batch') return KIND_LABEL[cmd.kind] ?? 'Annotation change';
+  const kinds = new Set(cmd.cmds.map(cmdLabel));
+  return kinds.size === 1 ? [...kinds][0] : 'Annotation changes';
 }
 function changed(tab, pages = null) {
   markDirty(tab);
@@ -372,9 +382,8 @@ function remapPages(tab, map) {
     o.page = map.get(o.page);
     if (unedited) s.snap = stable(o); // the file's copy moves with its page: still unedited
   }
-  // Snapshots in the history refer to old page indices: page operations reset the history.
-  tab.undo.length = 0;
-  tab.redo.length = 0;
+  // The history keeps its page indices: Undo/Redo run in time order (pagehistory-lib nextHistory), so
+  // this page change is undone before any older entry is applied (and redone before any newer one).
   for (const id of [...selOf(tab)]) if (!getObject(tab, id)) selOf(tab).delete(id);
   if (before !== tab.objects.length || tab.objects.length) changed(tab);
   else renderAll(tab);
@@ -672,8 +681,8 @@ function onKey(e) {
   ensureTab(tab);
   const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase(), sel = getSelection(tab);
   const run = (fn) => { e.preventDefault(); e.stopPropagation(); fn(); };
-  if (ctrl && k === 'z' && !e.shiftKey) return run(() => undo(tab));
-  if (ctrl && (k === 'y' || (k === 'z' && e.shiftKey))) return run(() => redo(tab));
+  if (ctrl && k === 'z' && !e.shiftKey) return run(() => router.undo(tab));
+  if (ctrl && (k === 'y' || (k === 'z' && e.shiftKey))) return run(() => router.redo(tab));
   // Ctrl+X / C / V: copytext.js (object and system clipboard together).
   if (ctrl && k === 'd' && sel.length) return run(() => duplicate(tab));
   if (ctrl) return;
@@ -695,13 +704,18 @@ function onKey(e) {
 
 // ---------------------------------------------------------------- chrome (undo/redo, status)
 let undoBtn = null, redoBtn = null, statusEl = null;
+// Toolbar Undo/Redo and Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z: annotation history only until page tools set
+// the router that also covers the page history (pagetools.js undoAny / redoAny).
+let router = { undo: (t) => undo(t), redo: (t) => redo(t) };
+/** {undo, redo}(tab): what the toolbar buttons and the shortcuts run. */
+export function setHistoryRouter(r) { router = r; updateChrome(); }
 const UNDO_SVG = '<svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M9 7L4.5 11.5 9 16"/><path d="M4.5 11.5H15a4.5 4.5 0 0 1 0 9h-3"/></svg>';
 const REDO_SVG = UNDO_SVG.replace('<path d="M9 7L4.5 11.5 9 16"/><path d="M4.5 11.5H15a4.5 4.5 0 0 1 0 9h-3"/>', '<path d="M15 7l4.5 4.5L15 16"/><path d="M19.5 11.5H9a4.5 4.5 0 0 0 0 9h3"/>');
 function buildChrome() {
   const tools = document.querySelector('.toolbar .tb-tools');
   if (tools && !document.getElementById('btn-undo')) {
-    undoBtn = h('button.tb-btn#btn-undo', { type: 'button', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo (Ctrl+Z)', html: UNDO_SVG, onclick: () => { const t = activeTab(); if (t) undo(t); } });
-    redoBtn = h('button.tb-btn#btn-redo', { type: 'button', title: 'Redo (Ctrl+Y)', 'aria-label': 'Redo (Ctrl+Y)', html: REDO_SVG, onclick: () => { const t = activeTab(); if (t) redo(t); } });
+    undoBtn = h('button.tb-btn#btn-undo', { type: 'button', title: 'Undo (Ctrl+Z)', 'aria-label': 'Undo (Ctrl+Z)', html: UNDO_SVG, onclick: () => { const t = activeTab(); if (t) router.undo(t); } });
+    redoBtn = h('button.tb-btn#btn-redo', { type: 'button', title: 'Redo (Ctrl+Y)', 'aria-label': 'Redo (Ctrl+Y)', html: REDO_SVG, onclick: () => { const t = activeTab(); if (t) router.redo(t); } });
     tools.before(h('div.tb-group', { role: 'group', 'aria-label': 'History' }, undoBtn, redoBtn), h('span.tb-sep', { role: 'separator' }));
   }
   const bar = document.querySelector('footer.statusbar');
@@ -711,8 +725,15 @@ function buildChrome() {
 function updateChrome() {
   const tab = activeTab();
   if (tab) ensureTab(tab);
-  if (undoBtn) undoBtn.disabled = !tab?.undo.length;
-  if (redoBtn) redoBtn.disabled = !tab?.redo.length;
+  // Both histories (pagehistory-lib): the button names what it would undo / redo.
+  for (const [btn, dir, verb, key] of [[undoBtn, 'undo', 'Undo', 'Ctrl+Z'], [redoBtn, 'redo', 'Redo', 'Ctrl+Y']]) {
+    if (!btn) continue;
+    const e = tab ? peekHistory(tab, dir) : null;
+    btn.disabled = !e;
+    const tip = `${verb}${e?.label ? ` ${e.label}` : ''} (${key})`;
+    btn.title = tip;
+    btn.setAttribute('aria-label', tip);
+  }
   if (statusEl) {
     const n = tab?.objects.length ?? 0;
     statusEl.hidden = !n;
@@ -911,6 +932,8 @@ export function initAnnotations() {
   });
   bus.on('annotations:clearSelection', () => { const tab = activeTab(); if (tab && getSelection(tab).length) select(tab, []); });
   bus.on('pages:remapped', ({ tab, map }) => remapPages(tab, map));
+  bus.on('tab:bytesChanged', () => updateChrome()); // page history entries change with the bytes
+  bus.on('history:changed', () => updateChrome());
   bus.on('state:changed', ({ key }) => {
     if (key !== 'toolStyle') return;
     const keys = Object.keys(state.toolStyle).filter((k) => state.toolStyle[k] !== lastStyle[k]);

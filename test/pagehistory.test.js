@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { invertMap, droppedBy, restoreDropped, takeObjects, swapObjs } from '../renderer/ui/pagehistory-lib.js';
+import { invertMap, droppedBy, restoreDropped, takeObjects, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan, clearBytesHistory } from '../renderer/ui/pagehistory-lib.js';
 
 const del3 = new Map([[0, 0], [1, 1], [2, null], [3, 2]]); // delete page 3 of 4
 
@@ -71,4 +71,62 @@ test('takeObjects + swapObjs: an apply removes, its undo restores, its redo remo
   const undo2 = swapObjs(redoEntry, r.items);
   assert.deepEqual(undo2.remove, []);
   assert.deepEqual(restoreDropped(r.objects, undo2.restore).map((o) => o.id), ['a', 'm1', 'b', 'm2']);
+});
+
+// ---------------------------------------------------------------- one timeline (annotation + page history)
+const tabOf = () => ({ undo: [], redo: [], bytesUndo: [], bytesRedo: [] });
+const ann = (t, label) => { const e = { seq: newEntry(t), label }; t.undo.push(e); return e; };
+const pg = (t, label) => { const e = { seq: newEntry(t), label }; t.bytesUndo.push(e); return e; };
+/** What the unified Undo/Redo does to the stacks (annotations.undo / pagetools step move the entry). */
+function act(t, dir) {
+  const k = nextHistory(t, dir);
+  if (!k) return null;
+  const [from, to] = k === 'ann' ? (dir === 'undo' ? ['undo', 'redo'] : ['redo', 'undo']) : (dir === 'undo' ? ['bytesUndo', 'bytesRedo'] : ['bytesRedo', 'bytesUndo']);
+  const e = t[from].pop();
+  t[to].push(e);
+  return e.label;
+}
+
+test('timeline: Undo takes the newest entry of either kind, Redo the oldest undone one', () => {
+  const t = tabOf();
+  ann(t, 'note'); pg(t, 'Rotate pages'); ann(t, 'rect'); pg(t, 'Edit text');
+  assert.equal(peekHistory(t, 'undo').label, 'Edit text');
+  assert.deepEqual([act(t, 'undo'), act(t, 'undo'), act(t, 'undo')], ['Edit text', 'rect', 'Rotate pages']);
+  assert.equal(peekHistory(t, 'redo').label, 'Rotate pages');
+  assert.deepEqual([act(t, 'redo'), act(t, 'redo'), act(t, 'redo'), act(t, 'redo')], ['Rotate pages', 'rect', 'Edit text', null]);
+  assert.deepEqual([act(t, 'undo'), act(t, 'undo'), act(t, 'undo'), act(t, 'undo'), act(t, 'undo')], ['Edit text', 'rect', 'Rotate pages', 'note', null]);
+  assert.equal(peekHistory(t, 'undo'), null);
+});
+
+test('timeline: a new entry of either kind drops the redo entries of both', () => {
+  const t = tabOf();
+  ann(t, 'a'); pg(t, 'p');
+  act(t, 'undo'); act(t, 'undo');
+  assert.equal(t.redo.length + t.bytesRedo.length, 2);
+  ann(t, 'b');
+  assert.deepEqual([t.redo.length, t.bytesRedo.length], [0, 0]);
+  pg(t, 'q'); act(t, 'undo'); ann(t, 'c');
+  assert.deepEqual([t.bytesRedo.length, nextHistory(t, 'redo')], [0, null]);
+});
+
+test('timeline: a capped page entry takes the older annotation entries with it', () => {
+  const t = tabOf();
+  ann(t, 'a0'); const p0 = pg(t, 'p0'); ann(t, 'a1'); pg(t, 'p1'); ann(t, 'a2');
+  t.bytesUndo.shift(); // the page history cap dropped p0
+  dropOlderThan(t, p0);
+  assert.deepEqual(t.undo.map((e) => e.label), ['a1', 'a2']);
+  dropOlderThan(t, null);
+  assert.equal(t.undo.length, 2, 'nothing dropped: no-op');
+});
+
+test('clearBytesHistory: drops the page entries and the annotation entries only they could reach', () => {
+  const t = tabOf();
+  ann(t, 'a0'); pg(t, 'Apply redactions'); ann(t, 'a1');
+  clearBytesHistory(t);
+  assert.deepEqual([t.undo.map((e) => e.label), t.bytesUndo.length], [['a1'], 0]);
+  const u = tabOf();
+  ann(u, 'a0'); pg(u, 'p'); ann(u, 'a1');
+  act(u, 'undo'); act(u, 'undo'); // a1 and p undone
+  clearBytesHistory(u);
+  assert.deepEqual([u.undo.map((e) => e.label), u.redo.length, u.bytesRedo.length], [['a0'], 0, 0]);
 });
