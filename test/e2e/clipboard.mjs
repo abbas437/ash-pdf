@@ -178,6 +178,8 @@ try {
     const bytes = new Uint8Array(await (await c.convertToBlob({ type: 'image/jpeg' })).arrayBuffer());
     const o = an.add(tab, { type: 'image', page: 0, x: 40, y: 40, w: 30, h: 20, bytes, mime: 'image/jpeg', opacity: 1, rotation: 0 });
     an.select(tab, [o.id]);`);
+  // Empty the clipboard first: an image left by an earlier step would satisfy the wait below at once.
+  await page.evaluate(() => window.__ashShim.setClipboardText(''));
   await page.locator('.viewer-scroll:not([hidden])').focus();
   await page.keyboard.press('Control+c');
   await page.waitForFunction(() => window.__ashShim.clipboardImage(), null, { timeout: 3000 }).catch(() => {});

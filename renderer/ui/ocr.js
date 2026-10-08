@@ -180,8 +180,8 @@ async function scannedStart(tab) {
 
 /** The non-blocking "This looks like a scanned document" bar, shown once per document for the active tab. */
 function initScanPrompt() {
-  const bar = h('div.forms-bar.scan-bar', { role: 'region', 'aria-label': 'Scanned document', hidden: true },
-    h('span.forms-bar-text', {}, 'This looks like a scanned document. Recognize text to make it searchable and copyable.'),
+  const bar = h('div.scan-bar', { role: 'region', 'aria-label': 'Scanned document', hidden: true },
+    h('span.scan-bar-text', {}, 'This looks like a scanned document. Recognize text to make it searchable and copyable.'),
     h('button.btn.scan-bar-go', { type: 'button', onclick: () => { const t = activeTab(); if (t) { t.scanPrompt = false; sync(); ocrDialog(t, { pages: 'all' }); } } }, 'Recognize text'),
     h('button.btn.scan-bar-no', { type: 'button', onclick: () => { const t = activeTab(); if (t) t.scanPrompt = false; sync(); } }, 'Not now'));
   (document.querySelector('.banner') ?? document.querySelector('.toolbar'))?.after(bar);

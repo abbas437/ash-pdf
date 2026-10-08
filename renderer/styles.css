@@ -233,10 +233,10 @@ body.sidebar-closed .sidebar { display: none; }
 .textLayer .markedContent span.hl, .textLayer span.hl { font-size: inherit; transform: none; position: static; }
 
 /* ---- form filling (ui/forms.js) ---- */
-.forms-bar { display: flex; align-items: center; gap: 8px; padding: 4px 14px; background: #e3ecfb; color: #1d3557; border-bottom: 1px solid #b9cbeb; }
-[data-theme="dark"] .forms-bar { background: #1e2a3d; color: #d6e2f5; border-color: #33465f; }
-.forms-bar[hidden] { display: none; }
-.forms-bar-text { flex: 1; }
+.forms-bar, .scan-bar { display: flex; align-items: center; gap: 8px; padding: 4px 14px; background: #e3ecfb; color: #1d3557; border-bottom: 1px solid #b9cbeb; }
+[data-theme="dark"] .forms-bar, [data-theme="dark"] .scan-bar { background: #1e2a3d; color: #d6e2f5; border-color: #33465f; }
+.forms-bar[hidden], .scan-bar[hidden] { display: none; }
+.forms-bar-text, .scan-bar-text { flex: 1; }
 .forms-bar .btn[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .forms-bar-close { padding: 0 8px; }
 .form-layer { position: absolute; left: 0; top: 0; transform-origin: 0 0; pointer-events: none; }
