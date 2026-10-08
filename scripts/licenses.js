@@ -18,7 +18,9 @@ const ALLOWED = new Set(['MIT', 'Apache-2.0', 'BSD-2-Clause', 'BSD-3-Clause', 'I
   'Zlib',
   // Permissive notice-only licences of libraries compiled into PDFium's wasm (@embedpdf/pdfium):
   // libpng-2.0 (PNG Reference Library v2), FTL (FreeType Project License), IJG (libjpeg).
-  'libpng-2.0', 'FTL', 'IJG']);
+  'libpng-2.0', 'FTL', 'IJG',
+  // libtiff: permissive notice-only licence (SPDX "libtiff") of LibTIFF, compiled into tesseract.js-core's wasm.
+  'libtiff']);
 
 const args = process.argv.slice(2);
 const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
@@ -81,6 +83,7 @@ while (queue.length) {
 // were taken from the npm releases matching those ranges and kept in scripts/third-party-licenses/.
 const PJ = 'node_modules/pdfjs-dist', TPL = 'scripts/third-party-licenses';
 const PDFIUM = 'compiled into @embedpdf/pdfium dist/pdfium.wasm -> renderer/vendor/pdfium/pdfium.wasm';
+const TESS = 'compiled into tesseract.js-core tesseract-core-simd-lstm.wasm -> renderer/vendor/tesseract/';
 const FK = 'inlined in @pdf-lib/fontkit dist/fontkit.umd.min.js (renderer/vendor/fontkit.esm.js)';
 const BUNDLED = [
   { name: 'Adobe CMaps', licence: 'BSD-3-Clause', where: 'pdfjs-dist cmaps/ -> renderer/vendor/pdfjs/cmaps/', files: [`${PJ}/cmaps/LICENSE`] },
@@ -137,6 +140,34 @@ const BUNDLED = [
   { name: 'Little CMS (lcms2)', version: 'version unconfirmed', licence: 'MIT', where: PDFIUM,
     note: 'Colour management; identified by its error messages in the wasm. Text from github.com/mm2/Little-CMS (master), LICENSE.',
     files: [`${TPL}/lcms2-LICENSE.txt`] },
+  // OCR engine: tesseract.js-core tesseract-core-simd-lstm.wasm (vendored by scripts/vendor.js). The npm package's LICENSE
+  // covers its build; Tesseract and the image libraries Leptonica links are compiled into the wasm. Identified from
+  // strings in the wasm (version strings, library error messages); upstream texts fetched in 2026-10 into TPL.
+  { name: 'Tesseract OCR', version: 'version unconfirmed', licence: 'Apache-2.0', where: TESS,
+    note: 'The wasm contains the string "5.1.0-288-g2a9c1" (a Tesseract git describe). Text from github.com/tesseract-ocr/tesseract (main), LICENSE.',
+    files: [`${TPL}/tesseract-LICENSE.txt`] },
+  { name: 'Leptonica', version: 'version unconfirmed', licence: 'BSD-2-Clause', where: TESS,
+    note: 'Image library used by Tesseract. Text from github.com/DanBloomberg/leptonica (master), leptonica-license.txt.',
+    files: [`${TPL}/leptonica-LICENSE.txt`] },
+  { name: 'libpng (in Tesseract)', version: '1.6.38', licence: 'libpng-2.0', where: TESS,
+    note: 'Version from the string "1.6.38.git" in the wasm. Text from github.com/pnggroup/libpng tag v1.6.38, LICENSE.',
+    files: [`${TPL}/libpng-1.6.38-LICENSE.txt`] },
+  { name: 'zlib (in Tesseract)', version: 'version unconfirmed', licence: 'Zlib', where: TESS,
+    note: 'The wasm contains "1.2.12" and zlib error strings. Text from github.com/madler/zlib tag v1.3.1, LICENSE (same terms).',
+    files: [`${TPL}/zlib-LICENSE.txt`] },
+  { name: 'IJG libjpeg (in Tesseract)', version: 'version unconfirmed', licence: 'IJG', where: TESS,
+    note: 'This software is based in part on the work of the Independent JPEG Group. Identified by libjpeg messages and "Copyright (C) 2014, Thomas G. Lane, Guido Vollbeding" in the wasm. The IJG terms are quoted from libjpeg-turbo\'s README.ijg.',
+    files: [`${TPL}/libjpeg-turbo-README.ijg`] },
+  { name: 'LibTIFF', version: 'version unconfirmed', licence: 'libtiff', where: TESS,
+    note: 'Identified by libtiff messages in the wasm. Text from github.com/libsdl-org/libtiff (mirror of gitlab.com/libtiff/libtiff, master), LICENSE.md.',
+    files: [`${TPL}/libtiff-LICENSE.md`] },
+  { name: 'libwebp', version: 'version unconfirmed', licence: 'BSD-3-Clause', where: TESS,
+    note: 'Identified by WebP decoder messages in the wasm. Text from github.com/webmproject/libwebp (main), COPYING.',
+    files: [`${TPL}/libwebp-COPYING.txt`] },
+  { name: 'Tesseract English traineddata (eng)', version: '4.0.0_best_int', licence: 'Apache-2.0',
+    where: '@tesseract.js-data/eng 4.0.0_best_int/eng.traineddata.gz -> renderer/vendor/tessdata/eng.traineddata.gz',
+    note: 'The tessdata_best English LSTM model converted to integer form by the tesseract.js project. Text from github.com/tesseract-ocr/tessdata_best (main), LICENSE.',
+    files: [`${TPL}/tessdata_best-LICENSE.txt`] },
 ].map((b) => ({ ...b, allowed: isAllowed(b.licence) }));
 for (const b of BUNDLED) {
   b.texts = b.files.map((f) => ({ file: f, text: existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8').trim() : null }));

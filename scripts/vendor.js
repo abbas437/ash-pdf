@@ -17,6 +17,11 @@
 //   renderer/vendor/fonts/<font>-latin-400-normal.woff2  @fontsource/* handwriting fonts (SIL OFL 1.1) for typed signatures
 //   renderer/vendor/pdfium/index.browser.js @embedpdf/pdfium dist/index.browser.js (PDFium wasm glue, MIT) -> renderer/pdfium/worker.js
 //   renderer/vendor/pdfium/pdfium.wasm      @embedpdf/pdfium dist/pdfium.wasm (PDFium, BSD-3-Clause/Apache-2.0) -> renderer/pdfium/client.js
+//   renderer/vendor/tesseract/worker.min.js tesseract.js dist/worker.min.js (OCR worker, Apache-2.0), started as a same-origin Worker
+//   renderer/vendor/tesseract/tesseract.esm.min.js tesseract.js dist/tesseract.esm.min.js (createWorker API)
+//   renderer/vendor/tesseract/tesseract-core-simd-lstm.{js,wasm} tesseract.js-core (Tesseract + Leptonica wasm, LSTM-only, SIMD);
+//                                           kept beside worker.min.js because Emscripten resolves the .wasm against the worker URL
+//   renderer/vendor/tessdata/eng.traineddata.gz @tesseract.js-data/eng 4.0.0_best_int (English LSTM model, Apache-2.0)
 //   renderer/vendor/licenses/              licence files of everything above
 //
 // Why fontkit is wrapped: @pdf-lib/fontkit's ES build (dist/fontkit.es.min.js) does
@@ -117,6 +122,18 @@ copy('@embedpdf/pdfium/dist/pdfium.wasm', 'pdfium/pdfium.wasm');
 copy('@embedpdf/pdfium/LICENSE', 'licenses/@embedpdf-pdfium-LICENSE.txt');
 copy('@embedpdf/pdfium/LICENSE.pdfium', 'licenses/pdfium-LICENSE.txt');
 
+// --- OCR: tesseract.js (Apache-2.0) + tesseract.js-core wasm + English traineddata — Tools > Recognize text (OCR) ---
+// Only the LSTM-only SIMD core is copied (the app sets corePath to it; English uses the LSTM engine only), as the
+// separate .js + .wasm pair rather than the base64 *.wasm.js builds. No source maps. Everything loads offline from
+// the app's own origin: workerPath, corePath and langPath are set by renderer/ui/ocr.js.
+copy('tesseract.js/dist/worker.min.js', 'tesseract/worker.min.js');
+copy('tesseract.js/dist/tesseract.esm.min.js', 'tesseract/tesseract.esm.min.js');
+copy('tesseract.js-core/tesseract-core-simd-lstm.js', 'tesseract/tesseract-core-simd-lstm.js');
+copy('tesseract.js-core/tesseract-core-simd-lstm.wasm', 'tesseract/tesseract-core-simd-lstm.wasm');
+copy('@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', 'tessdata/eng.traineddata.gz');
+copy('tesseract.js/LICENSE.md', 'licenses/tesseract.js-LICENSE.md');
+copy('tesseract.js-core/LICENSE', 'licenses/tesseract.js-core-LICENSE.txt');
+
 const count = (d) => readdirSync(d, { recursive: true }).length;
 for (const line of copied) console.log(`vendor: ${line}`);
-console.log(`vendor: done — pdfjs-dist@${version('pdfjs-dist')}, pdf-lib@${version('pdf-lib')}, @pdf-lib/fontkit@${version('@pdf-lib/fontkit')}, @embedpdf/pdfium@${version('@embedpdf/pdfium')}; ${count(out)} entries in renderer/vendor`);
+console.log(`vendor: done — pdfjs-dist@${version('pdfjs-dist')}, pdf-lib@${version('pdf-lib')}, @pdf-lib/fontkit@${version('@pdf-lib/fontkit')}, @embedpdf/pdfium@${version('@embedpdf/pdfium')}, tesseract.js@${version('tesseract.js')}, tesseract.js-core@${version('tesseract.js-core')}; ${count(out)} entries in renderer/vendor`);
