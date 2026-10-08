@@ -114,6 +114,7 @@ All methods return Promises except `onOpenFile`. A *file* object is `{ path, nam
 | `readFile(path)` | `Uint8Array` | Only paths already returned by `openFiles`, `saveFile`, launch or open-file events. |
 | `saveFile({ defaultPath?, filters?, bytes })` | `{ path }` or `null` if cancelled | Shows Save As, writes atomically (temp file + rename). Browser: downloads. |
 | `writeFile(path, bytes)` | `{ path }` | Save in place; same path rule as `readFile`. |
+| `imageExportBegin({ baseName, pageCount, pages, format })` / `imageExportWrite(jobId, index, bytes)` / `imageExportEnd(jobId)` | `{ jobId, folder, count }` or `null` / `{ name }` / `boolean` | Multi-page image export (`src/core/imgexport.js`): begin rejects any other key, shows the folder picker in main and asks once before replacing existing files; files are `<base>-p001.png`, max 2000 per job, each a PNG/JPEG `Uint8Array` up to 50 MB; end (or cancel) closes the job. Browser: downloads. |
 | `getLaunchFiles()` | `file[]` | PDFs given on the command line / "Open with". Call once at start-up. |
 | `onOpenFile(cb)` | unsubscribe function | `cb(file)` for PDFs opened later (double-click while running): tabs in the last-focused window, or a new window when setting `open.target` is `'window'` (default `'tab'`). |
 | `print()` | `{ ok, reason }` | System print dialog for the current page. Browser: `window.print()`. |

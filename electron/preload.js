@@ -16,6 +16,10 @@ contextBridge.exposeInMainWorld('api', {
   readFile: (path) => ipcRenderer.invoke('file:read', path),
   saveFile: (opts) => ipcRenderer.invoke('dialog:save', opts ?? {}),
   writeFile: (path, bytes) => ipcRenderer.invoke('file:write', path, bytes),
+  // multi-page image export (src/core/imgexport.js)
+  imageExportBegin: (req) => ipcRenderer.invoke('imgexport:begin', req),
+  imageExportWrite: (jobId, index, bytes) => ipcRenderer.invoke('imgexport:write', jobId, index, bytes),
+  imageExportEnd: (jobId) => ipcRenderer.invoke('imgexport:end', jobId),
   getLaunchFiles: () => ipcRenderer.invoke('app:launchFiles'),
   onOpenFile: (cb) => {
     if (typeof cb !== 'function') throw new TypeError('onOpenFile: callback required');
