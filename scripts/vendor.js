@@ -14,6 +14,7 @@
 //   renderer/vendor/fontkit.esm.js         generated ES wrapper around @pdf-lib/fontkit's UMD build ("@pdf-lib/fontkit")
 //   renderer/vendor/minisearch.js          minisearch dist/es/index.js (self-contained ES module) ("minisearch")
 //   renderer/vendor/write-excel-file.esm.js generated ES wrapper around write-excel-file's UMD bundle (fflate inlined) ("write-excel-file")
+//   renderer/vendor/docx.mjs                docx dist/index.mjs (self-contained ES module, MIT; bundles jszip, pako, sax, xml-js...) ("docx")
 //   renderer/vendor/fonts/<font>-latin-400-normal.woff2  @fontsource/* handwriting fonts (SIL OFL 1.1) for typed signatures
 //   renderer/vendor/fonts/edit/<Family>-<Style>.ttf  @expo-google-fonts/{carlito,caladea,arimo,tinos,cousine} full TrueType fonts
 //                                           (SIL OFL 1.1): substitutes for editing original PDF text (renderer/pdfium/textedit.js FONT_FILES)
@@ -109,6 +110,12 @@ writeFileSync(join(out, 'write-excel-file.esm.js'),
 copied.push('write-excel-file/bundle/write-excel-file.min.js -> renderer/vendor/write-excel-file.esm.js (ES wrapper)');
 copy('write-excel-file/LICENSE', 'licenses/write-excel-file-LICENSE.txt');
 copy('fflate/LICENSE', 'licenses/fflate-LICENSE.txt');
+// --- docx (MIT) — File > Export to Word, built-in engine (renderer/ui/docx-export.js). dist/index.mjs inlines its
+// dependencies (jszip, pako, sax, xml, xml-js, nanoid, hash.js and Node polyfills) and imports nothing.
+const docxSrc = readFileSync(join(nm, 'docx/dist/index.mjs'), 'utf8');
+if (/^\s*import[\s{*"']/m.test(docxSrc) || !/\bPacker\b/.test(docxSrc)) throw new Error('vendor: docx dist/index.mjs is not the expected self-contained ES module');
+copy('docx/dist/index.mjs', 'docx.mjs');
+copy('docx/LICENSE', 'licenses/docx-LICENSE.txt');
 // --- Handwriting fonts for typed signatures (SIL OFL 1.1), latin subset, regular weight ---
 // Font names and families are listed in renderer/ui/signatures.js (SIG_FONTS) and styles.css.
 const SIGNATURE_FONTS = ['dancing-script', 'great-vibes', 'caveat', 'sacramento'];
@@ -146,4 +153,4 @@ copy('tesseract.js-core/LICENSE', 'licenses/tesseract.js-core-LICENSE.txt');
 
 const count = (d) => readdirSync(d, { recursive: true }).length;
 for (const line of copied) console.log(`vendor: ${line}`);
-console.log(`vendor: done — pdfjs-dist@${version('pdfjs-dist')}, pdf-lib@${version('pdf-lib')}, @pdf-lib/fontkit@${version('@pdf-lib/fontkit')}, @embedpdf/pdfium@${version('@embedpdf/pdfium')}, tesseract.js@${version('tesseract.js')}, tesseract.js-core@${version('tesseract.js-core')}; ${count(out)} entries in renderer/vendor`);
+console.log(`vendor: done — pdfjs-dist@${version('pdfjs-dist')}, pdf-lib@${version('pdf-lib')}, @pdf-lib/fontkit@${version('@pdf-lib/fontkit')}, @embedpdf/pdfium@${version('@embedpdf/pdfium')}, tesseract.js@${version('tesseract.js')}, tesseract.js-core@${version('tesseract.js-core')}, docx@${version('docx')}; ${count(out)} entries in renderer/vendor`);

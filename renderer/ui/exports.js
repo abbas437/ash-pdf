@@ -42,7 +42,7 @@ function imageCanvas(img) {
 }
 
 // One image object -> {content: Blob, contentType}: PNG when any pixel is not opaque, else JPEG; capped at MAX_BITMAP.
-async function encodeImage(img) {
+export async function encodeImage(img) {
   let c = imageCanvas(img);
   const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
   let alpha = false;
