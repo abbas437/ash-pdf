@@ -108,4 +108,16 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - run: npm ci && npm run vendor && npm test
+      - run: npm ci && npm run vendor
+      - name: npm test
+        shell: bash
+        run: |
+          set +e
+          npm test > test-out.txt 2>&1
+          code=$?
+          cat test-out.txt
+          if [ $code -ne 0 ]; then
+            msg=$( (grep -n -A 30 '^not ok\|^    not ok' test-out.txt | head -c 3000; tail -c 400 test-out.txt) | tr -d '\r' | sed ':a;N;$!ba;s/%/%25/g;s/\n/%0A/g')
+            echo "::error title=npm test failed (smoke)::$msg"
+          fi
+          exit $code

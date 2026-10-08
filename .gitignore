@@ -9,3 +9,4 @@ build/libredwg/
 # screenshots written by e2e runs for legibility checks
 test/e2e/out/*-light.png
 test/e2e/out/*-dark.png
+test/e2e/out/redact-applied.png
