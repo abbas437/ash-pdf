@@ -33,6 +33,7 @@ import { initCompress } from './ui/compress.js';
 import { initOcr } from './ui/ocr.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
 import { initHandTool } from './ui/tools-hand.js';
+import { initTextEdit } from './ui/textedit.js';
 import { initSession } from './ui/session.js';
 import { initPrefs, openPrefs, prefsForNewTab, applySidebarOnOpen } from './ui/prefs.js';
 
@@ -508,6 +509,7 @@ initOcr(app); // Tools > Recognize text (OCR)
 initAdvancedSearch(app);
 initCopyText(app);
 initHandTool();
+initTextEdit(); // Edit text tool (D): original document text, line by line
 initSplitView({ host: viewerHost, activate, registerMenuItem });
 initToolbarMenus(app); // Pages and Split dropdowns
 const prefsReady = initPrefs({ registerMenuItem, setTheme, toolbar });

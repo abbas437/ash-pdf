@@ -17,7 +17,7 @@ const GROUPS = [
   ['navigate', 'Navigate', ['select', 'hand']],
   ['pages', 'Pages', ['pages']],
   ['view', 'View', ['split']],
-  ['edit', 'Edit', ['text', 'image', 'whiteout', 'redact', 'forms']],
+  ['edit', 'Edit', ['text', 'textedit', 'image', 'whiteout', 'redact', 'forms']],
   ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes']],
   ['sign', 'Stamp and sign', ['stamp', 'sign']],
 ];
