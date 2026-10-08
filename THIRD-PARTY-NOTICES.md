@@ -24,7 +24,7 @@ their own licences. Their full notices ship next to the executable as `LICENSE.e
 | @pdf-lib/standard-fonts | 1.0.0 | MIT |
 | @pdf-lib/upng | 1.0.1 | MIT |
 | @tesseract.js-data/eng | 1.0.0 | MIT |
-| @types/node | 24.19.1 | MIT |
+| @types/node | 25.9.9 | MIT |
 | bmp-js | 0.1.0 | MIT |
 | core-util-is | 1.0.3 | MIT |
 | docx | 9.7.2 | MIT |
@@ -790,7 +790,7 @@ Source: https://github.com/naptha/tessdata.git
 
 The package does not ship a licence file; its package.json declares `MIT`. The standard text of that licence applies.
 
-## @types/node 24.19.1
+## @types/node 25.9.9
 
 Licence: MIT  
 Source: https://github.com/DefinitelyTyped/DefinitelyTyped.git
