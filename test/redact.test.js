@@ -6,7 +6,8 @@ import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { init } from '@embedpdf/pdfium';
 import { redactDocument } from '../renderer/pdfium/redact.js';
 import { writeAnnotations, readAnnotations } from '../src/core/index.js';
-import { makeImage, pdfjsDoc, renderPage } from './helpers.js';
+import { PDFRawStream, PDFName, decodePDFRawStream } from 'pdf-lib';
+import { makeImage, pdfjsDoc, renderPage, decodedStrings } from './helpers.js';
 
 const wasm = readFileSync(createRequire(import.meta.url).resolve('@embedpdf/pdfium/pdfium.wasm'));
 let mPromise;
@@ -64,7 +65,8 @@ test('redactDocument removes text chars, image pixels and annotations under the 
   assert.ok(!t.includes('99-1234') && !t.includes('99-'), `redacted text still extractable: ${t}`);
   assert.ok(t.includes('SECRET'), `chars of the same object outside the rect are kept: ${t}`);
   assert.ok(t.includes('Public line') && t.includes('Invoice number 4711'), `other lines kept: ${t}`);
-  assert.ok(!Buffer.from(out).toString('latin1').includes('99-1234'), 'raw bytes have no "99-1234"');
+  assert.ok((await decodedStrings(src)).includes('99-1234'), 'the decoded search sees the fixture text');
+  assert.ok(!(await decodedStrings(out)).includes('99-1234'), 'no "99-1234" in any decoded string or stream');
   assert.equal(stats.images.blacked + stats.images.removed, 1, `image handled: ${JSON.stringify(stats)}`);
   assert.equal(stats.annots, 1);
   assert.equal((await readAnnotations(out)).objects.length, 0, 'annotation inside the rect is gone');
@@ -94,4 +96,51 @@ test('redactDocument removes a vector path fully inside the rect, keeps one cros
   const inside = px(275, 792 - 515), bar = px(450, 792 - 445);
   assert.ok(inside[0] > 240 && inside[1] > 240 && inside[2] > 240, `green path inside the rect is gone: ${inside}`);
   assert.ok(bar[0] > 200 && bar[1] < 60, `red bar crossing the rect is kept: ${bar}`);
+});
+
+/** Pixel data of every image stream, decoded. */
+async function imageData(bytes) {
+  const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+  return [...doc.context.enumerateIndirectObjects()]
+    .filter(([, o]) => o instanceof PDFRawStream && o.dict.get(PDFName.of('Subtype'))?.toString() === '/Image')
+    .map(([, o]) => Buffer.from(decodePDFRawStream(o).decode()).toString('latin1'));
+}
+
+/** A page whose content is a Form XObject (embedPage at half size, offset 50,20): inside it a blue image
+ *  (form 300..460 x 480..560 -> page 200..280 x 260..300) and "SECRET 99-1234" (form 200,600 -> page 150,320). */
+async function formFixture() {
+  const inner = await PDFDocument.create();
+  const ip = inner.addPage([612, 792]);
+  ip.drawImage(await inner.embedPng(makeImage('png', 80, 40, '#0000ff')), { x: 300, y: 480, width: 160, height: 80 });
+  ip.drawText('SECRET 99-1234', { x: 200, y: 600, size: 12, font: await inner.embedFont(StandardFonts.Helvetica) });
+  const outer = await PDFDocument.create();
+  const emb = await outer.embedPage((await PDFDocument.load(await inner.save())).getPage(0));
+  outer.addPage([612, 792]).drawPage(emb, { x: 50, y: 20, xScale: 0.5, yScale: 0.5 });
+  return outer.save();
+}
+
+test('redactDocument removes an image inside a Form XObject fully under the rect; the rest of the form stays', async () => {
+  const src = await formFixture();
+  const [blue] = (await imageData(src)).filter((d) => d.length === 80 * 40 * 3);
+  assert.ok(blue, 'fixture has the RGB image data');
+  const { out, stats } = await redact(src, [{ pageIndex: 0, rects: [[190, 250, 290, 310]] }], { fill: [0, 0, 0] });
+  assert.equal(stats.images.removed, 1, JSON.stringify(stats));
+  assert.equal(stats.forms.removed, 0, JSON.stringify(stats));
+  assert.ok(!(await decodedStrings(out)).includes(blue), 'the original image data is gone from the file');
+  assert.match(await text(out), /SECRET 99-1234/, 'form text outside the rect is kept');
+  const { sample: px } = await renderPage(out, 0);
+  const under = px(240, 792 - 280);
+  assert.ok(under[0] < 40 && under[1] < 40 && under[2] < 40, `covered pixels are black: ${under}`);
+});
+
+test('redactDocument removes the whole Form XObject when an image inside it is only partly under the rect', async () => {
+  const src = await formFixture();
+  const [blue] = (await imageData(src)).filter((d) => d.length === 80 * 40 * 3);
+  const { out, stats } = await redact(src, [{ pageIndex: 0, rects: [[190, 250, 240, 310]] }], { fill: [0, 0, 0] });
+  assert.equal(stats.forms.removed, 1, JSON.stringify(stats));
+  assert.ok(!(await decodedStrings(out)).includes(blue), 'the original image data is gone from the file');
+  const { sample: px } = await renderPage(out, 0);
+  const under = px(220, 792 - 280), beside = px(265, 792 - 280);
+  assert.ok(under[0] < 40 && under[1] < 40 && under[2] < 40, `covered pixels are black: ${under}`);
+  assert.ok(beside[2] > 200 && beside[0] > 200, `the rest of the removed form is blank: ${beside}`);
 });

@@ -124,3 +124,30 @@ export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2 } =
   doc.catalog.set(PDFName.of('AcroForm'), ctx.obj({ Fields: [fieldRef], SigFlags: sigFlags }));
   return doc.save({ useObjectStreams: false });
 }
+
+/**
+ * Every string a reader could recover from the file: each indirect object's dictionaries/arrays with
+ * literal and hex strings decoded, and each stream decoded (Flate etc.) with the hex strings inside it
+ * decoded too. Raw-byte searches miss pdf-lib's hex strings and compressed streams.
+ */
+export async function decodedStrings(bytes) {
+  const { PDFDocument: D, PDFDict, PDFString } = await import('pdf-lib');
+  const doc = await D.load(bytes, { updateMetadata: false, throwOnInvalidObject: false });
+  const parts = [];
+  const hexes = (s) => s.replace(/<([0-9A-Fa-f\s]+)>/g, (_, h) => Buffer.from(h.replace(/\s+/g, ''), 'hex').toString('latin1'));
+  const walk = (o) => {
+    if (o instanceof PDFString || o instanceof PDFHexString) { parts.push(o.decodeText()); parts.push(Buffer.from(o.asBytes()).toString('latin1')); }
+    else if (o instanceof PDFArray) o.asArray().forEach(walk);
+    else if (o instanceof PDFDict) for (const [, v] of o.entries()) walk(v);
+  };
+  for (const [, o] of doc.context.enumerateIndirectObjects()) {
+    if (o instanceof PDFRawStream) {
+      walk(o.dict);
+      let data;
+      try { data = Buffer.from(decodePDFRawStream(o).decode()); } catch { data = Buffer.from(o.contents); }
+      const s = data.toString('latin1');
+      parts.push(s, hexes(s));
+    } else walk(o);
+  }
+  return parts.join('\n');
+}

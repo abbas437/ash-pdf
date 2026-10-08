@@ -5,13 +5,27 @@
 // an image object fully inside is removed; one partly inside has the covered pixels painted black
 // (FPDFImageObj_GetBitmap / SetBitmap) when it is axis-aligned, otherwise it is removed whole;
 // a vector path object fully inside is removed by RedactInRect too (observed; one crossing the edge is kept, the box covers it);
+// images inside Form XObjects (scans and imposed pages often wrap their content in one) are found by
+// walking the form tree with the composed matrix: one fully inside is removed from its form; one
+// partly inside cannot be blacked out in place (PDFium does not regenerate a form for a changed
+// bitmap), so the whole top-level form object is removed instead (stats.forms.removed);
 // annotations whose /Rect intersects are removed (including /Redact marks: they are consumed by the
 // apply); then a filled box (unless fill is null) is drawn. The caller must save in FULL
 // (never incremental): an incremental save keeps the old content stream recoverable.
-const OBJ_IMAGE = 3, FILLMODE_ALTERNATE = 1, BITMAP_BGRA = 4;
+const OBJ_IMAGE = 3, OBJ_FORM = 5, FILLMODE_ALTERNATE = 1, BITMAP_BGRA = 4;
 
 const norm = ([x0, y0, x1, y1]) => ({ l: Math.min(x0, x1), b: Math.min(y0, y1), r: Math.max(x0, x1), t: Math.max(y0, y1) });
 const hits = (a, R) => a.l < R.r && a.r > R.l && a.b < R.t && a.t > R.b;
+const within = (a, R) => a.l >= R.l && a.r <= R.r && a.b >= R.b && a.t <= R.t;
+/** Matrix product: apply A, then B (PDF row-vector convention [a b c d e f]). */
+const mul = (A, B) => [A[0] * B[0] + A[1] * B[2], A[0] * B[1] + A[1] * B[3], A[2] * B[0] + A[3] * B[2], A[2] * B[1] + A[3] * B[3],
+  A[4] * B[0] + A[5] * B[2] + B[4], A[4] * B[1] + A[5] * B[3] + B[5]];
+/** Bounding box of rect a mapped by matrix M. */
+function mapBox(a, M) {
+  const pts = [[a.l, a.b], [a.r, a.b], [a.l, a.t], [a.r, a.t]].map(([x, y]) => [M[0] * x + M[2] * y + M[4], M[1] * x + M[3] * y + M[5]]);
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  return { l: Math.min(...xs), b: Math.min(...ys), r: Math.max(...xs), t: Math.max(...ys) };
+}
 
 export function redactDocument(m, doc, areas, { fill = [0, 0, 0] } = {}) {
   const mem = m.pdfium, malloc = (n) => mem.wasmExports.malloc(n), free = (p) => mem.wasmExports.free(p);
@@ -20,7 +34,27 @@ export function redactDocument(m, doc, areas, { fill = [0, 0, 0] } = {}) {
     try { return fn(...Array.from({ length: n }, (_, i) => p + 4 * i)) ? Array.from({ length: n }, (_, i) => mem.getValue(p + 4 * i, 'float')) : null; } finally { free(p); }
   };
   const bounds = (o) => { const v = floats(4, (l, b, r, t) => m.FPDFPageObj_GetBounds(o, l, b, r, t)); return v && { l: v[0], b: v[1], r: v[2], t: v[3] }; };
-  const stats = { pages: 0, images: { removed: 0, blacked: 0 }, annots: 0 };
+  const matrix = (o) => floats(6, (p) => m.FPDFPageObj_GetMatrix(o, p));
+  const stats = { pages: 0, images: { removed: 0, blacked: 0 }, forms: { removed: 0 }, annots: 0 };
+  // Children of a form object are in form space; ctm maps it to page space. Removes the images fully
+  // inside a rect; false when one is only partly inside (the caller then removes the whole form).
+  const clearForm = (form, ctm, list) => {
+    for (let i = m.FPDFFormObj_CountObjects(form) - 1; i >= 0; i--) {
+      const o = m.FPDFFormObj_GetObject(form, i), type = m.FPDFPageObj_GetType(o);
+      if (type !== OBJ_IMAGE && type !== OBJ_FORM) continue;
+      const own = bounds(o), M = type === OBJ_FORM ? matrix(o) : null;
+      if (!own || (type === OBJ_FORM && !M)) return false;
+      const B = mapBox(own, ctm);
+      const over = list.filter((R) => hits(B, R));
+      if (!over.length) continue;
+      if (type === OBJ_FORM) { if (!clearForm(o, mul(M, ctm), list)) return false; continue; }
+      if (!over.some((R) => within(B, R))) return false;
+      if (!m.FPDFFormObj_RemoveObject(form, o)) return false;
+      m.FPDFPageObj_Destroy(o);
+      stats.images.removed++;
+    }
+    return true;
+  };
 
   for (const { pageIndex, rects } of areas) {
     const list = (rects ?? []).map(norm).filter((R) => R.r > R.l && R.t > R.b);
@@ -44,12 +78,20 @@ export function redactDocument(m, doc, areas, { fill = [0, 0, 0] } = {}) {
         }
       } finally { free(rp); }
       for (let i = m.FPDFPage_CountObjects(page) - 1; i >= 0; i--) {
-        const o = m.FPDFPage_GetObject(page, i);
-        if (m.FPDFPageObj_GetType(o) !== OBJ_IMAGE) continue;
+        const o = m.FPDFPage_GetObject(page, i), type = m.FPDFPageObj_GetType(o);
+        if (type !== OBJ_IMAGE && type !== OBJ_FORM) continue;
         const B = bounds(o);
         const over = B ? list.filter((R) => hits(B, R)) : [];
         if (!over.length) continue;
-        const inside = over.some((R) => B.l >= R.l && B.r <= R.r && B.b >= R.b && B.t <= R.t);
+        if (type === OBJ_FORM) {
+          const M = matrix(o);
+          if (M && clearForm(o, M, list)) continue;
+          m.FPDFPage_RemoveObject(page, o);
+          m.FPDFPageObj_Destroy(o);
+          stats.forms.removed++;
+          continue;
+        }
+        const inside = over.some((R) => within(B, R));
         if (!inside && blackOutPixels(m, page, o, over, floats)) { stats.images.blacked++; continue; }
         m.FPDFPage_RemoveObject(page, o);
         m.FPDFPageObj_Destroy(o);
