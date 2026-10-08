@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { textItems, extractTable, cellValue, rulesFromOps } from '../renderer/ui/table-extract.js';
+import { textItems, extractTable, extractLayout, cellValue, rulesFromOps, pageBox, imagesFromOps, placeImages, rgbaPixels, COL_PX, ROW_PX } from '../renderer/ui/table-extract.js';
 
 // Helvetica-ish widths: 0.5 x size per character, word space 0.28 x size.
 const word = (str, x, y, size = 10) => ({ str, x, y, w: str.length * size * 0.5, size });
@@ -132,4 +132,96 @@ test('rulesFromOps: stroked segments and thin filled rectangles become rules, th
   const r = rulesFromOps({ fnArray: ops.map((o) => o[0]), argsArray: ops.map((o) => o[1] ?? null) }, OPS);
   assert.deepEqual(r.vertical, [{ x: 100, y0: 500, y1: 600 }]);
   assert.deepEqual(r.horizontal, [{ y: 400.25, x0: 50, x1: 250 }]);
+});
+
+// ---------------------------------------------------------------- images
+const IOPS = { save: 10, restore: 11, transform: 12, paintFormXObjectBegin: 74, paintFormXObjectEnd: 75, paintImageXObject: 85, paintInlineImageXObject: 86 };
+// save, cm [w 0 0 h x y], paintImageXObject, restore: an image w x h pt with its lower-left corner at (x, y) in PDF user space.
+const imageOps = (...imgs) => {
+  const fnArray = [], argsArray = [];
+  for (const [id, px, cm] of imgs) {
+    fnArray.push(IOPS.save, IOPS.transform, IOPS.paintImageXObject, IOPS.restore);
+    argsArray.push(null, cm, [id, px[0], px[1]], null);
+  }
+  return { fnArray, argsArray };
+};
+
+test('imagesFromOps: save/cm/paintImageXObject/restore -> the image box on the displayed page (y down)', () => {
+  const ops = imageOps(['img_p0_1', [200, 100], [100, 0, 0, 50, 72, 600]], ['img_p0_2', [64, 64], [40, 0, 0, 40, 300, 100]]);
+  const got = imagesFromOps(ops, IOPS, pageBox([0, 0, 612, 792], 0));
+  assert.deepEqual(got, [
+    { id: 'img_p0_1', width: 200, height: 100, box: { left: 72, top: 142, right: 172, bottom: 192 } },
+    { id: 'img_p0_2', width: 64, height: 64, box: { left: 300, top: 652, right: 340, bottom: 692 } },
+  ]);
+  // restore really pops: a second image after the first's restore is not scaled by the first cm
+  const nested = { fnArray: [IOPS.save, IOPS.transform, IOPS.restore, IOPS.save, IOPS.transform, IOPS.paintImageXObject, IOPS.restore],
+    argsArray: [null, [2, 0, 0, 2, 0, 0], null, null, [10, 0, 0, 10, 0, 0], ['x', 20, 20], null] };
+  assert.deepEqual(imagesFromOps(nested, IOPS, pageBox([0, 0, 100, 100]))[0].box, { left: 0, top: 90, right: 10, bottom: 100 });
+});
+
+test('imagesFromOps: a /Rotate 90 page maps the image box into the rotated (landscape) page', () => {
+  const page = pageBox([0, 0, 612, 792], 90);
+  assert.equal(page.width, 792); assert.equal(page.height, 612);
+  // 100 x 50 pt at (72, 600): user x -> displayed y, user y -> displayed x (pdf.js PageViewport, rotation 90)
+  const [img] = imagesFromOps(imageOps(['a', [200, 100], [100, 0, 0, 50, 72, 600]]), IOPS, page);
+  assert.deepEqual(img.box, { left: 600, top: 72, right: 650, bottom: 172 });
+  // a view box that does not start at 0 is offset too
+  assert.deepEqual(imagesFromOps(imageOps(['b', [20, 20], [10, 0, 0, 10, 50, 60]]), IOPS, pageBox([50, 60, 150, 260], 0))[0].box,
+    { left: 0, top: 190, right: 10, bottom: 200 });
+});
+
+test('imagesFromOps: tiny images, images off the page, and a form matrix', () => {
+  const page = pageBox([0, 0, 612, 792]);
+  const ops = imageOps(['tiny', [15, 300], [100, 0, 0, 100, 72, 72]], ['off', [100, 100], [50, 0, 0, 50, 700, 100]],
+    ['below', [100, 100], [50, 0, 0, 50, 100, -60]]);
+  assert.deepEqual(imagesFromOps(ops, IOPS, page), []);
+  const form = { fnArray: [IOPS.paintFormXObjectBegin, IOPS.transform, IOPS.paintInlineImageXObject, IOPS.paintFormXObjectEnd],
+    argsArray: [[[1, 0, 0, 1, 100, 100], null], [20, 0, 0, 20, 0, 0], [{ width: 32, height: 32, kind: 3 }], null] };
+  const [img] = imagesFromOps(form, IOPS, page);
+  assert.deepEqual(img.box, { left: 100, top: 672, right: 120, bottom: 692 });
+  assert.equal(img.data.width, 32);
+});
+
+test('placeImages: an image goes to the sheet row after the text rows above it, column by its left edge', () => {
+  // A paragraph line (row 0), a blank row between blocks (1), a 3-row table (2-4), a note (5): baselines, displayed y.
+  const rowTops = [92, null, 300, 320, 340, 400];
+  const pageWidth = 612; // 8 columns at least -> 512 px for the page width
+  const scale = (8 * COL_PX) / pageWidth;
+  const [between, below, top] = placeImages([
+    { left: 72, top: 120, right: 172, bottom: 170 },  // under the paragraph, above the table
+    { left: 306, top: 420, right: 406, bottom: 470 }, // under the note
+    { left: 0, top: 10, right: 50, bottom: 40 },      // above everything
+  ], rowTops, pageWidth, 4);
+  assert.equal(between.row, 1); // after row 0 (the blank separator sits at y 196, below the image's top)
+  assert.ok(Math.abs(between.col - (72 * scale) / COL_PX) < 1e-9);
+  assert.equal(between.width, Math.round(100 * scale));
+  assert.equal(between.height, Math.round(50 * scale));
+  assert.equal(below.row, 6);
+  assert.ok(Math.abs(below.col - 4) < 1e-9); // the page's middle -> half of 8 columns
+  assert.equal(top.row, 0);
+  // more used columns -> a larger scale; very large images are capped at 1000 px
+  const [wide] = placeImages([{ left: 0, top: 0, right: 612, bottom: 792 }], [], 612, 20);
+  assert.equal(wide.height, 1000);
+  assert.equal(wide.width, Math.round((612 / 792) * 1000));
+});
+
+test('placeImages: an image that would cover one placed before it moves below it', () => {
+  const [a, b] = placeImages([{ left: 72, top: 100, right: 300, bottom: 200 }, { left: 72, top: 210, right: 300, bottom: 260 }], [50], 612, 8);
+  assert.equal(a.row, 1);
+  assert.equal(b.row, 1 + Math.ceil(a.height / ROW_PX));
+});
+
+test('extractLayout: each sheet row\'s position; the blank row between blocks is null; ruled lines join', () => {
+  const items = [...phrase('A paragraph line that is long enough to be running text on the page', 72, 740),
+    word('Qty', 72, 700), word('Price', 172, 700), word('2', 72, 680), word('3', 172, 680)];
+  const { rows, at } = extractLayout(items);
+  assert.deepEqual(rows, extractTable(items));
+  assert.equal(rows.length, at.length);
+  assert.deepEqual(at.map((p) => p?.y ?? null), [740, 700, 680]);
+});
+
+test('rgbaPixels: 1-bit, RGB and RGBA pdf.js images', () => {
+  assert.deepEqual([...rgbaPixels({ width: 2, height: 1, kind: 1, data: new Uint8Array([0b10000000]) })], [255, 255, 255, 255, 0, 0, 0, 255]);
+  assert.deepEqual([...rgbaPixels({ width: 1, height: 1, kind: 2, data: new Uint8Array([1, 2, 3]) })], [1, 2, 3, 255]);
+  assert.deepEqual([...rgbaPixels({ width: 1, height: 1, kind: 3, data: new Uint8ClampedArray([1, 2, 3, 4]) })], [1, 2, 3, 4]);
 });
