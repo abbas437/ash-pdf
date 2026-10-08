@@ -148,7 +148,9 @@ opened), and every permission request is denied, including `navigator.clipboard`
 ## Licence
 
 MIT — see [LICENSE](LICENSE). Bundled third-party components keep their own licences (pdf.js is
-Apache-2.0, pdf-lib and fontkit MIT; Electron and Chromium notices ship with the app); the full list is
+Apache-2.0, pdf-lib and fontkit MIT; the OCR engine tesseract.js, its Tesseract/Leptonica wasm core and the
+English traineddata are Apache-2.0, with the image libraries compiled into that wasm under their own permissive
+licences; Electron and Chromium notices ship with the app); the full list is
 in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md), and [docs/COPYRIGHT-REVIEW.md](docs/COPYRIGHT-REVIEW.md)
 records the copyright and trademark review. "PDF" is used only as the name of the ISO 32000 file format;
 this project is not affiliated with Adobe.

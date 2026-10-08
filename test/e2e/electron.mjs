@@ -194,6 +194,18 @@ try {
   expect('pdfium selfTest', JSON.stringify({ ...st, objects: undefined }),
     !st.error && st.pageCount === 2 && st.text === 'PDFium self-test 4711' && st.originalIsPrefix && st.outLength > st.inLength);
 
+  step = 'OCR: the tesseract worker starts under the app CSP and app:// and reads a small canvas';
+  const ocr = await win.evaluate(async () => {
+    try {
+      const c = document.createElement('canvas'); c.width = 600; c.height = 120;
+      const ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, 600, 120);
+      ctx.fillStyle = '#000'; ctx.font = '64px sans-serif'; ctx.fillText('OCR 4711', 20, 85);
+      const w = await window.ashStudio.ocr.startWorker();
+      try { return { text: (await w.recognize(c)).data.text }; } finally { await w.terminate(); }
+    } catch (e) { return { error: `${e.name}: ${e.message}` }; }
+  });
+  expect('tesseract in Electron', JSON.stringify(ocr), !ocr.error && /OCR\s*4711/.test(ocr.text));
+
   step = 'print with unsaved text markup and note objects';
   // Stub the system print in the main process: record what the print container holds while the
   // renderer waits on api.print(), and print the same view to PDF (proves it renders printable pages).

@@ -646,3 +646,13 @@ body:not(.tool-labels) .toolbar .tb-more-panel .tb-dd-label, body:not(.tool-labe
 .rd-fill, .rd-meta-row { display: flex; gap: 6px; align-items: center; }
 .rd-fill { display: inline-flex; margin-right: 14px; }
 .rd-warn { margin: 0; color: var(--sig-danger); font-size: 12px; line-height: 1.4; }
+
+/* Tools > Recognize text (OCR) (ui/ocr.js) */
+.ocr-form { display: flex; flex-direction: column; gap: 10px; min-width: min(420px, 85vw); }
+.ocr-radios { display: flex; flex-direction: column; gap: 6px; }
+.ocr-radio, .ocr-check { display: flex; align-items: center; gap: 6px; }
+.ocr-radio input, .ocr-check input { margin: 0; accent-color: var(--accent); }
+.ocr-row { display: flex; align-items: center; gap: 8px; }
+.ocr-row .input { flex: 1; min-width: 0; }
+.ocr-note { margin: 0; color: var(--muted); font-size: 12px; }
+#ocr-progress { min-width: min(320px, 80vw); margin: 0; }
