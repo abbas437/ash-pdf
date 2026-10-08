@@ -65,6 +65,7 @@ contextBridge.exposeInMainWorld('api', {
   officeStatus: () => ipcRenderer.invoke('office:status'),
   officeExportDocx: (opts) => ipcRenderer.invoke('office:exportDocx', opts ?? {}),
   officeToPdf: (opts) => ipcRenderer.invoke('office:toPdf', opts ?? {}),
+  officeHtmlToPdf: (opts) => ipcRenderer.invoke('office:htmlToPdf', opts),
   officeCancel: (jobId) => ipcRenderer.invoke('office:cancel', jobId),
   onOfficeProgress: (cb) => {
     if (typeof cb !== 'function') throw new TypeError('onOfficeProgress: callback required');

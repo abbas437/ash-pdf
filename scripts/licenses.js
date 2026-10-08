@@ -60,6 +60,10 @@ function licenceText(dir) {
   return file ? { file, text: readFileSync(join(dir, file), 'utf8').trim() } : null;
 }
 
+// package.json licence fields that are not SPDX ids, corrected from the package's own LICENSE file.
+// duck (mammoth -> lop): "BSD"; its LICENSE is the 2-clause BSD text.
+const LICENCE_FIXES = { 'duck@0.1.12': 'BSD-2-Clause' };
+
 const rootPkg = readJson(join(root, 'package.json'));
 const seen = new Map(); // dir -> record
 const queue = Object.keys(rootPkg.dependencies ?? {}).map((name) => ({ name, from: root, via: rootPkg.name }));
@@ -70,7 +74,7 @@ while (queue.length) {
   if (!dir) { missing.push(`${name} (required by ${via})`); continue; }
   if (seen.has(dir)) continue;
   const pkg = readJson(join(dir, 'package.json'));
-  const id = licenceId(pkg);
+  const id = LICENCE_FIXES[`${pkg.name}@${pkg.version}`] ?? licenceId(pkg);
   seen.set(dir, { name: pkg.name ?? name, version: pkg.version ?? '?', licence: id, allowed: isAllowed(id), lic: licenceText(dir), repo: pkg.repository?.url ?? pkg.repository ?? pkg.homepage ?? '' });
   for (const dep of Object.keys(pkg.dependencies ?? {})) queue.push({ name: dep, from: dir, via: pkg.name });
 }

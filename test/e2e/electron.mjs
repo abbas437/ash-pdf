@@ -4,13 +4,14 @@
 // env: ELECTRON_BIN (optional; defaults to the installed electron package).
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { _electron as electron } from 'playwright-core';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { Document, HeadingLevel, Packer, Paragraph, Table, TableCell, TableRow } from 'docx';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const electronBin = process.env.ELECTRON_BIN || createRequire(import.meta.url)('electron');
@@ -80,6 +81,7 @@ try {
     } catch (e) { return 'rejected:' + e.message; }
   }, [fn, args]);
   const expect = (what, got, ok) => { if (!ok) throw new Error(`${what}: got ${got}`); };
+  const winCountNow = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().length);
   const grantFolder = async (dir) => {
     await app.evaluate(({ dialog }, d) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [d] }); }, dir);
     const r = await call('openFolder');
@@ -262,7 +264,13 @@ try {
   await mkdir(dirname(out), { recursive: true });
   await app.evaluate(({ dialog }, p) => { dialog.showSaveDialog = async () => ({ canceled: false, filePath: p }); }, out);
   const menuClick = async (id) => { await win.click('.menu-btn:text-is("File")'); await win.click(`.menu-item[data-id="${id}"]`); };
-  await menuClick('export-docx');
+  // Export to Word asks for the engine (built-in by default): pick Microsoft Word for the Office runner steps.
+  const exportWithWord = async () => {
+    await menuClick('export-docx');
+    await win.selectOption('.office-engine-dialog #office-engine', 'word');
+    await win.click('.office-engine-dialog .btn.primary');
+  };
+  await exportWithWord();
   await win.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Saved R.sum. & co\.docx/.test(t.textContent)), null, { timeout: 15000 });
   const calls = await app.evaluate(() => globalThis.__ashOfficeCalls.map(({ command, args }) => ({ command, args })));
   const c = calls[0];
@@ -272,12 +280,50 @@ try {
   expect('docx written', '', (await readFile(out, 'utf8')) === 'ASH fake Office output');
   step = 'office (fake runner): Microsoft Word missing -> clear error';
   await app.evaluate(() => { process.env.ASH_TEST_FAKE_OFFICE = 'missing'; });
-  await menuClick('export-docx');
+  await exportWithWord();
   await win.waitForFunction(() => /Microsoft Word is not installed/.test(document.querySelector('dialog[open], .dialog')?.textContent ?? ''), null, { timeout: 15000 });
   const errText = await win.evaluate(() => document.querySelector('.dialog')?.textContent ?? '');
   expect('error dialog shows only the message', errText, !/Error invoking remote method|Error: /.test(errText));
   await win.keyboard.press('Escape');
   await app.evaluate(() => { process.env.ASH_TEST_FAKE_OFFICE = '1'; });
+
+  step = 'office (built-in): Create PDF from a .docx -> new tab, hidden window and temp file gone';
+  const cellP = (t) => new TableCell({ children: [new Paragraph(t)] });
+  const docxPath = join(tmp, 'Fixture Report.docx');
+  await writeFile(docxPath, await Packer.toBuffer(new Document({ sections: [{ children: [
+    new Paragraph({ text: 'Blower Datasheet', heading: HeadingLevel.HEADING_1 }),
+    new Table({ rows: [new TableRow({ children: [cellP('Tag'), cellP('Duty')] }), new TableRow({ children: [cellP('B-201'), cellP('1250 Nm3/h')] })] }),
+  ] }] })));
+  const appTemp = await app.evaluate(({ app: a }) => a.getPath('temp'));
+  const htmlTemps = async () => (await readdir(appTemp)).filter((f) => f.startsWith('ash-html-')).sort().join();
+  const before = { wins: await winCountNow(), temps: await htmlTemps() };
+  await app.evaluate(({ dialog }, d) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [d] }); }, docxPath);
+  await menuClick('office-to-pdf');
+  await win.waitForSelector('.office-engine-dialog #office-engine');
+  expect('engine defaults to built-in', '', (await win.inputValue('#office-engine')) === 'ash');
+  await win.click('.office-engine-dialog .btn.primary');
+  await win.waitForFunction(() => window.ashStudio.state.tabs.some((t) => t.name === 'Fixture Report.pdf' && t.pdfDoc), null, { timeout: 30000 });
+  const docxText = await win.evaluate(async () => {
+    const t = window.ashStudio.state.tabs.find((x) => x.name === 'Fixture Report.pdf');
+    return { path: t.path, text: (await (await t.pdfDoc.getPage(1)).getTextContent()).items.map((i) => i.str).join(' ') };
+  });
+  expect('PDF text from the .docx', JSON.stringify(docxText), docxText.path === null && /Blower Datasheet/.test(docxText.text) && /B-201/.test(docxText.text) && /1250 Nm3\/h/.test(docxText.text));
+  expect('hidden window closed', '', (await winCountNow()) === before.wins);
+  expect('temp file removed', await htmlTemps(), (await htmlTemps()) === before.temps);
+  await win.evaluate(() => { const a = window.ashStudio; a.closeTab(a.state.tabs.find((x) => x.name === 'Fixture Report.pdf')); }); // back to sample.pdf
+  step = 'office (built-in): office:htmlToPdf rejects bad input and foreign senders';
+  r = await call('officeHtmlToPdf', { html: 5 });
+  expect('non-string html', r, /^rejected:.*\{html: string\} required/.test(r));
+  r = await call('officeHtmlToPdf', { html: '<p>x</p>', landscape: 'yes' });
+  expect('non-boolean landscape', r, /^rejected:.*landscape must be a boolean/.test(r));
+  r = await app.evaluate(async ({ BrowserWindow }, preload) => {
+    const w = new BrowserWindow({ show: false, webPreferences: { preload, sandbox: true, contextIsolation: true } });
+    try {
+      await w.loadURL('data:text/html,<p>other</p>');
+      return await w.webContents.executeJavaScript(`window.api.officeHtmlToPdf({ html: '<p>x</p>' }).then(() => 'ok', (e) => e.message)`);
+    } finally { w.destroy(); }
+  }, join(root, 'electron', 'preload.js'));
+  expect('htmlToPdf from a foreign window', r, /office:htmlToPdf: rejected sender/.test(r));
 
   step = 'image export: pages 1-3 go into the folder picked in main';
   const stubImageDialogs = (folder, response) => app.evaluate(({ dialog }, [folder, response]) => {

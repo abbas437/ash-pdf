@@ -13,9 +13,9 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, protocol, safeStorage, screen, session, shell } from 'electron';
 import { createHash, randomBytes } from 'node:crypto';
 import { constants as fsConstants, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
-import { lstat, mkdir, open, opendir, readdir, readFile, realpath, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, open, opendir, readdir, readFile, realpath, rename, rm, stat, unlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerOfficeIpc } from './office.js'; // office conversions
 import { ImageExportJobs, planImageExport } from '../src/core/imgexport.js'; // multi-page image export rules
@@ -934,6 +934,36 @@ app.whenReady().then(() => {
 });
 // ---- end clipboard and external links
 
+// ---- built-in Office -> PDF (renderer/ui/office-html.js makes the HTML): print an HTML page to PDF
+// office:htmlToPdf({html, landscape?}) -> PDF bytes (A4, 15 mm margins). The page is written to a temp file in the
+// app's temp dir and loaded in a hidden window without JavaScript, in its own in-memory session that cancels every
+// request except that file and data: URLs; the window is destroyed and the file deleted whatever the outcome.
+const MAX_HTML_CHARS = 256 * 1024 * 1024;
+const MM15 = 15 / 25.4; // printToPDF margins are in inches
+function registerHtmlToPdfIpc() {
+  handle('office:htmlToPdf', async (opts) => {
+    if (!isPlainObject(opts) || typeof opts.html !== 'string' || !opts.html || opts.html.length > MAX_HTML_CHARS) throw new TypeError('office:htmlToPdf: {html: string} required');
+    if (opts.landscape !== undefined && typeof opts.landscape !== 'boolean') throw new TypeError('office:htmlToPdf: landscape must be a boolean');
+    const dir = await mkdtemp(join(app.getPath('temp'), 'ash-html-'));
+    const file = join(dir, 'document.html');
+    const fileUrl = pathToFileURL(file).href;
+    const ses = session.fromPartition(`ash-html-${randomBytes(8).toString('hex')}`); // no "persist:": in memory only
+    ses.webRequest.onBeforeRequest((d, cb) => cb({ cancel: !(d.url === fileUrl || d.url.startsWith('data:')) }));
+    let win = null;
+    try {
+      await writeFile(file, opts.html, 'utf8');
+      win = new BrowserWindow({ show: false, webPreferences: { javascript: false, sandbox: true, nodeIntegration: false, contextIsolation: true, session: ses } });
+      await win.loadURL(fileUrl);
+      const pdf = await win.webContents.printToPDF({ pageSize: 'A4', landscape: opts.landscape === true, printBackground: true,
+        margins: { top: MM15, bottom: MM15, left: MM15, right: MM15 } });
+      return new Uint8Array(pdf);
+    } finally {
+      win?.destroy();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+}
+
 // --- Lifecycle ------------------------------------------------------------------------------
 app.on('web-contents-created', (_event, contents) => {
   contents.on('context-menu', (_e, params) => {
@@ -958,6 +988,7 @@ app.whenReady().then(() => {
   registerLibraryIpc(); // signature library
   // ---- office conversions (electron/office.js): Word/Excel/PowerPoint <-> PDF through Microsoft Office
   registerOfficeIpc({ handle, dialog, getWindow: callerWindow, grant, describeFile, isPackaged: app.isPackaged });
+  registerHtmlToPdfIpc();
   // ---- end office conversions
   loadSessionAndRecent();
   const fromCommandLine = launchFiles.length > 0;

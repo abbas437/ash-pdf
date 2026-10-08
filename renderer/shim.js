@@ -159,6 +159,12 @@ if (!window.api) {
       return () => {};
     },
     async print() { window.print(); return { ok: true }; },
+    // Built-in Office -> PDF prints in a hidden Electron window: same checks as main, then unavailable here.
+    async officeHtmlToPdf(opts) {
+      if (!opts || typeof opts !== 'object' || Array.isArray(opts) || typeof opts.html !== 'string' || !opts.html || opts.html.length > 256 * 1024 * 1024) throw new TypeError('office:htmlToPdf: {html: string} required');
+      if (opts.landscape !== undefined && typeof opts.landscape !== 'boolean') throw new TypeError('office:htmlToPdf: landscape must be a boolean');
+      throw new Error('Creating a PDF from an Office file needs the desktop app');
+    },
     async setFullScreen(on) {
       if (typeof on !== 'boolean') throw new TypeError('setFullScreen: boolean required');
       if (on) await document.documentElement.requestFullscreen?.();

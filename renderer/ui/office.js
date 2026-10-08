@@ -3,9 +3,10 @@
 //                                  Office needed) or "Microsoft Word (better layout, needs Word)", offered only when
 //                                  Office is available: the current document, annotations included, converted by Word
 //                                  through window.api.officeExportDocx (electron/office.js).
-//   Create PDF from Office file…   Word / Excel / PowerPoint file -> PDF (saved where the user chooses), opened in a new tab.
-//                                  Needs Microsoft Office on Windows: elsewhere (and in the browser shim) the item is
-//                                  disabled with that reason.
+//   Create PDF from Office…        asks for the engine the same way. Built-in (default): a .docx becomes HTML here
+//                                  (office-html.js, mammoth) and main prints it to PDF (window.api.officeHtmlToPdf);
+//                                  the PDF opens as a new unsaved tab named after the file. Word / Excel / PowerPoint
+//                                  through Microsoft Office (Windows): any Office file, saved where the user chooses.
 import { state, activeTab } from '../state.js';
 import { showDialog, showError, toast } from './dialogs.js';
 import { h } from './dom.js';
@@ -14,6 +15,7 @@ import { viewer } from './viewer.js';
 import { flattenedCopy } from './viewextras.js';
 import { encodeImage } from './exports.js';
 import { pdfToDocx } from './docx-export.js';
+import { docxToHtml } from './office-html.js';
 
 const UNAVAILABLE = 'Requires Microsoft Office on Windows';
 let status = { available: false, reason: UNAVAILABLE };
@@ -75,12 +77,13 @@ async function withProgress(call) {
 export const ENGINES = { ash: 'ASH (built-in)', word: 'Microsoft Word (better layout, needs Word)' };
 
 /** Asks for the conversion engine -> 'ash' | 'word' | null (cancelled). Word is offered only when Office is available. */
-async function chooseEngine(title, verb) {
+const DOCX_NOTE = 'The built-in engine rebuilds paragraphs, tables and images from the PDF without Microsoft Office.';
+async function chooseEngine(title, verb, note = DOCX_NOTE, officeLabel = ENGINES.word) {
   const select = h('select.input#office-engine', { 'aria-label': 'Engine' },
     h('option', { value: 'ash', selected: true }, ENGINES.ash),
-    ...(status.available ? [h('option', { value: 'word' }, ENGINES.word)] : []));
+    ...(status.available ? [h('option', { value: 'word' }, officeLabel)] : []));
   const body = h('div', {}, h('div.vx-print-form', {}, h('label.vx-field', {}, h('span', {}, 'Engine'), select)),
-    h('p.vx-note', {}, 'The built-in engine rebuilds paragraphs, tables and images from the PDF without Microsoft Office.'));
+    h('p.vx-note', {}, note));
   const res = await showDialog({ title, body, className: 'xp-dialog office-engine-dialog', initialFocus: '#office-engine',
     buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: verb, value: 'ok', primary: true }] });
   return res === 'ok' ? select.value : null;
@@ -133,18 +136,34 @@ export async function officeToPdf(app) {
   } catch (err) { showError('Could not create the PDF', { message: officeMessage(err) }); return null; }
 }
 
+const BUILTIN_NOTE = 'The built-in engine converts Word documents (.docx): headings, paragraphs, lists, tables and images. '
+  + 'Excel, PowerPoint (.pptx) and older .doc files need Microsoft Office.';
+
+/** Built-in Office -> PDF: pick a .docx, convert it here, print it in main -> the new tab, or null. */
+export async function builtinOfficeToPdf(app) {
+  const [file] = await window.api.openFiles({ filters: [{ name: 'Word document', extensions: ['docx'] }] });
+  if (!file) return null;
+  const base = file.name.replace(/\.[^.]+$/, '');
+  try {
+    if (!/\.docx$/i.test(file.name)) throw new Error('The built-in engine converts .docx files; other Office files need Microsoft Office');
+    const { default: mammoth } = await import('mammoth');
+    const { html, landscape } = await docxToHtml(file.bytes, mammoth, base);
+    const bytes = await window.api.officeHtmlToPdf({ html, landscape });
+    return await app.openBytes({ name: `${base}.pdf`, path: null, bytes });
+  } catch (err) { showError('Could not create the PDF', { message: officeMessage(err) }); return null; }
+}
+
+/** File > Create PDF from Office…: engine choice, then the built-in conversion or Office's. */
+export async function officeToPdfDialog(app) {
+  const engine = await chooseEngine('Create PDF from Office', 'Choose file…', BUILTIN_NOTE, 'Microsoft Office (Word, Excel, PowerPoint)');
+  if (engine === 'word') return officeToPdf(app);
+  return engine === 'ash' ? builtinOfficeToPdf(app) : null;
+}
+
 export function initOffice(app) {
   const api = window.api;
   if (api.officeStatus) api.officeStatus().then((s) => { status = s; }, () => {});
-  const item = (def, needsDoc) => {
-    const it = { ...def };
-    it.enabled = () => {
-      if (it.el) it.el.title = status.available ? '' : (status.reason ?? UNAVAILABLE);
-      return status.available && (!needsDoc || !!activeTab());
-    };
-    app.registerMenuItem('File', it);
-  };
   app.registerMenuItem('File', { separator: true });
   app.registerMenuItem('File', { id: 'export-docx', label: 'Export to Word…', action: () => exportDocxDialog(), enabled: () => !!activeTab()?.pdfDoc });
-  item({ id: 'office-to-pdf', label: 'Create PDF from Office…', action: () => officeToPdf(app) }, false);
+  app.registerMenuItem('File', { id: 'office-to-pdf', label: 'Create PDF from Office…', action: () => officeToPdfDialog(app), enabled: () => !!window.api.isElectron });
 }
