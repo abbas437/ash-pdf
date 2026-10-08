@@ -13,7 +13,7 @@ import { h } from './dom.js';
 import { showDialog, toast } from './dialogs.js';
 import { runOp } from './pagetools.js';
 import { pdfium } from '../pdfium/client.js';
-import { markAreas, scrubMetadata } from './redact-lib.js';
+import { markAreas, scrubMetadata, pruneRedactedAnnots } from './redact-lib.js';
 
 const FILLS = { black: [0, 0, 0], white: [255, 255, 255], none: null };
 const marksOf = (tab) => (tab?.objects ?? []).filter((o) => o.type === 'redactMark');
@@ -49,7 +49,12 @@ export async function applyRedactionsDialog(tab = activeTab()) {
   const fillColor = FILLS[form.querySelector('input[name="rd-fill"]:checked')?.value ?? 'black'];
   const scrub = meta.checked;
   const ok = await runOp(tab, 'Apply redactions', (bytes, n) => applyRedactions(tab, bytes, n, { fill: fillColor, scrub }));
-  if (ok) toast(`Applied ${plural(marks.length, 'redaction')}`);
+  if (ok) {
+    // tab.requiresFullSave (set in applyRedactions): the old bytes still hold the redacted content, so
+    // the next save must rewrite the whole file (an incremental save appends to them). saveTab clears
+    // it, and the page undo history that could bring the content back, once a full save succeeds.
+    toast(`Applied ${plural(marks.length, 'redaction')}`);
+  }
   return ok;
 }
 
@@ -68,6 +73,12 @@ async function applyRedactions(tab, bytes, n, { fill, scrub }) {
   try {
     out = await pdfium.redact(id, areas, { fill });
   } finally { await pdfium.close(id).catch(() => {}); }
+  // Fields whose widgets went: value and field removed from the file, and the typed value from memory
+  // (forms.js would write it back on the next Save).
+  const pruned = await pruneRedactedAnnots(src, out);
+  out = pruned.bytes;
+  for (const name of pruned.fields) if (tab.forms?.values) delete tab.forms.values[name];
+  tab.requiresFullSave = true; // set before runOp commits, so a Save queued behind it sees it
   if (scrub) out = await scrubMetadata(out);
   // Overlay objects now obsolete: the marks, whiteouts (burned in by the hook) and objects whose annotation went.
   const { readAnnotations } = await import('../../src/core/index.js');

@@ -10,6 +10,7 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { decodedStrings } from '../helpers.js';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
@@ -22,6 +23,7 @@ async function makePdf() {
   p.drawText('Public line', { x: 50, y: 600, size: 12, font });
   p.drawText('CONFIDENTIAL', { x: 200, y: 600, size: 12, font });
   p.drawText('Closing remark', { x: 400, y: 600, size: 12, font });
+  doc.getForm().createTextField('ssn').addToPage(p, { x: 300, y: 597, width: 60, height: 16 }); // typed into below, under the mark
   doc.setTitle('Merger plan'); doc.setAuthor('Jane Insider'); doc.setSubject('Deal'); doc.setKeywords(['acme']);
   return Buffer.from(await doc.save());
 }
@@ -83,10 +85,20 @@ try {
   const orig = await textOf(await tabBytes());
   check(orig.includes('CONFIDENTIAL') && orig.includes('Public line'), `fixture text: ${orig}`);
 
+  step = 'worker full save';
+  // pdfium.redact must save in full: an incremental save keeps the original bytes (and the word) as a prefix.
+  const direct = Uint8Array.from(await ev(`const { pdfium } = await import('/renderer/pdfium/client.js');
+    const id = await pdfium.open(new Uint8Array(arg));
+    try { return Array.from(await pdfium.redact(id, [{ pageIndex: 0, rects: [[196, 596, 292, 614]] }], { fill: [0, 0, 0] })); } finally { await pdfium.close(id); }`, Array.from(pdf)));
+  check(Buffer.compare(Buffer.from(direct.subarray(0, pdf.length)), pdf) !== 0, 'pdfium.redact appended to the original bytes (incremental save)');
+  check(!(await decodedStrings(direct)).includes('CONFIDENTIAL'), 'the redacted word is still in the pdfium.redact output (decoded search)');
+
   step = 'mark';
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs[0]; return t?.forms?.byName?.has('ssn'); }, null, { timeout: 10_000 });
+  await ev("tab.forms.values.ssn = 'SSN-778899'; tab.forms.dirty = true;"); // a typed, unsaved value
   await key('x');
-  // "CONFIDENTIAL" sits at visible x 200..~285, baseline y 192.
-  await drag(await toClient(0, 196, 178), await toClient(0, 292, 197));
+  // "CONFIDENTIAL" sits at visible x 200..~285, baseline y 192; the field at 300..360 x 179..195.
+  await drag(await toClient(0, 196, 176), await toClient(0, 365, 197));
   check(await marks() === 1, 'the Redact tool did not draw a mark');
 
   step = 'apply';
@@ -127,7 +139,15 @@ try {
   check(!t.includes('CONFIDENTIAL') && t.includes('Closing remark'), `saved text: ${t}`);
   const meta = await infoOf(saved);
   check(!meta.info.Title && !meta.info.Author && !meta.info.Subject && !meta.info.Keywords && !meta.xmp, `metadata not cleared: ${JSON.stringify(meta)}`);
-  check(!Buffer.from(saved).toString('latin1').includes('Jane Insider'), 'the author is still in the saved bytes');
+  const dec = await decodedStrings(saved);
+  check(dec.includes('Public line') && !dec.includes('Jane Insider'), 'the author is still in the saved bytes (decoded search)');
+  check(!dec.includes('SSN-778899'), 'the typed field value under the mark is in the saved file');
+  check(!(await PDFDocument.load(saved)).getForm().getFields().length, 'the field under the mark is still in the saved form');
+  check(Buffer.compare(Buffer.from(saved.subarray(0, pdf.length)), pdf) !== 0, 'the save appended to the original bytes');
+  check(await ev('return !tab.bytesUndo?.length && !tab.bytesRedo?.length && !tab.requiresFullSave && tab.forms?.values?.ssn === undefined;'), 'undo history, flag or typed value survived the save');
+  check(!(await ev('return await app.pageTools.undo(tab);')), 'Undo after Save ran');
+  t = await textOf(await tabBytes());
+  check(!t.includes('CONFIDENTIAL'), `Undo after Save brought the word back: ${t}`);
 
   step = 'reopen';
   await ev('await app.openBytes({ name: "reopened.pdf", bytes: new Uint8Array(arg) });', Array.from(saved));

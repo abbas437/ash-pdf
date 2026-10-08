@@ -144,3 +144,30 @@ test('redactDocument removes the whole Form XObject when an image inside it is o
   assert.ok(under[0] < 40 && under[1] < 40 && under[2] < 40, `covered pixels are black: ${under}`);
   assert.ok(beside[2] > 200 && beside[0] > 200, `the rest of the removed form is blank: ${beside}`);
 });
+
+test('a text field under the rect loses its value and leaves the form; a popup of a removed annotation goes', async () => {
+  const { pruneRedactedAnnots } = await import('../renderer/ui/redact-lib.js');
+  const { PDFName: N, PDFString } = await import('pdf-lib');
+  const doc = await PDFDocument.create();
+  const p = doc.addPage([612, 792]);
+  const form = doc.getForm();
+  const ssn = form.createTextField('ssn'); ssn.setText('SSN-778899'); ssn.addToPage(p, { x: 100, y: 600, width: 150, height: 20 });
+  const kept = form.createTextField('name'); kept.setText('Visible Name'); kept.addToPage(p, { x: 100, y: 300, width: 150, height: 20 });
+  // A note inside the rect with its popup outside it (the popup's /Rect alone does not hit).
+  const note = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Text', Rect: [110, 560, 130, 580], Contents: PDFString.of('Note-SECRET-42') }));
+  const popup = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Popup', Rect: [400, 100, 550, 200], Parent: note }));
+  doc.context.lookup(note).set(N.of('Popup'), popup);
+  p.node.addAnnot(note); p.node.addAnnot(popup);
+  const src = await doc.save();
+  const { out } = await redact(src, [{ pageIndex: 0, rects: [[90, 550, 260, 625]] }], { fill: [0, 0, 0] });
+  const { bytes, fields } = await pruneRedactedAnnots(src, out);
+  assert.deepEqual(fields, ['ssn']);
+  const dec = await decodedStrings(bytes);
+  assert.ok(!dec.includes('SSN-778899'), 'the field value is nowhere in the file');
+  assert.ok(!dec.includes('Note-SECRET-42'), 'the removed note (kept alive by its popup) is gone');
+  assert.ok(dec.includes('Visible Name'), 'the field outside the rect keeps its value');
+  const after = await PDFDocument.load(bytes);
+  assert.deepEqual(after.getForm().getFields().map((f) => f.getName()), ['name']);
+  const subtypes = after.getPage(0).node.Annots().asArray().map((r) => after.context.lookup(r).get(N.of('Subtype')).toString());
+  assert.deepEqual(subtypes, ['/Widget'], 'no orphan popup left');
+});
