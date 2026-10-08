@@ -20,7 +20,9 @@ test('notices list the components bundled in the build with their licence texts'
     for (const name of ['Adobe CMaps', 'Foxit standard fonts', 'OpenJPEG', 'PDFium JBIG2', 'qcms', 'CGATS001Compat ICC profile',
       '@pdf-lib/restructure', '@pdf-lib/unicode-properties', '@pdf-lib/brotli', 'unicode-trie', 'tiny-inflate', 'dfa',
       'iconv-lite', 'buffer', 'ieee754', 'base64-arraybuffer',
-      'PDFium', 'libpng 1.6.43', 'zlib', 'FreeType', 'OpenJPEG (in PDFium)', 'libjpeg-turbo (JPEG decoder)', 'Little CMS (lcms2)']) {
+      'PDFium', 'libpng 1.6.43', 'zlib', 'FreeType', 'OpenJPEG (in PDFium)', 'libjpeg-turbo (JPEG decoder)', 'Little CMS (lcms2)',
+      'Tesseract OCR', 'Leptonica', 'libpng (in Tesseract) 1.6.38', 'zlib (in Tesseract)', 'IJG libjpeg (in Tesseract)', 'LibTIFF', 'libwebp',
+      'Tesseract English traineddata (eng) 4.0.0_best_int']) {
       assert.match(md, new RegExp(`^## ${name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}.*\\(bundled\\)$`, 'm'), `no section for ${name}`);
     }
     // Licence texts come from the files, not just the identifiers.
@@ -36,6 +38,12 @@ test('notices list the components bundled in the build with their licence texts'
     assert.match(md, /The FreeType Project LICENSE/);
     assert.match(md, /Independent JPEG Group/);
     assert.match(md, /Marti Maria Saguer/);
+    // OCR: tesseract.js and its core wasm (Apache-2.0), with the libraries compiled into the wasm.
+    assert.match(md, /^\| tesseract\.js \| 7\.0\.0 \| Apache-2\.0 \|$/m);
+    assert.match(md, /^\| tesseract\.js-core \| 7\.0\.0 \| Apache-2\.0 \|$/m);
+    assert.match(md, /Copyright \(C\) 2001-2020 Leptonica/);
+    assert.match(md, /Copyright © 1988-1997 Sam Leffler/);
+    assert.match(md, /Copyright \(c\) 2010, Google Inc\. All rights reserved\./);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
