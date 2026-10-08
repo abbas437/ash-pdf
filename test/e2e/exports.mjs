@@ -2,7 +2,9 @@
 // End-to-end test of File > Export to Excel and File > Export to image (one page via saveFile, several via a folder) (renderer/ui/exports.js) in
 // Chromium via playwright-core (run `node scripts/vendor.js` first). A generated 3x4 table PDF is exported
 // to .xlsx through the menu and dialog; the download is unzipped and its sheet XML must hold the table with
-// numbers stored as numbers. Page 1 exported as PNG at 150 dpi must be 1275 x 1650 px (Letter), and as JPEG
+// numbers stored as numbers. A page with a paragraph, a JPEG, a small table and a PNG with transparency exported
+// to .xlsx must hold both images in xl/media, anchored in xl/drawings/drawing1.xml below the paragraph / above the
+// table and below the table, with the cells unchanged; with "Include images" off, no xl/media. Page 1 exported as PNG at 150 dpi must be 1275 x 1650 px (Letter), and as JPEG
 // a JPEG. Prints "EXPORTS OK".
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -11,6 +13,7 @@ import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { createCanvas } from '@napi-rs/canvas';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
@@ -44,6 +47,26 @@ async function makePdf() {
   for (const x of xs) rp.drawLine({ start: { x, y: top }, end: { x, y: bottom }, thickness: 0.5 });
   for (let i = 0; i <= body.length; i++) rp.drawLine({ start: { x: xs[0], y: top - i * 16 }, end: { x: xs.at(-1), y: top - i * 16 }, thickness: 0.5 });
   text(REPORT_NOTE, 60, bottom - 18);
+  return Buffer.from(await doc.save());
+}
+
+// One page: a paragraph line, a 120 x 80 JPEG, a 3x2 table, a 64 x 64 PNG with transparency (in that order, top down).
+const IMG_PARA = 'Pump station photo and the duty schedule for the reviewed equipment items.';
+const IMG_TABLE = [['Tag', 'Duty'], ['P-101', '45'], ['P-102', '30']];
+async function makeImagePdf() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const page = doc.addPage([612, 792]);
+  page.drawText(IMG_PARA, { x: 72, y: 740, size: 11, font });
+  const jc = createCanvas(120, 80), jx = jc.getContext('2d');
+  jx.fillStyle = '#3a7bd5'; jx.fillRect(0, 0, 120, 80); jx.fillStyle = '#f0c040'; jx.fillRect(20, 20, 60, 30);
+  const jpg = await doc.embedJpg(jc.toBuffer('image/jpeg'));
+  page.drawImage(jpg, { x: 72, y: 600, width: 120, height: 80 });
+  IMG_TABLE.forEach((row, i) => row.forEach((c, j) => page.drawText(c, { x: 72 + j * 120, y: 560 - i * 20, size: 11, font })));
+  const pc = createCanvas(64, 64), px = pc.getContext('2d');
+  px.fillStyle = 'rgba(200, 30, 30, 0.6)'; px.beginPath(); px.arc(32, 32, 28, 0, Math.PI * 2); px.fill();
+  const png = await doc.embedPng(pc.toBuffer('image/png'));
+  page.drawImage(png, { x: 300, y: 400, width: 64, height: 64 });
   return Buffer.from(await doc.save());
 }
 
@@ -198,6 +221,39 @@ try {
   });
   check(/exactly the keys/.test(rejected[0]) && /At most 2000/.test(rejected[1]) && /Uint8Array/.test(rejected[2]) && /no such job/.test(rejected[3]),
     `shim rejections ${JSON.stringify(rejected)}`);
+
+  step = 'Excel: images (JPEG + PNG with alpha) placed against the text rows';
+  await page.evaluate((b) => window.ashStudio.openBytes({ name: 'photos.pdf', bytes: new Uint8Array(b) }), [...await makeImagePdf()]);
+  await page.waitForFunction(() => window.ashStudio.state.tabs.find((t) => t.id === window.ashStudio.state.activeId)?.name === 'photos.pdf');
+  const exportPhotos = async (images) => {
+    await menu('export-xlsx');
+    if (!images) await page.locator('#xp-xlsx-images').uncheck();
+    const out = await download(() => page.locator('.xp-xlsx-dialog button[data-value="export"]').click());
+    const f = unzip(out.bytes);
+    const ss = [...(f['xl/sharedStrings.xml']?.toString() ?? '').matchAll(/<si>([\s\S]*?)<\/si>/g)].map(([, si]) => [...si.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)].map((m) => m[1]).join(''));
+    return { f, rows: readSheet(f['xl/worksheets/sheet1.xml'].toString(), ss) };
+  };
+  const withImgs = await exportPhotos(true);
+  const media = Object.keys(withImgs.f).filter((n) => n.startsWith('xl/media/')).sort();
+  check(media.length === 2, `xl/media holds ${JSON.stringify(media)}, expected 2 images`);
+  check(/\.jpe?g$/.test(media[0]) && withImgs.f[media[0]][0] === 0xff && withImgs.f[media[0]][1] === 0xd8, `image 1 not a JPEG: ${media[0]}`);
+  check(/\.png$/.test(media[1]) && withImgs.f[media[1]].subarray(1, 4).toString() === 'PNG', `image 2 not a PNG: ${media[1]}`);
+  const drawing = withImgs.f['xl/drawings/drawing1.xml']?.toString() ?? '';
+  // page width 612 pt -> 8 columns of 64 px: x 72 pt -> 60 px (column A), x 300 pt -> 251 px (column D)
+  const anchors = [...drawing.matchAll(/<xdr:from><xdr:col>(\d+)<\/xdr:col>.*?<xdr:row>(\d+)<\/xdr:row>/g)].map((m) => ({ col: Number(m[1]), row: Number(m[2]) }));
+  const rowOf = (first) => withImgs.rows.findIndex((r) => r[0] === first);
+  const [para, head, last] = [rowOf(IMG_PARA), rowOf('Tag'), rowOf('P-102')];
+  check(anchors.length === 2 && para >= 0 && head > para && last > head, `anchors ${JSON.stringify(anchors)} rows ${JSON.stringify(withImgs.rows)}`);
+  check(anchors[0].row > para && anchors[0].row <= head, `JPEG anchored at row ${anchors[0].row}, expected between the paragraph (${para}) and the table (${head})`);
+  check(anchors[1].row > last, `PNG anchored at row ${anchors[1].row}, expected below the table's last row (${last})`);
+  check(anchors[0].col === 0 && anchors[1].col === 3, `anchor columns ${JSON.stringify(anchors)}`);
+  const wantRows = [[IMG_PARA], ['Tag', 'Duty'], ['P-101', 45], ['P-102', 30]];
+  check(JSON.stringify(withImgs.rows) === JSON.stringify(wantRows), `image page rows ${JSON.stringify(withImgs.rows)}`);
+
+  step = 'Excel: "Include images" off -> no xl/media, same cells';
+  const noImgs = await exportPhotos(false);
+  check(!Object.keys(noImgs.f).some((n) => n.startsWith('xl/media/') || n.startsWith('xl/drawings/')), `images written with "Include images" off: ${Object.keys(noImgs.f)}`);
+  check(JSON.stringify(noImgs.rows) === JSON.stringify(withImgs.rows), `cells differ without images: ${JSON.stringify(noImgs.rows)}`);
 
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('EXPORTS OK');
