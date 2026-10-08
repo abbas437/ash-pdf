@@ -532,6 +532,16 @@ function annotIndex(doc, en) {
   return -1;
 }
 
+/**
+ * Append to the page's /Annots. Not PDFPageLeaf.addAnnot: that normalizes the page (wraps its
+ * content streams in q/Q, adds /Resources entries), a content change an incremental update must not carry.
+ */
+function addAnnot(doc, page, ref) {
+  const annots = page.node.Annots();
+  if (annots) annots.push(ref);
+  else page.node.set(N('Annots'), doc.context.obj([ref]));
+}
+
 function dropFromAnnots(doc, entries) {
   const kill = new Set(entries);
   const pages = doc.getPages();
@@ -654,7 +664,7 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
       if (en) pages[en.page].node.Annots().remove(annotIndex(doc, en));
       ref = en?.ref ?? doc.context.register(annot); // same object number on a page move: /IRT to it stays valid
       if (en?.ref) doc.context.assign(ref, annot);
-      page.node.addAnnot(ref);
+      addAnnot(doc, page, ref);
     }
     if (j.t) j.t.ref = ref;
     const extras = [];
@@ -690,7 +700,7 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
       written.set(`${o.id}-status`, sr);
       extras.push(sr);
     }
-    for (const x of extras) page.node.addAnnot(x);
+    for (const x of extras) addAnnot(doc, page, x);
     if (j.t) j.t.byId = written;
   });
 

@@ -107,7 +107,11 @@ export function isColor(px, [r, g, b], tol = 40) {
  * the field empty (no /V). Written without object streams so the raw byte-scan fallback of
  * detectSignatures can see the dictionaries too.
  */
-export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2 } = {}) {
+/**
+ * A PDF with a signature field. `exact`: the /ByteRange covers the whole file except the /Contents
+ * hex string, as a real signer writes it (the signature value itself stays a dummy).
+ */
+export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2, exact = false } = {}) {
   const doc = await PDFDocument.create();
   for (let i = 0; i < pages; i++) doc.addPage([612, 792]).drawText(`Signed page ${i + 1}`, { x: 50, y: 700, size: 18 });
   const ctx = doc.context;
@@ -116,11 +120,21 @@ export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2 } =
   if (signed) {
     field.V = ctx.register(ctx.obj({
       Type: 'Sig', Filter: 'Adobe.PPKLite', SubFilter: 'adbe.pkcs7.detached',
-      ByteRange: [0, 1000, 9192, 500], Contents: PDFHexString.of('00'.repeat(64)), M: PDFHexString.fromText('D:20261007120000Z'),
+      ByteRange: exact ? [0, 1111111111, 2222222222, 3333333333] : [0, 1000, 9192, 500], Contents: PDFHexString.of('00'.repeat(64)), M: PDFHexString.fromText('D:20261007120000Z'),
     }));
   }
   const fieldRef = ctx.register(ctx.obj(field));
   page.node.set(PDFName.of('Annots'), ctx.obj([fieldRef]));
   doc.catalog.set(PDFName.of('AcroForm'), ctx.obj({ Fields: [fieldRef], SigFlags: sigFlags }));
-  return doc.save({ useObjectStreams: false });
+  const bytes = await doc.save({ useObjectStreams: false });
+  if (!exact) return bytes;
+  const text = Buffer.from(bytes).toString('latin1');
+  const c = text.indexOf('/Contents <00');
+  const start = c + '/Contents '.length, end = text.indexOf('>', start) + 1;
+  const placeholder = '[ 0 1111111111 2222222222 3333333333 ]';
+  const value = `[ 0 ${start} ${end} ${bytes.length - end} ]`.padEnd(placeholder.length, ' ');
+  const at = text.indexOf(placeholder);
+  if (c < 0 || at < 0) throw new Error('makeSignedPdf: placeholder not found');
+  bytes.set(Buffer.from(value, 'latin1'), at);
+  return bytes;
 }

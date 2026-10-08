@@ -124,6 +124,7 @@ export async function openBytes({ name, path = null, bytes }) {
   const tab = Object.assign(createTab({ name, path, bytes }), prefsForNewTab());
   // Background check of the file as opened; saveTab asks before overwriting a signed original at this path.
   tab.signedPath = null;
+  tab.fileBytes = bytes; // what the file at tab.path holds: the prefix of an incremental update
   tab.signatureCheck = import('../src/core/index.js').then((core) => core.detectSignatures(bytes))
     .then((r) => { if (r.signed) tab.signedPath = path; }, () => {});
   try {
@@ -190,14 +191,22 @@ export async function closeTab(tab = activeTab()) {
 export async function saveTab(tab = activeTab(), asNew = false) {
   if (!tab) return false;
   if (tab.readOnly) { await showDialog({ title: 'Read-only document', body: 'This document is encrypted: viewing and printing only (editing is not supported).' }); return false; }
+  // A full save rewrites the file, which breaks a digital signature on the original: ask first.
+  // Annotation-only changes on a signed original are appended as an incremental update instead
+  // (the signed bytes stay a prefix), so that ask waits until the bytes to write are known.
+  let signedUpdate = false;
+  const askSigned = async () => {
+    const choice = await confirmSignedOverwrite(tab.name);
+    if (choice === 'copy') return saveTab(tab, true);
+    if (choice !== 'overwrite') return false;
+    tab.signedPath = null;
+    return null;
+  };
   if (!asNew && tab.path) {
-    // Saving rewrites the whole file, which breaks a digital signature on the original.
     await tab.signatureCheck;
     if (tab.signedPath && tab.signedPath === tab.path) {
-      const choice = await confirmSignedOverwrite(tab.name);
-      if (choice === 'copy') return saveTab(tab, true);
-      if (choice !== 'overwrite') return false;
-      tab.signedPath = null;
+      if (tab.bytes === tab.fileBytes) signedUpdate = true; // no page operation since the file was read
+      else { const r = await askSigned(); if (r !== null) return r; }
     }
   }
   try {
@@ -210,6 +219,17 @@ export async function saveTab(tab = activeTab(), asNew = false) {
       const base = tab.bytes;
       const out = await hook(tab, bytes);
       if (out instanceof Uint8Array) { bytes = out; if (!hook.transient && tab.bytes === base) tab.bytes = out; }
+    }
+    const full = bytes; // what transient hooks commit to tab.bytes in hook.saved
+    if (signedUpdate) {
+      const { appendIncrementalUpdate } = await import('../src/core/index.js');
+      const update = tab.bytes === tab.fileBytes ? await appendIncrementalUpdate(tab.fileBytes, bytes) : null;
+      if (!update) { signedUpdate = false; const r = await askSigned(); if (r !== null) return r; }
+      else if (update === tab.fileBytes) { // nothing changed: nothing to write
+        if (tab.rev === rev) markDirty(tab, false);
+        renderTabs();
+        return true;
+      } else bytes = update;
     }
     let res;
     if (!asNew && tab.path && !String(tab.path).startsWith('dropped:')) {
@@ -224,9 +244,11 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     tab.name = String(res.path).split(/[\\/]/).pop() || tab.name;
     // hook.saved(tab, clean): the file is written; clean = no edit landed since the save started.
     for (const hook of state.hooks.beforeSave) hook.saved?.(tab, tab.rev === rev);
+    if (signedUpdate && tab.bytes === full) tab.bytes = bytes; // the next update appends to the file as written
+    tab.fileBytes = bytes;
     if (tab.rev === rev) markDirty(tab, false);
     renderTabs();
-    toast(`Saved ${tab.name}`);
+    toast(signedUpdate ? 'Saved as an update; the signature is kept' : `Saved ${tab.name}`);
     return true;
   } catch (err) {
     showError('Could not save', err);
