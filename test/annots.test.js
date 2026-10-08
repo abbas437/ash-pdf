@@ -406,3 +406,23 @@ describe('ids of direct annotation dicts without /NM', () => {
     assert.equal(await idOf(await deletePages(src, [0]), 'ellipse'), circle, 'after deleting an earlier page');
   });
 });
+
+describe('sticky-note icons', () => {
+  const ICONS = ['Comment', 'Note', 'Key', 'Help', 'Paragraph', 'Insert'];
+  async function noteWith(icon) {
+    const out = await writeAnnotations(await makePdf(1), { add: [{ id: 'n', page: 0, type: 'note', x: 100, y: 100, icon, note: icon }] }, OPTS);
+    const dict = annotDicts(await PDFDocument.load(out)).find((d) => d.lookup(PDFName.of('Subtype'))?.decodeText() === 'Text');
+    const ap = dict.lookup(PDFName.of('AP')).lookup(PDFName.of('N'));
+    return { out, name: dict.lookup(PDFName.of('Name'))?.decodeText(), apBytes: Buffer.from(ap.getContents()).toString('latin1') };
+  }
+  test('each icon writes its /Name and its own appearance, and reads back', async () => {
+    const comment = await noteWith('Comment');
+    for (const icon of ICONS) {
+      const n = icon === 'Comment' ? comment : await noteWith(icon);
+      assert.equal(n.name, icon, `/Name for ${icon}`);
+      if (icon !== 'Comment') assert.notEqual(n.apBytes, comment.apBytes, `${icon} appearance differs from Comment`);
+      const [back] = (await readAnnotations(n.out)).objects.filter((o) => o.type === 'note');
+      assert.equal(back.icon, icon, `read back ${icon}`);
+    }
+  });
+});
