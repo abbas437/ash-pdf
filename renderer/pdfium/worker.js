@@ -4,11 +4,23 @@
 import { init } from '../vendor/pdfium/index.browser.js';
 import { encodeError, encodeResult } from './protocol.js';
 import { redactDocument } from './redact.js';
+import { editLine, textLines } from './textedit.js';
 
 const OBJ_TEXT = 1, FPDF_INCREMENTAL = 1;
 let m = null;
 const docs = new Map(); // docId -> { doc, ptr }
 let nextDoc = 1;
+const fonts = new Map(); // substitute font file -> Promise<Uint8Array>, fetched from the app's origin on first use
+const loadFont = (file) => {
+  if (!fonts.has(file)) {
+    fonts.set(file, fetch(new URL(`../vendor/fonts/edit/${file}`, import.meta.url)).then(async (res) => {
+      if (!res.ok) throw new Error(`pdfium: cannot load font ${file} (${res.status})`);
+      return new Uint8Array(await res.arrayBuffer());
+    }));
+    fonts.get(file).catch(() => fonts.delete(file));
+  }
+  return fonts.get(file);
+};
 
 const heap = () => m.pdfium.HEAPU8; // re-read: memory growth replaces the buffer
 const malloc = (n) => m.pdfium.wasmExports.malloc(n);
@@ -89,6 +101,13 @@ const methods = {
   redact(docId, areas, { fill = [0, 0, 0] } = {}) {
     redactDocument(m, getDoc(docId).doc, areas, { fill });
     return methods.save(docId, { incremental: false });
+  },
+  /** Visual lines of original text on a page (textedit.js). */
+  textLines(docId, pageIndex) { return textLines(m, getDoc(docId).doc, pageIndex); },
+  /** Replace one line's text (textedit.js), then save: { ok, substituted, widthBefore, widthAfter, bytes } | { ok: false, reason }. */
+  async editLine(docId, pageIndex, lineId, newText, { incremental = false } = {}) {
+    const r = await editLine(m, getDoc(docId).doc, pageIndex, lineId, newText, { loadFont });
+    return r.ok ? { ...r, bytes: methods.save(docId, { incremental }) } : r;
   },
   save(docId, { incremental = false } = {}) {
     const doc = getDoc(docId).doc;

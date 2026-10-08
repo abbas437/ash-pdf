@@ -15,6 +15,8 @@
 //   renderer/vendor/minisearch.js          minisearch dist/es/index.js (self-contained ES module) ("minisearch")
 //   renderer/vendor/write-excel-file.esm.js generated ES wrapper around write-excel-file's UMD bundle (fflate inlined) ("write-excel-file")
 //   renderer/vendor/fonts/<font>-latin-400-normal.woff2  @fontsource/* handwriting fonts (SIL OFL 1.1) for typed signatures
+//   renderer/vendor/fonts/edit/<Family>-<Style>.ttf  @expo-google-fonts/{carlito,caladea,arimo,tinos,cousine} full TrueType fonts
+//                                           (SIL OFL 1.1): substitutes for editing original PDF text (renderer/pdfium/textedit.js FONT_FILES)
 //   renderer/vendor/pdfium/index.browser.js @embedpdf/pdfium dist/index.browser.js (PDFium wasm glue, MIT) -> renderer/pdfium/worker.js
 //   renderer/vendor/pdfium/pdfium.wasm      @embedpdf/pdfium dist/pdfium.wasm (PDFium, BSD-3-Clause/Apache-2.0) -> renderer/pdfium/client.js
 //   renderer/vendor/tesseract/worker.min.js tesseract.js dist/worker.min.js (OCR worker, Apache-2.0), started as a same-origin Worker
@@ -33,6 +35,7 @@
 import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FONT_FILES } from '../renderer/pdfium/textedit.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const nm = join(root, 'node_modules');
@@ -112,6 +115,13 @@ const SIGNATURE_FONTS = ['dancing-script', 'great-vibes', 'caveat', 'sacramento'
 for (const f of SIGNATURE_FONTS) {
   copy(`@fontsource/${f}/files/${f}-latin-400-normal.woff2`, `fonts/${f}-latin-400-normal.woff2`);
   copy(`@fontsource/${f}/LICENSE`, `licenses/@fontsource-${f}-LICENSE.txt`);
+}
+
+// --- Substitute fonts for editing original text (SIL OFL 1.1), full TrueType (PDFium cannot load woff/woff2) ---
+// Loaded lazily by renderer/pdfium/worker.js from the app's origin; the file list is textedit.js FONT_FILES.
+for (const [file, src] of Object.entries(FONT_FILES)) copy(src, `fonts/edit/${file}`);
+for (const pkg of new Set(Object.values(FONT_FILES).map((src) => src.split('/').slice(0, 2).join('/')))) {
+  copy(`${pkg}/LICENSE_FONT`, `licenses/${pkg.replace('/', '-')}-LICENSE_FONT.txt`);
 }
 
 // --- @embedpdf/pdfium (MIT wrapper; PDFium BSD-3-Clause + Apache-2.0) — edit engine, loaded lazily ---

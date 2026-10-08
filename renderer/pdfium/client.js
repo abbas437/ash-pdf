@@ -57,6 +57,10 @@ export const pdfium = {
   save: (docId, { incremental = false } = {}) => call('save', docId, { incremental }),
   /** True redaction + full save; resolves to the new bytes. See redact.js. */
   redact: (docId, areas, { fill = [0, 0, 0] } = {}) => call('redact', docId, areas, { fill }),
+  /** Original-text lines of a page: [{ id, text, bbox, font, size, color, embedded, subset, objects, editable, reason? }]. See textedit.js. */
+  textLines: (docId, pageIndex) => call('textLines', docId, pageIndex),
+  /** Replace a line's text + save (full unless incremental); resolves { ok, substituted, widthBefore, widthAfter, bytes } | { ok: false, reason }. */
+  editLine: (docId, pageIndex, lineId, newText, { incremental = false } = {}) => call('editLine', docId, pageIndex, lineId, newText, { incremental }),
   get started() { return !!worker; },
   /** Diagnostics for tests: open a generated 2-page PDF, read it back, save incrementally. */
   async selfTest() {

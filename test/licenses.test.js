@@ -22,7 +22,7 @@ test('notices list the components bundled in the build with their licence texts'
       'iconv-lite', 'buffer', 'ieee754', 'base64-arraybuffer',
       'PDFium', 'libpng 1.6.43', 'zlib', 'FreeType', 'OpenJPEG (in PDFium)', 'libjpeg-turbo (JPEG decoder)', 'Little CMS (lcms2)',
       'Tesseract OCR', 'Leptonica', 'libpng (in Tesseract) 1.6.38', 'zlib (in Tesseract)', 'IJG libjpeg (in Tesseract)', 'LibTIFF', 'libwebp',
-      'Tesseract English traineddata (eng) 4.0.0_best_int']) {
+      'Tesseract English traineddata (eng) 4.0.0_best_int', 'Carlito font', 'Caladea font', 'Arimo font', 'Tinos font', 'Cousine font']) {
       assert.match(md, new RegExp(`^## ${name.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}.*\\(bundled\\)$`, 'm'), `no section for ${name}`);
     }
     // Licence texts come from the files, not just the identifiers.
@@ -44,6 +44,9 @@ test('notices list the components bundled in the build with their licence texts'
     assert.match(md, /Copyright \(C\) 2001-2020 Leptonica/);
     assert.match(md, /Copyright © 1988-1997 Sam Leffler/);
     assert.match(md, /Copyright \(c\) 2010, Google Inc\. All rights reserved\./);
+    // Substitute fonts for text editing: the OFL text from LICENSE_FONT, not only the packages' MIT LICENSE.
+    assert.match(md, /Copyright 2013 The Carlito Project Authors/);
+    assert.match(md, /^\| @expo-google-fonts\/carlito \| 0\.4\.1 \| MIT AND OFL-1\.1 \|$/m);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -68,6 +71,7 @@ test('the script fails when PDFium\'s licence file (LICENSE.pdfium) is missing',
     writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', version: '1.0.0', dependencies: {} }));
     mkdirSync(join(dir, 'node_modules', '@embedpdf', 'pdfium'), { recursive: true });
     symlinkSync(join(root, 'node_modules', 'pdfjs-dist'), join(dir, 'node_modules', 'pdfjs-dist'));
+    symlinkSync(join(root, 'node_modules', '@expo-google-fonts'), join(dir, 'node_modules', '@expo-google-fonts'));
     symlinkSync(join(root, 'scripts'), join(dir, 'scripts'));
     const r = run(['--root', dir, '--out', join(dir, 'NOTICES.md')]);
     assert.equal(r.status, 1);
