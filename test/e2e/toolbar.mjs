@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Toolbar UX e2e: tool groups, second click returns to Select, Pages and Split dropdowns (mouse and
 // keyboard, also inside More), one-row toolbar with More overflow, no "next build" placeholders, short single-line File menu items,
-// group colours (both themes, pressed and hovered, toggle persists), no overflow at 1280 px without labels, arrow keys
+// group colours (both themes, pressed and hovered, toggle persists), no overflow at 1366 px without labels, arrow keys
 // skip hidden buttons, opening Sign leaves More alone. Prints "E2E OK" on success.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -143,9 +143,15 @@ try {
   await keys('btn-pages');
   await keys('btn-split');
 
-  step = 'labels off: nothing in More at 1280';
+  // With the Edit text and Edit image tools the full set needs a 1366 px window (the common laptop width);
+  // narrower windows move the last tools into More (checked below at 900 px).
+  step = 'labels off: nothing in More at 1366';
+  await page.setViewportSize({ width: 1366, height: 800 });
+  await page.waitForTimeout(200);
   const moreCount = () => page.evaluate(() => ({ n: document.querySelectorAll('.tb-more-panel .tb-btn').length, shown: !document.querySelector('.tb-more').hidden }));
-  check((await moreCount()).n === 0 && !(await moreCount()).shown, `1280 without labels: More holds ${JSON.stringify(await moreCount())}`);
+  check((await moreCount()).n === 0 && !(await moreCount()).shown, `1366 without labels: More holds ${JSON.stringify(await moreCount())}`);
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.waitForTimeout(200);
 
   // Computed colours of a tool's icon, its button and the toolbar.
   const colours = (sel) => page.evaluate((s) => {
