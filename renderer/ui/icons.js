@@ -23,6 +23,7 @@ const P = {
   shapes: '<rect x="3.5" y="10" width="9" height="9.5" rx="1"/><circle cx="15.5" cy="8.5" r="5"/>',
   image: '<rect x="3.5" y="4.5" width="17" height="15" rx="1.5"/><circle cx="9" cy="9.5" r="1.6"/><path d="M3.5 17l5-4.5 4 3.5 3-2.5 5 4"/>',
   whiteout: '<rect x="4" y="7" width="16" height="10" rx="1.5"/><path d="M7.5 12h9" stroke-dasharray="1.5 2.2"/>',
+  redact: '<rect x="4" y="7" width="16" height="10" rx="1"/><path d="M8 17l6-10M13 17l6-10M4 14l4-7"/>',
   stamp: '<path d="M9.5 4.5h5l-1 6h-3z"/><path d="M5 13.5h14v3.5H5zM6.5 20h11"/>',
   callout: '<path d="M4.5 5h15v10h-8l-4.5 4v-4h-2.5z"/><path d="M8 9h8M8 12h5"/>',
   forms: '<rect x="3.5" y="5" width="17" height="5" rx="1"/><rect x="3.5" y="14" width="5" height="5" rx="1"/><path d="M5 16.5l1 1 1.8-2M11 16.5h8.5"/>',

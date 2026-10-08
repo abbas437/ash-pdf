@@ -211,6 +211,16 @@ function registerBuiltins() {
     svgEl('rect', { class: 'ann-whiteout-hint', x: o.x, y: o.y, width: o.w, height: o.h, fill: 'none' }, g);
     return g;
   }, { style: () => ({}) }));
+  // Redaction mark (saved as /Redact): red outline over a light hatch; the content goes on Apply.
+  registerObjectType('redactMark', boxType((o, p) => { ensureHatch(); return svgEl('rect', { class: 'ann-redact', x: o.x, y: o.y, width: o.w, height: o.h }, p); }, { style: () => ({}) }));
+}
+/** The hatch pattern of redaction marks, once per document (url(#id) is document-wide). */
+function ensureHatch() {
+  if (document.getElementById('ann-redact-hatch')) return;
+  const svg = svgEl('svg', { width: 0, height: 0, 'aria-hidden': 'true', style: 'position:absolute;width:0;height:0' }, document.body);
+  const pat = svgEl('pattern', { id: 'ann-redact-hatch', width: 6, height: 6, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, svgEl('defs', {}, svg));
+  svgEl('rect', { width: 6, height: 6, fill: 'rgba(214,40,40,0.08)' }, pat);
+  svgEl('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: 'rgba(214,40,40,0.45)', 'stroke-width': 1.5 }, pat);
 }
 
 export function registerObjectType(type, def) {

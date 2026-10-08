@@ -20,10 +20,12 @@ const SUBTYPE = {
   rect: 'Square', cloud: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine',
   text: 'FreeText', callout: 'FreeText', stamp: 'Stamp', image: 'Stamp', highlight: 'Highlight',
   note: 'Text', underline: 'Underline', strikeout: 'StrikeOut', squiggly: 'Squiggly', textHighlight: 'Highlight',
+  redactMark: 'Redact', // a mark only (§12.5.6.23): the content goes when the app applies redaction
 };
-const MARKUP = new Set(['Square', 'Circle', 'Line', 'Ink', 'PolyLine', 'FreeText', 'Stamp', 'Highlight', 'Text', 'Underline', 'StrikeOut', 'Squiggly']);
+const MARKUP = new Set(['Square', 'Circle', 'Line', 'Ink', 'PolyLine', 'FreeText', 'Stamp', 'Highlight', 'Text', 'Underline', 'StrikeOut', 'Squiggly', 'Redact']);
 const MARKUP_TYPE = { Underline: 'underline', StrikeOut: 'strikeout', Squiggly: 'squiggly' };
 const STATUS = { accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled', completed: 'Completed', none: 'None' };
+const REDACT_STROKE = '#d62828';
 const EXTRA_KEY = 'ASHStudio'; // private: JSON of style fields the standard keys cannot carry
 const IMAGE_KEY = 'ASHImage'; // private: original image bytes of an image stamp
 
@@ -145,6 +147,8 @@ function layout(o) {
       return { bbox: rotatedBox(o) };
     case 'note':
       return { bbox: { x: o.x, y: o.y, w: num(o.w, 20), h: num(o.h, 20) } };
+    case 'redactMark':
+      return { bbox: { x: o.x, y: o.y, w: o.w, h: o.h } };
     default: // text markups
       return { bbox: quadBox(o.quads, 1) };
   }
@@ -168,6 +172,8 @@ function shift(o, dx, dy) {
 
 function toFlattenObjects(o, page) {
   if (o.type === 'ink' || o.type === 'polyline') return inkPaths(o).map((points) => ({ ...o, page, type: 'ink', points, paths: undefined }));
+  // Appearance of a redaction mark: its outline only (never a filled box: printing must not black out).
+  if (o.type === 'redactMark') return [{ type: 'rect', page, x: o.x + 0.5, y: o.y + 0.5, w: Math.max(o.w - 1, 0), h: Math.max(o.h - 1, 0), stroke: REDACT_STROKE, strokeWidth: 1, fill: null }];
   return [{ ...o, page }];
 }
 
@@ -367,6 +373,11 @@ function typeEntries(o, g, lay) {
       if (o.type !== 'highlight' && o.type !== 'textHighlight') width = num(o.strokeWidth, 1);
       break;
     }
+    case 'redactMark': // /IC = the fill the applied area gets (none: left blank)
+      strokeColor = parseColor(REDACT_STROKE, null);
+      width = 1;
+      if (o.fill !== null) e.IC = colorArr(parseColor(o.fill, '#000000'));
+      break;
     case 'note':
       strokeColor = parseColor(o.color, DEFAULT_COLOR.note);
       e.Name = N(o.icon || 'Comment');
@@ -953,6 +964,11 @@ function toObject(doc, en, g) {
         o.quads = quads;
         if (o.type !== 'textHighlight') o.strokeWidth = width;
       }
+      break;
+    }
+    case 'Redact': {
+      const b = pdfRectToVis(g, R);
+      Object.assign(o, { type: 'redactMark', x: b.x, y: b.y, w: b.w, h: b.h, fill: IC });
       break;
     }
     case 'Text': {

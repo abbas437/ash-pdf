@@ -89,6 +89,24 @@ describe('writeAnnotations / readAnnotations round trip', () => {
     assert.deepEqual(qp, [40, 412, 140, 412, 40, 398, 140, 398]); // 792 - y
   });
 
+  test('redactMark round-trips as a /Redact annotation with /IC = the fill', async () => {
+    const add = [
+      { id: 'x1', page: 0, type: 'redactMark', x: 40, y: 50, w: 80, h: 20, fill: '#000000' },
+      { id: 'x2', page: 0, type: 'redactMark', x: 200, y: 300, w: 30, h: 10, fill: null },
+    ];
+    const out = await writeAnnotations(await makePdf(1), { add }, OPTS);
+    const [d1, d2] = annotDicts(await PDFDocument.load(out));
+    assert.equal(d1.lookup(PDFName.of('Subtype')).toString(), '/Redact');
+    assert.deepEqual(d1.lookup(PDFName.of('IC'), PDFArray).asArray().map((n) => n.asNumber()), [0, 0, 0]);
+    assert.equal(d2.get(PDFName.of('IC')), undefined);
+    const { objects } = await readAnnotations(out);
+    const byId = Object.fromEntries(objects.map((o) => [o.id, o]));
+    assert.equal(byId.x1.type, 'redactMark');
+    for (const k of ['x', 'y', 'w', 'h']) { near(byId.x1[k], add[0][k], 0.01, k); near(byId.x2[k], add[1][k], 0.01, k); }
+    assert.equal(byId.x1.fill, '#000000');
+    assert.equal(byId.x2.fill, null);
+  });
+
   test('whiteout is refused with BURN_IN_ONLY', async () => {
     await assert.rejects(writeAnnotations(await makePdf(1), { add: [{ id: 'w', page: 0, type: 'whiteout', x: 0, y: 0, w: 5, h: 5 }] }), { code: 'BURN_IN_ONLY' });
   });
