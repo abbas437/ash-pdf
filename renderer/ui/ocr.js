@@ -4,11 +4,14 @@
 // only, fully offline) and its words written as an invisible text layer by src/core/ocr.js addTextLayer. The
 // visible page is unchanged; the change is one undoable page operation. The tesseract worker is started on first
 // use and terminated after every run (it holds the wasm heap and the English model, about 100 MB).
+import { bus } from '../bus.js';
 import { activeTab } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast } from './dialogs.js';
 import { viewer } from './viewer.js';
 import { runOp } from './pagetools.js';
+import { pref } from './prefs.js';
+import { imageCoverage, looksScanned, SAMPLE_PAGES } from './scan-lib.js';
 import { parseRanges } from '../../src/core/pdfOps.js';
 
 const TESS = new URL('./vendor/tesseract/', document.baseURI).href;
@@ -132,7 +135,7 @@ export function recognize(tab, indices, { skipText = true } = {}) {
 }
 
 /** Tools > Recognize text (OCR)…: asks for the pages, then runs recognize(). */
-export async function ocrDialog(tab = activeTab()) {
+export async function ocrDialog(tab = activeTab(), { pages: preset = 'current' } = {}) {
   if (!tab?.pdfDoc) return false;
   const n = tab.numPages;
   const radio = (v, label, checked) => h('label.ocr-radio', {}, h('input', { type: 'radio', name: 'ocr-pages', value: v, id: `ocr-${v}`, checked: checked || null }), h('span', {}, label));
@@ -141,7 +144,7 @@ export async function ocrDialog(tab = activeTab()) {
   const error = h('p.vx-error', { role: 'alert' });
   const body = h('div.ocr-form', {},
     h('div.ocr-radios', { role: 'radiogroup', 'aria-label': 'Pages' },
-      radio('current', `Current page (${tab.currentPage + 1})`, true), radio('all', `All pages (${n})`), h('div.ocr-row', {}, radio('range', 'Pages'), pages)),
+      radio('current', `Current page (${tab.currentPage + 1})`, preset === 'current'), radio('all', `All pages (${n})`, preset === 'all'), h('div.ocr-row', {}, radio('range', 'Pages'), pages)),
     h('label.ocr-check', {}, skip, h('span', {}, 'Skip pages that already contain text')),
     h('p.ocr-note', {}, 'Language: English. The recognized text is added invisibly behind the page image, so the page can be searched and copied; it looks the same.'),
     error);
@@ -155,14 +158,44 @@ export async function ocrDialog(tab = activeTab()) {
     return true;
   };
   const res = await showDialog({
-    title: 'Recognize text (OCR)', body, className: 'ocr-dialog', initialFocus: '#ocr-current',
+    title: 'Recognize text (OCR)', body, className: 'ocr-dialog', initialFocus: `#ocr-${preset}`,
     buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Recognize', value: 'ok', primary: true, validate }],
   });
   if (res !== 'ok' || !indices) return false;
   return recognize(tab, indices, { skipText: skip.checked });
 }
 
+/** Does the start of `tab` look scanned (no text, images over most of the first pages)? */
+async function scannedStart(tab) {
+  const doc = tab.pdfDoc, OPS = viewer.pdfjs.OPS, pages = [];
+  for (let i = 1; i <= Math.min(SAMPLE_PAGES, doc.numPages); i++) {
+    const page = await doc.getPage(i);
+    const textItems = (await page.getTextContent()).items.filter((it) => it.str?.trim()).length;
+    let coverage = 0;
+    if (!textItems) { const ops = await page.getOperatorList(); coverage = imageCoverage(ops.fnArray, ops.argsArray, OPS, page.view); }
+    pages.push({ textItems, coverage });
+  }
+  return looksScanned(pages);
+}
+
+/** The non-blocking "This looks like a scanned document" bar, shown once per document for the active tab. */
+function initScanPrompt() {
+  const bar = h('div.forms-bar.scan-bar', { role: 'region', 'aria-label': 'Scanned document', hidden: true },
+    h('span.forms-bar-text', {}, 'This looks like a scanned document. Recognize text to make it searchable and copyable.'),
+    h('button.btn.scan-bar-go', { type: 'button', onclick: () => { const t = activeTab(); if (t) { t.scanPrompt = false; sync(); ocrDialog(t, { pages: 'all' }); } } }, 'Recognize text'),
+    h('button.btn.scan-bar-no', { type: 'button', onclick: () => { const t = activeTab(); if (t) t.scanPrompt = false; sync(); } }, 'Not now'));
+  (document.querySelector('.banner') ?? document.querySelector('.toolbar'))?.after(bar);
+  const sync = () => { const t = activeTab(); bar.hidden = !(t?.scanPrompt && !t.readOnly); };
+  bus.on('tab:activated', sync); bus.on('tab:closed', sync);
+  bus.on('tab:loaded', ({ tab, reloaded }) => {
+    if (reloaded || tab.scanChecked || !tab.pdfDoc || !pref('ocr.prompt')) return;
+    tab.scanChecked = true; // once per document per session
+    scannedStart(tab).then((yes) => { if (yes) { tab.scanPrompt = true; sync(); } }, () => {});
+  });
+}
+
 export function initOcr(app) {
+  initScanPrompt();
   app.registerMenuItem('Tools', { separator: true });
   app.registerMenuItem('Tools', { id: 'ocr', label: 'Recognize text (OCR)…', action: () => ocrDialog(), enabled: () => !!activeTab()?.pdfDoc && !activeTab().readOnly });
   app.ocr = { ocrDialog, recognize, startWorker };

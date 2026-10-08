@@ -29,6 +29,9 @@ export async function loadPrefs() {
 
 export function prefsForNewTab() { return initialZoom(cache['view.defaultZoom'], lastZoom); }
 
+/** A cached preference value (kept current by loadPrefs / OK in the dialog). */
+export const pref = (key) => cache[key];
+
 export function applySidebarOnOpen() { state.sidebarOpen = cache['view.sidebarOnOpen']; }
 
 const save = (key, value) => api.settingsSet(key, value).catch(() => {});
@@ -77,6 +80,7 @@ const SECTIONS = [
   ['documents', 'Documents', () => [
     select('view.defaultZoom', 'Default zoom', [['fit-width', 'Fit width'], ['fit-page', 'Fit page'], ['1', '100 %'], ['last', 'Last used']]),
     check('view.sidebarOnOpen', 'Show the sidebar when a document opens'),
+    check('ocr.prompt', 'Offer to recognize text when a scanned document opens'),
   ]],
   ['annotations', 'Annotations', () => [
     h('label.prefs-field', {}, h('span', {}, 'Author name'),
@@ -147,6 +151,7 @@ async function applyPrefs(next) {
   await save('open.target', next['open.target']);
   await save('view.defaultZoom', next['view.defaultZoom']);
   await save('view.sidebarOnOpen', next['view.sidebarOnOpen']);
+  await save('ocr.prompt', next['ocr.prompt']);
   await setAuthor(next['annotations.author']).catch(() => {});
   await save('stamps.shape', next['stamps.shape']);
   Object.assign(cache, next);

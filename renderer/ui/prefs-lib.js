@@ -9,6 +9,7 @@ export const PREF_DEFAULTS = Object.freeze({
   'open.target': 'tab',              // read by electron/main.js when files arrive
   'view.defaultZoom': 'fit-width',   // 'fit-width' | 'fit-page' | '1' | 'last'
   'view.sidebarOnOpen': true,
+  'ocr.prompt': true,                // banner offering OCR on scanned (image-only) documents
   'annotations.author': '',          // '' = the built-in author name (annotations.js DEFAULT_AUTHOR)
   'stamps.shape': 'rect',
   'ui.toolLabels': false,
