@@ -7,7 +7,8 @@
 //                       {vertical: [{x, y0, y1}], horizontal: [{y, x0, x1}]} (thin filled rectangles
 //                       and axis-aligned stroked segments; curves ignored)
 //   extractTable(items, rules?) -> rows of cells: string | number | null (an empty cell)
-//   extractLayout(items, rules?) -> {rows (as extractTable), at: where each sheet row's text starts}
+//   extractLayout(items, rules?) -> {rows (as extractTable), at: where each sheet row's text starts,
+//                       blocks: [{kind, start, end, lines}] (see extractLayout)}
 //   pageBox / imagesFromOps / placeImages / rgbaPixels  the page's images and where they go in the sheet
 //                       (see "images" below)
 //
@@ -44,7 +45,7 @@ export function textItems(content) {
     if (typeof it.str !== 'string' || !it.str.trim() || !it.transform) continue;
     const [a, b, c, d, x, y] = it.transform;
     const size = Math.hypot(c, d) || Math.hypot(a, b) || it.height || 1;
-    out.push({ str: it.str, x, y, w: it.width ?? 0, size });
+    out.push({ str: it.str, x, y, w: it.width ?? 0, size, ...(it.fontName ? { font: it.fontName } : {}) });
   }
   return out;
 }
@@ -114,7 +115,7 @@ export function rulesFromOps({ fnArray, argsArray }, OPS) {
   return { vertical, horizontal };
 }
 
-function groupRows(items) {
+export function groupRows(items) {
   const sorted = [...items].sort((p, q) => q.y - p.y || p.x - q.x); // top of the page first
   const rows = [];
   for (const it of sorted) {
@@ -227,7 +228,9 @@ export function extractTable(items, rules = null) {
 }
 
 /** extractTable() plus where each sheet row comes from: at[k] = {x, y}, the start of the baseline (PDF points)
- *  of row k's first text, or null for the empty row between blocks. */
+ *  of row k's first text, or null for the empty row between blocks; and blocks[j] = {kind ('lines' | 'prose' |
+ *  'table' | 'ruled'), start, end (its sheet rows, end exclusive), lines: [{y, single}]}: the baselines of the text
+ *  rows it holds, single when the row is one chunk outside a ruled grid (a title, note or paragraph line). */
 export function extractLayout(items, rules = null) {
   const vertical = rules?.vertical ?? [], horizontal = rules?.horizontal ?? [];
   const rows = groupRows(items.filter((it) => it.str.trim())).map((r) => {
@@ -237,7 +240,7 @@ export function extractLayout(items, rules = null) {
     const inside = grid && chs.every((c) => c.x0 >= xs[0] - 1 && c.x1 <= xs.at(-1) + 1 && !xs.some((x) => x > c.x0 + 1 && x < c.x1 - 1));
     return { y: r.y, chunks: chs, xs: inside ? xs : null };
   });
-  if (!rows.length) return { rows: [], at: [] };
+  if (!rows.length) return { rows: [], at: [], blocks: [] };
   const all = rows.flatMap((r) => r.chunks);
   const textW = Math.max(...all.map((c) => c.x1)) - Math.min(...all.map((c) => c.x0));
   const wide = (c) => c.x1 - c.x0 > PROSE * textW;
@@ -265,9 +268,10 @@ export function extractLayout(items, rules = null) {
     } else open({ kind: 'table', rows: [row], bands: addSpans([], row.chunks) });
   }
 
-  const out = [], at = [];
+  const out = [], at = [], blocks = [];
   segs.forEach((seg, k) => {
     if (k) { out.push([]); at.push(null); }
+    const start = out.length;
     let src = seg.rows;
     if (seg.kind === 'table') out.push(...tableRows(seg, wide));
     else if (seg.kind === 'ruled') {
@@ -276,9 +280,10 @@ export function extractLayout(items, rules = null) {
       src = groups.map((g) => g.rows[0]);
     } else out.push(...proseRows(seg));
     at.push(...src.map((r) => ({ x: r.chunks[0].x0, y: r.y })));
+    blocks.push({ kind: seg.kind, start, end: out.length, lines: seg.rows.map((r) => ({ y: r.y, single: r.chunks.length === 1 && !r.xs })) });
   });
   const width = Math.max(1, ...out.map((r) => r.length));
-  return { rows: out.map((r) => [...r, ...Array(width - r.length).fill(null)]), at };
+  return { rows: out.map((r) => [...r, ...Array(width - r.length).fill(null)]), at, blocks };
 }
 
 // ---------------------------------------------------------------- images (Export to Excel, "Include images")

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'sha256-MEqsHf116K6RWRG01Kgk6QnD/fNl1QkDjh2fX63KzRs='; worker-src 'self' blob:; connect-src 'self' blob: data:">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' 'sha256-iq4D1t2X5Fefmn65wknOBnm7R1Uc+oa3LC1CUebrTEo='; worker-src 'self' blob:; connect-src 'self' blob: data:">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ASH PDF Studio</title>
   <link rel="icon" href="data:,">
@@ -10,7 +10,7 @@
   <!-- The import map is inline, so CSP script-src carries its sha256 hash. If you edit the
        JSON below, the browser smoke test (npm run smoke:browser) prints the new hash. -->
   <script type="importmap">
-  {"imports":{"pdf-lib":"./vendor/pdf-lib.esm.min.js","@pdf-lib/fontkit":"./vendor/fontkit.esm.js","pdfjs-dist":"./vendor/pdf.min.mjs","pdfjs-worker":"./vendor/pdf.worker.min.mjs","minisearch":"./vendor/minisearch.js","write-excel-file":"./vendor/write-excel-file.esm.js"}}
+  {"imports":{"pdf-lib":"./vendor/pdf-lib.esm.min.js","@pdf-lib/fontkit":"./vendor/fontkit.esm.js","pdfjs-dist":"./vendor/pdf.min.mjs","pdfjs-worker":"./vendor/pdf.worker.min.mjs","minisearch":"./vendor/minisearch.js","write-excel-file":"./vendor/write-excel-file.esm.js","docx":"./vendor/docx.mjs"}}
   </script>
   <script type="module" src="./shim.js"></script>
   <script type="module" src="./app.js"></script>
