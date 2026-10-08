@@ -2,13 +2,13 @@
 // End-to-end test of the incremental save of a signed PDF (renderer/app.js saveTab + core
 // appendIncrementalUpdate) in Chromium via playwright-core, served over HTTP with the browser shim.
 // Annotation-only changes on a signed original are appended as an update without the overwrite
-// warning; a page rotation still asks. Prints "SIGNED-SAVE OK".
+// warning, also on an object-stream original (new objects numbered from its /Size); a page rotation still asks. Prints "SIGNED-SAVE OK".
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { makeSignedPdf } from '../helpers.js';
+import { makeSignedPdf, checkAppendedXref } from '../helpers.js';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
@@ -86,6 +86,21 @@ try {
   await page.click('.dialog.signed-dialog .dialog-buttons button:text-is("Cancel")');
   await page.waitForSelector('.dialog-backdrop', { state: 'detached', timeout: 5_000 });
   check((await fileBytes()).equals(second), 'file untouched after Cancel');
+
+  step = 'object-stream signed original: appended update with a valid xref';
+  const chooser2 = page.waitForEvent('filechooser');
+  await page.click('#btn-open');
+  await (await chooser2).setFiles({ name: 'signed-objstm.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await makeSignedPdf({ exact: true, objectStreams: true })) });
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t?.name === 'signed-objstm.pdf' && t.view && t.numPages > 0; }, null, { timeout: 10_000 });
+  await ev('await tab.signatureCheck;');
+  const objstmOriginal = await fileBytes();
+  await ev('an.add(tab, { type: "rect", page: 0, x: 100, y: 100, w: 60, h: 40, stroke: "#ff0000" });');
+  await page.click('#btn-save');
+  await clean();
+  eq(await dialogCount(), 0, 'no overwrite warning on the object-stream original');
+  const objstmSaved = await fileBytes();
+  check(isPrefix(objstmOriginal, objstmSaved), 'object-stream original is a prefix');
+  checkAppendedXref(objstmOriginal, objstmSaved);
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {

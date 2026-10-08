@@ -1,8 +1,10 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument, PDFName, PDFDict } from 'pdf-lib';
-import { appendIncrementalUpdate, writeAnnotations, readAnnotations, rotatePages, detectSignatures } from '../src/core/index.js';
-import { makeSignedPdf, pdfjsDoc } from './helpers.js';
+import { appendIncrementalUpdate, docMdpPermission, writeAnnotations, readAnnotations, rotatePages, detectSignatures } from '../src/core/index.js';
+import { trailerSize } from '../src/core/incremental.js';
+import { signedSaveMode } from '../renderer/ui/save-lib.js';
+import { makeSignedPdf, makePdf, makeEncryptedPdf, appendXrefStreamUpdate, checkAppendedXref, pdfjsStrict, qpdfCheck, pdfjsDoc } from './helpers.js';
 
 const square = (id, x) => ({ id, page: 0, type: 'rect', x, y: 50, w: 80, h: 30, stroke: '#ff0000', strokeWidth: 2 });
 const isPrefix = (a, b) => b.length > a.length && Buffer.from(b.subarray(0, a.length)).equals(Buffer.from(a));
@@ -71,5 +73,88 @@ describe('appendIncrementalUpdate', () => {
     assert.equal(await appendIncrementalUpdate(orig, orig), orig);
     const resaved = await (await PDFDocument.load(orig, { updateMetadata: false })).save();
     assert.equal(await appendIncrementalUpdate(orig, resaved), orig);
+  });
+
+  /** The update `out` appends to `orig`: strict xref check, pdf.js without recovery, qpdf --check. */
+  async function strictlyValid(orig, out) {
+    assert.ok(out && isPrefix(orig, out), 'original bytes are an exact prefix');
+    const x = checkAppendedXref(orig, out);
+    const view = await pdfjsStrict(out);
+    assert.deepEqual(view.warnings, [], 'pdf.js reads it without warnings');
+    const q = qpdfCheck(out);
+    if (q) assert.ok(q.ok, `qpdf --check: ${q.output}`);
+    return { ...x, view };
+  }
+
+  test('object-stream original (pdf-lib default save): new objects are numbered from /Size, not over the object stream', async () => {
+    for (const orig of [await makePdf(2), await makeSignedPdf({ exact: true, objectStreams: true })]) {
+      const size = trailerSize(orig);
+      assert.ok(size > 0, 'cross-reference stream /Size read');
+      const out = await appendIncrementalUpdate(orig, await writeAnnotations(orig, { add: [square('sq', 40)] }));
+      const { numbers, size: newSize, view } = await strictlyValid(orig, out);
+      assert.ok(numbers.filter((n) => n >= size).length > 0 && newSize > size, 'new objects get numbers >= the original /Size');
+      assert.ok(view.annots.includes('Square'), 'pdf.js shows the square');
+      assert.deepEqual((await readAnnotations(out)).objects.map((o) => o.id), ['sq']);
+    }
+  });
+
+  test('an original with an earlier cross-reference-stream update: numbers and /Size stay above it', async () => {
+    const orig = await appendXrefStreamUpdate(await makePdf(2));
+    const size = trailerSize(orig);
+    const out = await appendIncrementalUpdate(orig, await writeAnnotations(orig, { add: [square('sq', 40)] }));
+    const { size: newSize, view } = await strictlyValid(orig, out);
+    assert.ok(newSize >= size);
+    assert.ok(view.annots.includes('Square'));
+    const two = await appendIncrementalUpdate(out, await writeAnnotations(out, { add: [square('sq2', 200)] }));
+    await strictlyValid(out, two);
+  });
+
+  test('edited bytes whose new objects reuse numbers below the original /Size: null (full save)', async () => {
+    const orig = await makePdf(2); // object stream and cross-reference stream hold the top numbers
+    const doc = await PDFDocument.load(orig, { updateMetadata: false });
+    const page = doc.getPage(0);
+    const ref = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Square', Rect: [10, 10, 50, 50] }));
+    assert.ok(ref.objectNumber < trailerSize(orig), 'pdf-lib alone hands out a taken number');
+    page.node.set(PDFName.of('Annots'), doc.context.obj([ref]));
+    assert.equal(await appendIncrementalUpdate(orig, await doc.save()), null);
+  });
+
+  test('certified original (DocMDP /P 1 or 2): null; /P 3 allows the update', async () => {
+    for (const p of [1, 2]) {
+      const orig = await makeSignedPdf({ exact: true, mdp: p });
+      assert.equal(await docMdpPermission(orig), p);
+      assert.equal(await appendIncrementalUpdate(orig, await writeAnnotations(orig, { add: [square('s', 40)] })), null);
+    }
+    const orig = await makeSignedPdf({ exact: true, mdp: 3 });
+    assert.equal(await docMdpPermission(orig), 3);
+    await strictlyValid(orig, await appendIncrementalUpdate(orig, await writeAnnotations(orig, { add: [square('s', 40)] })));
+    assert.equal(await docMdpPermission(await makeSignedPdf({ exact: true })), null);
+  });
+
+  test('encrypted original: null instead of an error', async () => {
+    const enc = await makeEncryptedPdf();
+    assert.equal(await appendIncrementalUpdate(enc, await makePdf(1)), null);
+  });
+
+  test('the first update of the existing signed fixture passes the strict checks', async () => {
+    const orig = await makeSignedPdf({ exact: true });
+    await strictlyValid(orig, await appendIncrementalUpdate(orig, await writeAnnotations(orig, { add: [square('s', 40)] })));
+  });
+});
+
+describe('signedSaveMode (saveTab)', () => {
+  const bytes = new Uint8Array(1);
+  const tab = (o = {}) => ({ path: '/a.pdf', signedPath: '/a.pdf', bytes, fileBytes: bytes, ...o });
+  test('annotation-only save over the signed file: update', () => assert.equal(signedSaveMode(tab()), 'update'));
+  test('requiresFullSave (applied redactions): never the incremental path', () => {
+    assert.equal(signedSaveMode(tab({ requiresFullSave: true })), 'ask');
+    assert.equal(signedSaveMode(tab({ requiresFullSave: true, signedPath: null })), 'plain');
+  });
+  test('certified, page operation: ask; Save As, unsigned, other path: plain', () => {
+    assert.equal(signedSaveMode(tab({ certified: true })), 'ask');
+    assert.equal(signedSaveMode(tab({ bytes: new Uint8Array(2) })), 'ask');
+    assert.equal(signedSaveMode(tab(), true), 'plain');
+    assert.equal(signedSaveMode(tab({ signedPath: null })), 'plain');
+    assert.equal(signedSaveMode(tab({ signedPath: '/b.pdf' })), 'plain');
   });
 });

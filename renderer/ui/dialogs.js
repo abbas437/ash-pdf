@@ -105,12 +105,17 @@ export function confirmDiscard(name) {
   });
 }
 
-/** Saving rewrites the whole file: ask before overwriting a digitally signed original. */
-export function confirmSignedOverwrite(name) {
+/**
+ * Saving rewrites the whole file: ask before overwriting a digitally signed original. `certified`:
+ * the author certified the document against changes (DocMDP), so even annotations break it.
+ */
+export function confirmSignedOverwrite(name, { certified = false } = {}) {
   return showDialog({
-    title: 'This document is digitally signed',
+    title: certified ? 'This document is certified against changes' : 'This document is digitally signed',
     body: h('div', {},
-      h('p', {}, `"${name}" carries a digital signature. Saving your changes over it rewrites the file, which invalidates the signature and removes the earlier signed revisions.`),
+      certified
+        ? h('p', {}, `"${name}" is certified by its author against changes, including comments and markups. Saving your changes over it rewrites the file, which breaks the certification and removes the earlier signed revisions.`)
+        : h('p', {}, `"${name}" carries a digital signature. Saving your changes over it rewrites the file, which invalidates the signature and removes the earlier signed revisions.`),
       h('p', {}, 'Save the edited document as a separate copy to keep the signed original intact.')),
     buttons: [
       { label: 'Cancel', value: 'cancel', cancel: true },

@@ -9,6 +9,7 @@ import {
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError } from './internal.js';
 import { flattenObjects, measureText, standardFontName, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
+import { trailerSize } from './incremental.js';
 import { cloudArc } from './cloud.js';
 import { stampShape } from './stamps.js';
 
@@ -585,6 +586,11 @@ function collectGarbage(doc) {
 export async function writeAnnotations(pdfBytes, { add = [], update = [], remove = [] } = {}, { author, now } = {}) {
   for (const [k, v] of Object.entries({ add, update, remove })) if (!Array.isArray(v)) throw new TypeError(`${k} must be an array`);
   const doc = await loadPdf(pdfBytes);
+  // New objects are numbered from the file's /Size: pdf-lib does not register object streams and
+  // cross-reference streams, so its own count can hand out their numbers, and an incremental
+  // update (appendIncrementalUpdate) would then replace them.
+  const size = trailerSize(pdfBytes);
+  if (size) doc.context.largestObjectNumber = Math.max(doc.context.largestObjectNumber, size - 1);
   const pages = doc.getPages();
   for (const o of [...add, ...update]) validate(o, pages.length);
   const stamp = now === undefined ? new Date() : new Date(now);

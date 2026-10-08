@@ -5,6 +5,7 @@ import { state, createTab, activeTab, markDirty } from './state.js';
 import { h, $, isTyping, formatBytes } from './ui/dom.js';
 import { icon } from './ui/icons.js';
 import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, dialogOpen } from './ui/dialogs.js';
+import { signedSaveMode } from './ui/save-lib.js';
 import { viewer } from './ui/viewer.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
@@ -126,8 +127,13 @@ export async function openBytes({ name, path = null, bytes }) {
   // Background check of the file as opened; saveTab asks before overwriting a signed original at this path.
   tab.signedPath = null;
   tab.fileBytes = bytes; // what the file at tab.path holds: the prefix of an incremental update
-  tab.signatureCheck = import('../src/core/index.js').then((core) => core.detectSignatures(bytes))
-    .then((r) => { if (r.signed) tab.signedPath = path; }, () => {});
+  tab.certified = false; // certified (DocMDP) against annotation changes: no incremental update
+  tab.signatureCheck = import('../src/core/index.js').then(async (core) => {
+    if (!(await core.detectSignatures(bytes)).signed) return;
+    tab.signedPath = path;
+    const p = await core.docMdpPermission(bytes);
+    tab.certified = p != null && p < 3;
+  }).catch(() => {});
   try {
     await viewer.openDocument(tab);
   } catch (err) {
@@ -197,7 +203,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
   // (the signed bytes stay a prefix), so that ask waits until the bytes to write are known.
   let signedUpdate = false;
   const askSigned = async () => {
-    const choice = await confirmSignedOverwrite(tab.name);
+    const choice = await confirmSignedOverwrite(tab.name, { certified: tab.certified });
     if (choice === 'copy') return saveTab(tab, true);
     if (choice !== 'overwrite') return false;
     tab.signedPath = null;
@@ -205,10 +211,9 @@ export async function saveTab(tab = activeTab(), asNew = false) {
   };
   if (!asNew && tab.path) {
     await tab.signatureCheck;
-    if (tab.signedPath && tab.signedPath === tab.path) {
-      if (tab.bytes === tab.fileBytes) signedUpdate = true; // no page operation since the file was read
-      else { const r = await askSigned(); if (r !== null) return r; }
-    }
+    const mode = signedSaveMode(tab, asNew);
+    if (mode === 'update') signedUpdate = true;
+    else if (mode === 'ask') { const r = await askSigned(); if (r !== null) return r; }
   }
   try {
     await pageOpsIdle();
@@ -224,7 +229,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     const full = bytes; // what transient hooks commit to tab.bytes in hook.saved
     if (signedUpdate) {
       const { appendIncrementalUpdate } = await import('../src/core/index.js');
-      const update = tab.bytes === tab.fileBytes ? await appendIncrementalUpdate(tab.fileBytes, bytes) : null;
+      const update = signedSaveMode(tab) === 'update' ? await appendIncrementalUpdate(tab.fileBytes, bytes) : null;
       if (!update) { signedUpdate = false; const r = await askSigned(); if (r !== null) return r; }
       else if (update === tab.fileBytes) { // nothing changed: nothing to write
         if (tab.rev === rev) markDirty(tab, false);
@@ -247,6 +252,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     for (const hook of state.hooks.beforeSave) hook.saved?.(tab, tab.rev === rev);
     if (signedUpdate && tab.bytes === full) tab.bytes = bytes; // the next update appends to the file as written
     tab.fileBytes = bytes;
+    if (!signedUpdate && tab.rev === rev) tab.requiresFullSave = false; // the rewritten file no longer holds the old bytes
     if (tab.rev === rev) markDirty(tab, false);
     renderTabs();
     toast(signedUpdate ? 'Saved as an update; the signature is kept' : `Saved ${tab.name}`);
