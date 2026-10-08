@@ -712,6 +712,12 @@ function registerIpc() {
     callerWindow().setTitle(t ? `${t} — ${APP_NAME}` : APP_NAME);
   });
 
+  handle('app:setFullScreen', (on) => {
+    if (typeof on !== 'boolean') throw new TypeError('setFullScreen: boolean required');
+    callerWindow().setFullScreen(on);
+    return on;
+  });
+
   handle('shell:showItem', (p) => {
     if (!isGranted(p) || !existsSync(p)) return false;
     shell.showItemInFolder(p);

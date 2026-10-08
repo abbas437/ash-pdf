@@ -658,3 +658,16 @@ body:not(.tool-labels) .toolbar .tb-more-panel .tb-dd-label, body:not(.tool-labe
 #ocr-progress { min-width: min(320px, 80vw); margin: 0; }
 .search-mark-all { margin: 2px 12px 6px; padding: 4px 8px; font-size: 12px; }
 body.textedit-tool .viewer-host .page { cursor: text; }
+
+/* Reading mode (ui/readmode.js): all chrome hidden, dark-grey surround in both themes, floating control strip. */
+body.reading-mode .titlebar, body.reading-mode .toolbar, body.reading-mode .options-bar, body.reading-mode .banner,
+body.reading-mode .sidebar, body.reading-mode .sb-resize, body.reading-mode .statusbar { display: none !important; }
+body.reading-mode .viewer-host { background: #3b3b3b; }
+body.reading-mode { cursor: default; }
+.rm-strip { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 2px; padding: 4px 8px; border-radius: 10px; background: rgb(20 20 20 / 0.88); color: #f0f0f0; box-shadow: 0 4px 16px rgb(0 0 0 / 0.5); opacity: 0; pointer-events: none; transition: opacity .25s; }
+.rm-strip.on { opacity: 1; pointer-events: auto; }
+.rm-strip[hidden] { display: none; }
+.rm-page { min-width: 64px; text-align: center; font-size: 13px; font-variant-numeric: tabular-nums; }
+.rm-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+.rm-btn:hover { background: rgb(255 255 255 / 0.16); }
+.rm-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
