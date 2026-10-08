@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { invertMap, droppedBy, restoreDropped } from '../renderer/ui/pagehistory-lib.js';
+import { invertMap, droppedBy, restoreDropped, takeObjects, swapObjs } from '../renderer/ui/pagehistory-lib.js';
 
 const del3 = new Map([[0, 0], [1, 1], [2, null], [3, 2]]); // delete page 3 of 4
 
@@ -47,4 +47,28 @@ test('undo/redo round trip: a delete, its undo and its redo keep the dropped obj
   assert.deepEqual(objs, [{ id: 'n', page: 2 }]);
   objs = restoreDropped(apply(objs, invertMap(redoMap, 3)), redoDropped); // undo again
   assert.deepEqual(objs, [{ id: 'r', page: 2 }, { id: 'n', page: 3 }]);
+});
+
+test('takeObjects + swapObjs: an apply removes, its undo restores, its redo removes the same ids again', () => {
+  const objs = [{ id: 'a', page: 0 }, { id: 'm1', page: 0, type: 'redactMark' }, { id: 'b', page: 1 }, { id: 'm2', page: 1, type: 'redactMark' }];
+  // apply: res.remove = marks
+  const t = takeObjects(objs, ['m1', 'm2']);
+  assert.deepEqual(t.objects.map((o) => o.id), ['a', 'b']);
+  assert.deepEqual(t.items.map((it) => [it.obj.id, it.index]), [['m1', 1], ['m2', 3]]);
+  t.items[0].obj.page = 9;
+  assert.equal(objs[1].page, 0, 'items are copies');
+  t.items[0].obj.page = 0;
+  const undoEntry = { restore: t.items, remove: [] };
+  // undo: nothing to take, the marks come back in place
+  const u = takeObjects(t.objects, undoEntry.remove);
+  const afterUndo = restoreDropped(u.objects, undoEntry.restore);
+  assert.deepEqual(afterUndo.map((o) => o.id), ['a', 'm1', 'b', 'm2']);
+  const redoEntry = swapObjs(undoEntry, u.items);
+  assert.deepEqual(redoEntry, { restore: [], remove: ['m1', 'm2'] });
+  // redo: the marks go again; the next undo brings them back
+  const r = takeObjects(afterUndo, redoEntry.remove);
+  assert.deepEqual(restoreDropped(r.objects, redoEntry.restore).map((o) => o.id), ['a', 'b']);
+  const undo2 = swapObjs(redoEntry, r.items);
+  assert.deepEqual(undo2.remove, []);
+  assert.deepEqual(restoreDropped(r.objects, undo2.restore).map((o) => o.id), ['a', 'm1', 'b', 'm2']);
 });

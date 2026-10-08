@@ -12,8 +12,8 @@ import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
-import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects } from './annotations.js';
-import { invertMap, droppedBy } from './pagehistory-lib.js';
+import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects } from './annotations.js';
+import { invertMap, droppedBy, swapObjs } from './pagehistory-lib.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -47,20 +47,25 @@ const isIdentity = (order) => order.every((v, k) => v === k);
 
 // ---------------------------------------------------------------- protocol + undo
 // `restore`: annotation objects (pagehistory-lib droppedBy items) the undo/redo step brings back.
-function commit(tab, bytes, map, select, restore = null) {
+// `remove`: ids of overlay objects the change takes out (res.remove); returns them as restore items.
+function commit(tab, bytes, map, select, restore = null, remove = null) {
   const refocus = !!thumbs.listEl?.contains(document.activeElement);
   if (select) pendingSelect = { tab, indices: select, focus: refocus };
   tab.bytes = bytes;
   markDirty(tab);
   bus.emit('pages:remapped', { tab, map });
+  const taken = remove?.length ? dropPageObjects(tab, remove) : [];
   if (restore?.length) restorePageObjects(tab, restore); // before the reload reconciles the mirror
   bus.emit('tab:bytesChanged', { tab });
+  return taken;
 }
 
 function pushCapped(stack, entry) { stack.push(entry); if (stack.length > UNDO_CAP) stack.shift(); }
 
 /**
- * Queue a page operation. fn(bytes, pageCount, core) → {bytes, map, select?} | null.
+ * Queue a page operation. fn(bytes, pageCount, core) → {bytes, map, select?, remove?} | null.
+ * `remove`: ids of overlay objects the change makes obsolete (e.g. applied redaction marks); they go
+ * with the change, Undo restores them and Redo removes them again (entry.objs = {restore, remove}).
  * Operations run one at a time against the latest tab.bytes. Resolves true when applied.
  */
 export function runOp(tab, label, fn) {
@@ -75,9 +80,11 @@ export function runOp(tab, label, fn) {
       if (!res) return false;
       tab.bytesUndo ??= [];
       // `dropped`: the objects on pages this op removes, put back by its Undo.
-      pushCapped(tab.bytesUndo, { bytes: before, map: res.map, dropped: droppedBy(tab.objects ?? [], res.map) });
+      const entry = { bytes: before, map: res.map, dropped: droppedBy(tab.objects ?? [], res.map) };
+      pushCapped(tab.bytesUndo, entry);
       tab.bytesRedo = [];
-      commit(tab, res.bytes, res.map, res.select);
+      const taken = commit(tab, res.bytes, res.map, res.select, null, res.remove);
+      if (res.remove) entry.objs = { restore: taken, remove: [] };
       offerUndo(tab);
       return true;
     } catch (err) {
@@ -103,8 +110,11 @@ function step(tab, from, to) {
       // The objects `map` drops go with the opposite entry; the ones entry.map dropped come back.
       const map = invertMap(entry.map, curCount);
       tab[to] ??= [];
-      pushCapped(tab[to], { bytes: cur, map, dropped: droppedBy(tab.objects ?? [], map) });
-      commit(tab, entry.bytes, map, null, entry.dropped);
+      const back = { bytes: cur, map, dropped: droppedBy(tab.objects ?? [], map) };
+      pushCapped(tab[to], back);
+      const { objs } = entry;
+      const taken = commit(tab, entry.bytes, map, null, objs ? [...entry.dropped, ...objs.restore] : entry.dropped, objs?.remove);
+      if (objs) back.objs = swapObjs(objs, taken);
       toast(from === 'bytesUndo' ? 'Page change undone' : 'Page change redone');
       return true;
     } catch (err) {
@@ -865,5 +875,7 @@ export function initPageTools(appApi) {
   item('Tools', { id: 'edit-properties', label: 'Edit properties…', action: withTab(propertiesDialog) });
   M('Document', { separator: true });
   item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
+  item('Document', { id: 'apply-redactions', label: 'Apply redactions…', action: withTab((t) => import('./redact.js').then((m) => m.applyRedactionsDialog(t))) },
+    (t) => !!t.objects?.some((o) => o.type === 'redactMark'));
   app.pageTools = { runOp, undo, redo, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
 }

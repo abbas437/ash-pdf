@@ -16,6 +16,7 @@
 //   deleted together: select() widens to every member; paste gives copies a fresh group.
 //   annotations.remapPages(tab, Map<oldIndex, newIndex|null>)  (also on bus 'pages:remapped' {tab, map})
 //   restorePageObjects(tab, items)  page undo/redo puts back the objects a page operation dropped
+//   dropPageObjects(tab, ids) -> items  a page operation's `res.remove` (no annotation undo step)
 //   annotations.registerObjectType(type, { render(obj, svgParent) -> SVGElement,
 //       bbox(obj) -> {x,y,w,h}, handles(obj) -> [{id,x,y}], hit?(obj,x,y,tol) -> bool,
 //       move(obj, dx, dy) -> patch, resize(obj, handleId, dx, dy) -> patch,
@@ -45,7 +46,7 @@ import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
-import { restoreDropped } from './pagehistory-lib.js';
+import { restoreDropped, takeObjects } from './pagehistory-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -385,6 +386,21 @@ export function restorePageObjects(tab, items) {
   ensureTab(tab);
   tab.objects = restoreDropped(tab.objects, items);
   changed(tab);
+}
+
+/**
+ * Page operation `res.remove` (e.g. Apply redactions): take out the objects with these ids without an
+ * annotation undo step. Returns restorePageObjects items, so page undo puts them back.
+ */
+export function dropPageObjects(tab, ids) {
+  ensureTab(tab);
+  const { objects, items } = takeObjects(tab.objects, ids);
+  if (!items.length) return items;
+  tab.objects = objects;
+  for (const it of items) selOf(tab).delete(it.obj.id);
+  changed(tab);
+  selectionChanged(tab);
+  return items;
 }
 
 // ---------------------------------------------------------------- rendering

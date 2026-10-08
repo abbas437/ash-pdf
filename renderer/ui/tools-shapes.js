@@ -7,6 +7,7 @@ import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { annotations, selectHandlers } from './annotations.js';
+import { redactOptions } from './redact.js';
 
 const SHAPES = [
   ['rect', 'Rectangle', 'R', '<rect x="4" y="6" width="16" height="12" rx="1"/>'],
@@ -146,7 +147,7 @@ export function initShapeTools() {
   mk('draw', 'Draw (freehand)', 'draw', 'P', ['dash', 'color', 'strokeWidth', opacityCtl]);
   mk('highlight', 'Highlight area', 'highlight', 'H', [hlColorCtl, hlOpacityCtl]);
   mk('whiteout', 'Whiteout (covers, does not redact)', 'whiteout', 'W', null);
-  mk('redact', 'Redact: mark areas to remove', 'redact', 'X', null);
+  mk('redact', 'Redact: mark areas to remove', 'redact', 'X', [redactOptions]);
   bus.on('tool:changed', ({ tool }) => document.body.classList.toggle('ann-drawing', MARKUP_TOOLS.has(tool)));
   document.body.classList.toggle('ann-drawing', MARKUP_TOOLS.has(state.tool));
   document.addEventListener('keydown', (e) => {

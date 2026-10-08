@@ -30,3 +30,19 @@ export function restoreDropped(objects, items) {
   }
   return out;
 }
+
+/**
+ * Split off the objects with the given ids: `items` are droppedBy-style deep copies with their index
+ * (restoreDropped puts them back), `objects` the rest. Used for `res.remove` of a page operation.
+ */
+export function takeObjects(objects, ids) {
+  const gone = new Set(ids);
+  const items = objects.flatMap((o, index) => (gone.has(o.id) ? [{ obj: structuredClone(o), index }] : []));
+  return { objects: objects.filter((o) => !gone.has(o.id)), items };
+}
+
+/**
+ * The overlay part of a history entry seen from the opposite stack: what `step` took out (`taken`)
+ * comes back next time, and what `objs.restore` brought back goes again.
+ */
+export const swapObjs = (objs, taken) => ({ restore: taken, remove: objs.restore.map((it) => it.obj.id) });
