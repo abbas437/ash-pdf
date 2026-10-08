@@ -7,6 +7,9 @@
 //                       {vertical: [{x, y0, y1}], horizontal: [{y, x0, x1}]} (thin filled rectangles
 //                       and axis-aligned stroked segments; curves ignored)
 //   extractTable(items, rules?) -> rows of cells: string | number | null (an empty cell)
+//   extractLayout(items, rules?) -> {rows (as extractTable), at: where each sheet row's text starts}
+//   pageBox / imagesFromOps / placeImages / rgbaPixels  the page's images and where they go in the sheet
+//                       (see "images" below)
 //
 // Rows: items whose baselines are within 0.4 x font size of a row's baseline join that row.
 // Cells: within a row, items closer than CELL_GAP x font size merge into one chunk ("Net amount"),
@@ -55,12 +58,15 @@ export function cellValue(text) {
   return s;
 }
 
+// Matrix product m x n (pdf.js / PDF [a b c d e f] form): n applied first, then m.
+const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
+  m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
+const apply = (m, x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+
 // pdf.js 6 operator list -> ruling lines (see the header). Paths are mapped through cm/save/restore and
 // form matrices into page space, the space textItems() reports.
 export function rulesFromOps({ fnArray, argsArray }, OPS) {
   const vertical = [], horizontal = [];
-  const mul = (m, n) => [m[0] * n[0] + m[2] * n[1], m[1] * n[0] + m[3] * n[1], m[0] * n[2] + m[2] * n[3],
-    m[1] * n[2] + m[3] * n[3], m[0] * n[4] + m[2] * n[5] + m[4], m[1] * n[4] + m[3] * n[5] + m[5]];
   const STROKE = new Set([OPS.stroke, OPS.closeStroke, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
   const FILL = new Set([OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]);
   const rule = (ax, ay, bx, by) => {
@@ -183,7 +189,8 @@ function tableRows(seg, wide) {
   });
 }
 
-function ruledRows(seg, horizontal) {
+// Rows of a ruled block -> groups of rows that form one sheet row each (lines of the same cells joined).
+function ruledGroups(seg, horizontal) {
   const xs = seg.xs;
   const grid = seg.rows.filter((r) => r.xs);
   // Rows a (above) and b are in different cells when a horizontal rule over the block lies between them.
@@ -198,6 +205,12 @@ function ruledRows(seg, horizontal) {
     if (r.xs && joinLines && last?.xs && !apart(last.rows.at(-1), r)) last.rows.push(r);
     else groups.push({ xs: r.xs, rows: [r] });
   }
+  return groups;
+}
+
+function ruledRows(seg, groups) {
+  const xs = seg.xs;
+  const grid = seg.rows.filter((r) => r.xs);
   const col = (c) => xs.filter((x) => x < (c.x0 + c.x1) / 2).length - 1;
   const used = [...new Set(grid.flatMap((r) => r.chunks.map(col)))].sort((a, b) => a - b);
   return groups.map((g) => {
@@ -210,6 +223,12 @@ function ruledRows(seg, horizontal) {
 
 /** Text items of one page (+ its ruling lines, optional) -> rows x columns of cell values (see the header). */
 export function extractTable(items, rules = null) {
+  return extractLayout(items, rules).rows;
+}
+
+/** extractTable() plus where each sheet row comes from: at[k] = {x, y}, the start of the baseline (PDF points)
+ *  of row k's first text, or null for the empty row between blocks. */
+export function extractLayout(items, rules = null) {
   const vertical = rules?.vertical ?? [], horizontal = rules?.horizontal ?? [];
   const rows = groupRows(items.filter((it) => it.str.trim())).map((r) => {
     const xs = ruleXs(r.y, vertical);
@@ -218,7 +237,7 @@ export function extractTable(items, rules = null) {
     const inside = grid && chs.every((c) => c.x0 >= xs[0] - 1 && c.x1 <= xs.at(-1) + 1 && !xs.some((x) => x > c.x0 + 1 && x < c.x1 - 1));
     return { y: r.y, chunks: chs, xs: inside ? xs : null };
   });
-  if (!rows.length) return [];
+  if (!rows.length) return { rows: [], at: [] };
   const all = rows.flatMap((r) => r.chunks);
   const textW = Math.max(...all.map((c) => c.x1)) - Math.min(...all.map((c) => c.x0));
   const wide = (c) => c.x1 - c.x0 > PROSE * textW;
@@ -246,13 +265,119 @@ export function extractTable(items, rules = null) {
     } else open({ kind: 'table', rows: [row], bands: addSpans([], row.chunks) });
   }
 
-  const out = [];
+  const out = [], at = [];
   segs.forEach((seg, k) => {
-    if (k) out.push([]);
+    if (k) { out.push([]); at.push(null); }
+    let src = seg.rows;
     if (seg.kind === 'table') out.push(...tableRows(seg, wide));
-    else if (seg.kind === 'ruled') out.push(...ruledRows(seg, horizontal));
-    else out.push(...proseRows(seg));
+    else if (seg.kind === 'ruled') {
+      const groups = ruledGroups(seg, horizontal);
+      out.push(...ruledRows(seg, groups));
+      src = groups.map((g) => g.rows[0]);
+    } else out.push(...proseRows(seg));
+    at.push(...src.map((r) => ({ x: r.chunks[0].x0, y: r.y })));
   });
   const width = Math.max(1, ...out.map((r) => r.length));
-  return out.map((r) => [...r, ...Array(width - r.length).fill(null)]);
+  return { rows: out.map((r) => [...r, ...Array(width - r.length).fill(null)]), at };
+}
+
+// ---------------------------------------------------------------- images (Export to Excel, "Include images")
+// Images float over the sheet (they never move cells): each is anchored at the sheet row after the text rows
+// above its top edge and at the column its left edge falls in, with the page width mapped to the used columns
+// (at least MIN_COLS) at Excel's default column width; an image that would cover one placed before it moves down.
+export const COL_PX = 64; // Excel's default column width, px
+export const ROW_PX = 20; // Excel's default row height (15 pt), px
+const MIN_IMG = 16;       // px: an image smaller than this either side is left out (rules, dots, spacers)
+const MAX_PX = 1000;      // px: an image's longer side in the sheet is capped at this
+const MIN_COLS = 8;       // the page width maps to at least this many columns
+
+/** Page view box [x0, y0, x1, y1] + /Rotate -> {m, width, height}: m maps PDF user space to the displayed page in
+ *  points, origin top-left, y down (what pdf.js page.getViewport({scale: 1}).transform gives). */
+export function pageBox(view, rotate = 0) {
+  const r = ((rotate % 360) + 360) % 360;
+  const [x0, y0, x1, y1] = view;
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const [a, b, c, d] = { 0: [1, 0, 0, -1], 90: [0, 1, 1, 0], 180: [-1, 0, 0, 1], 270: [0, -1, -1, 0] }[r];
+  const width = r % 180 ? y1 - y0 : x1 - x0, height = r % 180 ? x1 - x0 : y1 - y0;
+  return { m: [a, b, c, d, width / 2 - a * cx - c * cy, height / 2 - b * cx - d * cy], width, height };
+}
+
+/** pdf.js operator list + pageBox() -> the page's images [{id | data, width, height, box}]: id of a paintImageXObject
+ *  (its pixels are in page.objs, or page.commonObjs for "g_" ids), data of an inline image; width x height in pixels;
+ *  box {left, top, right, bottom} where the image's unit square lands on the displayed page (points, y down).
+ *  Images under MIN_IMG px either side, and images entirely off the page, are left out. */
+export function imagesFromOps({ fnArray, argsArray }, OPS, page) {
+  const out = [];
+  let ctm = [1, 0, 0, 1, 0, 0];
+  const stack = [];
+  for (let i = 0; i < fnArray.length; i++) {
+    const fn = fnArray[i], args = argsArray[i];
+    if (fn === OPS.save) stack.push(ctm);
+    else if (fn === OPS.restore) ctm = stack.pop() ?? ctm;
+    else if (fn === OPS.transform) ctm = mul(ctm, args);
+    else if (fn === OPS.paintFormXObjectBegin) { stack.push(ctm); if (args?.[0]) ctm = mul(ctm, args[0]); }
+    else if (fn === OPS.paintFormXObjectEnd) ctm = stack.pop() ?? ctm;
+    else if (fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject) {
+      const inline = fn === OPS.paintInlineImageXObject;
+      const width = inline ? args?.[0]?.width : args?.[1], height = inline ? args?.[0]?.height : args?.[2];
+      if (!(width >= MIN_IMG && height >= MIN_IMG)) continue;
+      const m = mul(page.m, ctm);
+      const pts = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([x, y]) => apply(m, x, y));
+      const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+      const box = { left: Math.min(...xs), top: Math.min(...ys), right: Math.max(...xs), bottom: Math.max(...ys) };
+      if (box.right <= 0 || box.bottom <= 0 || box.left >= page.width || box.top >= page.height) continue;
+      if (box.right - box.left < 1 || box.bottom - box.top < 1) continue;
+      out.push({ ...(inline ? { data: args[0] } : { id: args[0] }), width, height, box });
+    }
+  }
+  return out;
+}
+
+/** Image boxes (displayed page, points, y down) + rowTops[k] = displayed y of sheet row k's baseline (null for the
+ *  empty row between blocks) + the page width + the sheet's used column count -> [{row, col, width, height}]:
+ *  row 0-based, col fractional (columns of COL_PX), width/height in px. Same order as boxes. */
+export function placeImages(boxes, rowTops, pageWidth, usedCols) {
+  const ys = rowTops.map((y, k) => {
+    if (y !== null) return y;
+    const prev = rowTops.slice(0, k).findLast((v) => v !== null), next = rowTops.slice(k + 1).find((v) => v !== null);
+    return prev === undefined ? next : next === undefined ? prev : (prev + next) / 2;
+  });
+  const scale = (Math.max(usedCols, MIN_COLS) * COL_PX) / pageWidth; // px per point
+  const order = boxes.map((_, i) => i).sort((p, q) => boxes[p].top - boxes[q].top || boxes[p].left - boxes[q].left);
+  const placed = [], out = [];
+  for (const i of order) {
+    const b = boxes[i];
+    let width = (b.right - b.left) * scale, height = (b.bottom - b.top) * scale;
+    const cap = Math.min(1, MAX_PX / Math.max(width, height));
+    width *= cap; height *= cap;
+    const col = (Math.max(0, b.left) * scale) / COL_PX, x = col * COL_PX;
+    let row = ys.filter((y) => y !== undefined && y <= b.top).length;
+    for (let moved = true; moved;) {
+      moved = false;
+      for (const p of placed) {
+        const y = row * ROW_PX;
+        if (y < p.y1 && y + height > p.y0 && x < p.x1 && x + width > p.x0) { row = Math.ceil(p.y1 / ROW_PX); moved = true; }
+      }
+    }
+    placed.push({ x0: x, x1: x + width, y0: row * ROW_PX, y1: row * ROW_PX + height });
+    out[i] = { row, col, width: Math.round(width), height: Math.round(height) };
+  }
+  return out;
+}
+
+/** pdf.js decoded image {width, height, kind, data} -> RGBA bytes. kind 1: 1 bit per pixel, rows padded to a byte,
+ *  a set bit is white; 2: RGB; 3: RGBA. */
+export function rgbaPixels({ width, height, kind, data }) {
+  const n = width * height;
+  if (kind === 3) return data.subarray(0, n * 4);
+  const out = new Uint8ClampedArray(n * 4);
+  const stride = (width + 7) >> 3;
+  for (let i = 0; i < n; i++) {
+    if (kind === 2) { out[i * 4] = data[i * 3]; out[i * 4 + 1] = data[i * 3 + 1]; out[i * 4 + 2] = data[i * 3 + 2]; } else {
+      const x = i % width, y = (i - x) / width;
+      out[i * 4] = out[i * 4 + 1] = out[i * 4 + 2] = (data[y * stride + (x >> 3)] >> (7 - (x & 7))) & 1 ? 255 : 0;
+    }
+    out[i * 4 + 3] = 255;
+  }
+  return out;
 }

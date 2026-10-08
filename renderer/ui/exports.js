@@ -2,6 +2,9 @@
 //   Export to Excel workbook (.xlsx)…  pdf.js text of a page range, grouped into rows and columns by
 //       table-extract.js (helped by the page's ruling lines from pdf.js getOperatorList), one worksheet
 //       "Page N" per page, plain numbers stored as numbers; written by the vendored write-excel-file and saved with api.saveFile.
+//       With "Include images" (default on), the page's images (pdf.js paintImageXObject / paintInlineImageXObject, pixels
+//       from page.objs) float over the sheet near the text rows they sit between (table-extract.js placeImages);
+//       PNG when an image has transparency, else JPEG.
 //   Export to image (PNG/JPEG)…   pages ("All" or a range like 1-3,7; default the current page) at 72/150/300
 //       dpi; with "Include annotations", unsaved overlay objects are burnt in with the print path's
 //       flattenedCopy (viewextras.js). One page is saved with api.saveFile; several pages go one at a time into a
@@ -11,7 +14,7 @@ import { h } from './dom.js';
 import { showDialog, showError, toast } from './dialogs.js';
 import { viewer } from './viewer.js';
 import { flattenedCopy } from './viewextras.js';
-import { textItems, extractTable, rulesFromOps } from './table-extract.js';
+import { textItems, extractLayout, rulesFromOps, pageBox, imagesFromOps, placeImages, rgbaPixels, COL_PX } from './table-extract.js';
 import { MAX_FILES } from '../../src/core/imgexport.js';
 
 const ops = () => import('../../src/core/pdfOps.js');
@@ -26,13 +29,80 @@ function sheetData(rows) {
   return rows.map((r) => r.map((v) => (v === null ? null : { type: typeof v === 'number' ? Number : String, value: v })));
 }
 
-/** Pages (0-based) -> xlsx bytes, one worksheet "Page N" per page. */
-export async function xlsxBytes(tab, indices) {
+const MAX_BITMAP = 2048; // px: a larger image is scaled down to this on its longer side before encoding
+
+// pdf.js image object (decoded in the worker) -> canvas.
+function imageCanvas(img) {
+  const c = document.createElement('canvas');
+  c.width = img.width; c.height = img.height;
+  const ctx = c.getContext('2d');
+  if (img.bitmap) ctx.drawImage(img.bitmap, 0, 0);
+  else ctx.putImageData(new ImageData(new Uint8ClampedArray(rgbaPixels(img)), img.width, img.height), 0, 0);
+  return c;
+}
+
+// One image object -> {content: Blob, contentType}: PNG when any pixel is not opaque, else JPEG; capped at MAX_BITMAP.
+async function encodeImage(img) {
+  let c = imageCanvas(img);
+  const px = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  let alpha = false;
+  for (let k = 3; k < px.length && !alpha; k += 4) alpha = px[k] < 255;
+  const s = Math.min(1, MAX_BITMAP / Math.max(c.width, c.height));
+  if (s < 1) {
+    const d = document.createElement('canvas');
+    d.width = Math.max(1, Math.round(c.width * s)); d.height = Math.max(1, Math.round(c.height * s));
+    d.getContext('2d').drawImage(c, 0, 0, d.width, d.height);
+    c.width = 0; c = d;
+  }
+  const contentType = alpha ? 'image/png' : 'image/jpeg';
+  const content = await new Promise((r) => c.toBlob(r, contentType, 0.9));
+  c.width = 0;
+  return content ? { content, contentType } : null;
+}
+
+// An image XObject's pixels: page.objs (commonObjs for "g_" ids) once resolved; null after 5 s.
+function imageObject(page, id) {
+  const objs = id.startsWith('g_') ? page.commonObjs : page.objs;
+  if (objs.has(id)) return Promise.resolve(objs.get(id));
+  return Promise.race([new Promise((r) => objs.get(id, r)), new Promise((r) => setTimeout(() => r(null), 5000))]);
+}
+
+// One page's images -> write-excel-file images, placed against the sheet rows' positions (layout.at).
+async function sheetImages(page, opList, layout, usedCols) {
+  const box = pageBox(page.view, page.rotate);
+  const found = imagesFromOps(opList, viewer.pdfjs.OPS, box);
+  if (!found.length) return [];
+  const rowTops = layout.at.map((p) => (p ? (box.m[1] * p.x + box.m[3] * p.y + box.m[5]) : null));
+  const spots = placeImages(found.map((f) => f.box), rowTops, box.width, usedCols);
+  const out = [];
+  for (const [k, f] of found.entries()) {
+    try {
+      const img = f.data ?? await imageObject(page, f.id);
+      if (!img?.width || !img?.height) continue;
+      const enc = await encodeImage(img);
+      if (!enc) continue;
+      const { row, col, width, height } = spots[k];
+      out.push({ ...enc, width, height, dpi: 96, anchor: { row: row + 1, column: Math.floor(col) + 1 },
+        offsetX: Math.round((col - Math.floor(col)) * COL_PX), title: `Image ${out.length + 1}` });
+    } catch { /* an image pdf.js cannot hand over is left out */ }
+  }
+  return out;
+}
+/** Pages (0-based) -> xlsx bytes, one worksheet "Page N" per page; `images` adds each page's images. */
+export async function xlsxBytes(tab, indices, { images = true } = {}) {
   const sheets = [];
   for (const i of indices) {
-    let rules = null; // ruling lines give a table's columns; text alone still works without them
-    try { rules = rulesFromOps(await tab.pages[i].getOperatorList(), viewer.pdfjs.OPS); } catch { /* damaged page */ }
-    sheets.push({ data: sheetData(extractTable(textItems(await viewer.getTextContent(tab, i)), rules)), sheet: `Page ${i + 1}` });
+    const page = tab.pages[i];
+    let opList = null, rules = null; // ruling lines give a table's columns; text alone still works without them
+    try { opList = await page.getOperatorList(); rules = rulesFromOps(opList, viewer.pdfjs.OPS); } catch { /* damaged page */ }
+    const layout = extractLayout(textItems(await viewer.getTextContent(tab, i)), rules);
+    const data = sheetData(layout.rows);
+    const sheet = { data, sheet: `Page ${i + 1}` };
+    if (images && opList) {
+      const imgs = await sheetImages(page, opList, layout, data[0].length);
+      if (imgs.length) sheet.images = imgs;
+    }
+    sheets.push(sheet);
   }
   const { default: writeExcelFile } = await import('write-excel-file');
   const blob = await writeExcelFile(sheets).toBlob();
@@ -51,7 +121,8 @@ export async function excelDialog(tab = activeTab()) {
       return true;
     } catch (err) { error.textContent = `Pages: ${err.message}`; return false; }
   };
-  const body = h('div', {}, h('div.vx-print-form', {}, field('Pages', pages), error),
+  const withImages = h('input#xp-xlsx-images', { type: 'checkbox', checked: true });
+  const body = h('div', {}, h('div.vx-print-form', {}, field('Pages', pages), field('Include images', withImages), error),
     h('p.vx-note', {}, 'Works best for table-like pages. Each page becomes a worksheet; text is placed in rows and columns by its position.'));
   const res = await showDialog({
     title: 'Export to Excel', body, className: 'xp-dialog xp-xlsx-dialog', initialFocus: '#xp-xlsx-pages',
@@ -59,7 +130,7 @@ export async function excelDialog(tab = activeTab()) {
   });
   if (res !== 'export' || !indices) return null;
   try {
-    const bytes = await xlsxBytes(tab, indices);
+    const bytes = await xlsxBytes(tab, indices, { images: withImages.checked });
     const saved = await window.api.saveFile({ bytes, defaultPath: `${baseName(tab)}.xlsx`, filters: [{ name: 'Excel workbook', extensions: ['xlsx'] }] });
     if (saved) toast(`Saved ${savedName(saved)}`);
     return saved?.path ?? null;
