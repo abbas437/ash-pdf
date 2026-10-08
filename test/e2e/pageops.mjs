@@ -179,7 +179,7 @@ try {
   await undoTo(6);
   eq(await texts(), P(1, 2, 3, 4, 5, 6), 'undo after replace');
   eq(await lastMap(), [[1, 1], [2, null], [3, null], [4, 4], [5, 5], [6, 6]], 'undo map');
-  eq(await objPages(), [0], 'undo keeps the other annotation on page 1 (unsaved ones on replaced pages go, as with Delete pages)');
+  eq(await objPages(), [0, 2], 'undo brings the unsaved annotation of replaced page 3 back beside the one on page 1');
 
   step = 'dark theme dialog';
   await ev('document.documentElement.dataset.theme = "dark";');
