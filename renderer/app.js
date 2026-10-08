@@ -252,12 +252,12 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     for (const hook of state.hooks.beforeSave) hook.saved?.(tab, tab.rev === rev);
     if (signedUpdate && tab.bytes === full) tab.bytes = bytes; // the next update appends to the file as written
     tab.fileBytes = bytes;
-    if (!signedUpdate && tab.rev === rev) tab.requiresFullSave = false; // the rewritten file no longer holds the old bytes
     if (tab.rev === rev) markDirty(tab, false);
     // tab.requiresFullSave (set by Apply redactions, ui/redact.js): any incremental save path must
-    // write in full while it is set. This save wrote the whole file, so the redaction is final: drop
-    // the page undo/redo entries (they hold the pre-redaction bytes) and clear the flag.
-    if (tab.requiresFullSave) { tab.bytesUndo = []; tab.bytesRedo = []; tab.requiresFullSave = false; }
+    // write in full while it is set. A full save wrote the whole file, so the redaction is final: drop
+    // the page undo/redo entries (they hold the pre-redaction bytes) and clear the flag. An edit that
+    // landed during the save does not bring the redacted content back, so this does not wait on tab.rev.
+    if (!signedUpdate && tab.requiresFullSave) { tab.bytesUndo = []; tab.bytesRedo = []; tab.requiresFullSave = false; }
     renderTabs();
     toast(signedUpdate ? 'Saved as an update; the signature is kept' : `Saved ${tab.name}`);
     return true;
