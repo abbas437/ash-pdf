@@ -84,4 +84,14 @@ describe('image export bytes and jobs', () => {
     assert.equal(jobs.close(1, id), true);
     assert.throws(() => jobs.take(1, id, 1, PNG), /no such job/);
   });
+  test('dropJobsFor removes only that sender\'s jobs; a write to a dropped job is rejected', () => {
+    const jobs = new ImageExportJobs();
+    const plan = { ...planImageExport(req()), folder: '/out' };
+    const a1 = jobs.open(1, plan), a2 = jobs.open(1, plan), b = jobs.open(12, plan);
+    assert.equal(jobs.dropJobsFor(1), 2);
+    assert.throws(() => jobs.take(1, a1, 0, PNG), /no such job/);
+    assert.throws(() => jobs.take(1, a2, 0, PNG), /no such job/);
+    assert.deepEqual(jobs.take(12, b, 0, PNG), { folder: '/out', name: 'Report-p01.png' });
+    assert.equal(jobs.dropJobsFor(1), 0);
+  });
 });
