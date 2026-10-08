@@ -1,7 +1,12 @@
 // Test helpers: fixture builders (pdf-lib) and pdf.js inspection/rendering.
-import { PDFDocument, degrees, concatTransformationMatrix, decodePDFRawStream, PDFArray, PDFRawStream, PDFHexString, PDFName } from 'pdf-lib';
+import { PDFDocument, PDFStreamWriter, degrees, concatTransformationMatrix, decodePDFRawStream, PDFArray, PDFRawStream, PDFHexString, PDFName } from 'pdf-lib';
 import { createCanvas } from '@napi-rs/canvas';
 import { fileURLToPath } from 'node:url';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { trailerSize } from '../src/core/incremental.js';
 
 const pdfjsPromise = import('pdfjs-dist/legacy/build/pdf.mjs');
 // pdf.js wants forward slashes and a trailing slash (Windows paths use backslashes).
@@ -107,7 +112,13 @@ export function isColor(px, [r, g, b], tol = 40) {
  * the field empty (no /V). Written without object streams so the raw byte-scan fallback of
  * detectSignatures can see the dictionaries too.
  */
-export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2 } = {}) {
+/**
+ * A PDF with a signature field. `exact`: the /ByteRange covers the whole file except the /Contents
+ * hex string, as a real signer writes it (the signature value itself stays a dummy). `objectStreams`:
+ * objects in an (unencoded) object stream with a cross-reference stream, as pdf-lib's default save.
+ * `mdp`: certify it (catalog /Perms /DocMDP, /TransformParams /P mdp).
+ */
+export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2, exact = false, objectStreams = false, mdp = null } = {}) {
   const doc = await PDFDocument.create();
   for (let i = 0; i < pages; i++) doc.addPage([612, 792]).drawText(`Signed page ${i + 1}`, { x: 50, y: 700, size: 18 });
   const ctx = doc.context;
@@ -116,12 +127,32 @@ export async function makeSignedPdf({ signed = true, sigFlags = 3, pages = 2 } =
   if (signed) {
     field.V = ctx.register(ctx.obj({
       Type: 'Sig', Filter: 'Adobe.PPKLite', SubFilter: 'adbe.pkcs7.detached',
-      ByteRange: [0, 1000, 9192, 500], Contents: PDFHexString.of('00'.repeat(64)), M: PDFHexString.fromText('D:20261007120000Z'),
+      ByteRange: exact ? [0, 1111111111, 2222222222, 3333333333] : [0, 1000, 9192, 500], Contents: PDFHexString.of('00'.repeat(64)), M: PDFHexString.fromText('D:20261007120000Z'),
+      ...(mdp != null ? { Reference: [{ Type: 'SigRef', TransformMethod: 'DocMDP', TransformParams: { Type: 'TransformParams', P: mdp, V: PDFName.of('1.2') } }] } : {}),
     }));
+    if (mdp != null) doc.catalog.set(PDFName.of('Perms'), ctx.obj({ DocMDP: field.V }));
   }
   const fieldRef = ctx.register(ctx.obj(field));
   page.node.set(PDFName.of('Annots'), ctx.obj([fieldRef]));
   doc.catalog.set(PDFName.of('AcroForm'), ctx.obj({ Fields: [fieldRef], SigFlags: sigFlags }));
+  let bytes;
+  if (objectStreams) { await doc.flush(); bytes = await PDFStreamWriter.forContext(ctx, 50, false).serializeToBuffer(); } else bytes = await doc.save({ useObjectStreams: false });
+  if (!exact) return bytes;
+  const text = Buffer.from(bytes).toString('latin1');
+  const c = text.indexOf('/Contents <00');
+  const start = c + '/Contents '.length, end = text.indexOf('>', start) + 1;
+  const placeholder = '[ 0 1111111111 2222222222 3333333333 ]';
+  const value = `[ 0 ${start} ${end} ${bytes.length - end} ]`.padEnd(placeholder.length, ' ');
+  const at = text.indexOf(placeholder);
+  if (c < 0 || at < 0) throw new Error('makeSignedPdf: placeholder not found');
+  bytes.set(Buffer.from(value, 'latin1'), at);
+  return bytes;
+}
+
+/** `bytes` with a trailer /Encrypt entry (a Standard security handler dictionary; nothing is encrypted). */
+export async function makeEncryptedPdf() {
+  const doc = await PDFDocument.load(await makePdf(1));
+  doc.context.trailerInfo.Encrypt = doc.context.register(doc.context.obj({ Filter: 'Standard', V: 1, R: 2, O: PDFHexString.of('00'.repeat(32)), U: PDFHexString.of('00'.repeat(32)), P: -4 }));
   return doc.save({ useObjectStreams: false });
 }
 
@@ -150,4 +181,106 @@ export async function decodedStrings(bytes) {
     } else walk(o);
   }
   return parts.join('\n');
+}
+
+/**
+ * `bytes` (whose latest section is a cross-reference stream) plus an incremental update written as a
+ * cross-reference stream, as other tools do: a new document information dictionary (number /Size)
+ * and the stream itself (/Size + 1).
+ */
+export async function appendXrefStreamUpdate(bytes) {
+  const text = Buffer.from(bytes).toString('latin1');
+  const prev = Number([...text.matchAll(/startxref\s+(\d+)/g)].pop()[1]);
+  const size = trailerSize(bytes);
+  const root = /\/Root\s+(\d+\s+\d+\s+R)/.exec(text.slice(prev))[1];
+  let out = text.endsWith('\n') ? text : text + '\n';
+  const infoAt = out.length;
+  out += `${size} 0 obj\n<< /Producer (xref-stream update) >>\nendobj\n`;
+  const xrefAt = out.length;
+  const row = (off) => [1, (off >>> 24) & 255, (off >>> 16) & 255, (off >>> 8) & 255, off & 255, 0, 0];
+  const data = Buffer.from([...row(infoAt), ...row(xrefAt)]);
+  out += `${size + 1} 0 obj\n<< /Type /XRef /Size ${size + 2} /Root ${root} /Info ${size} 0 R /Prev ${prev} /W [ 1 4 2 ] /Index [ ${size} 2 ] /Length ${data.length} >>\nstream\n`;
+  return new Uint8Array(Buffer.concat([Buffer.from(out, 'latin1'), data, Buffer.from(`\nendstream\nendobj\nstartxref\n${xrefAt}\n%%EOF\n`, 'latin1')]));
+}
+
+/**
+ * Strict check of the update section `out` appends to `original` (throws on the first problem):
+ * the final startxref points at a classic `xref` table after the original bytes, every in-use entry
+ * points at `<num> <gen> obj` in the appended part, /Prev is the original's startxref and /Size is
+ * at least the original's /Size and above every number in the table. Returns { prev, size, numbers }.
+ */
+export function checkAppendedXref(original, out) {
+  const fail = (m) => { throw new Error(`appended xref: ${m}`); };
+  const text = Buffer.from(out).toString('latin1');
+  const startxref = (t) => { const m = /startxref\s+(\d+)\s+%%EOF\s*$/.exec(t); if (!m) fail('no final startxref'); return Number(m[1]); };
+  const prevOrig = startxref(Buffer.from(original).toString('latin1'));
+  const at = startxref(text);
+  if (at < original.length || !text.startsWith('xref', at)) fail(`startxref ${at} does not point at an appended "xref"`);
+  let i = at + 4;
+  const numbers = [];
+  const ws = /\s*/y;
+  const skip = () => { ws.lastIndex = i; ws.exec(text); i = ws.lastIndex; };
+  skip();
+  for (;;) {
+    const head = /(\d+) (\d+)[ \t]*\r?\n/y; head.lastIndex = i;
+    const h = head.exec(text);
+    if (!h) break;
+    i = head.lastIndex;
+    for (let k = 0; k < Number(h[2]); k++) {
+      const e = /(\d{10}) (\d{5}) ([nf])(?: \r| \n|\r\n)/y; e.lastIndex = i;
+      const m = e.exec(text);
+      if (!m) fail(`bad entry at ${i}`);
+      i = e.lastIndex;
+      const num = Number(h[1]) + k;
+      numbers.push(num);
+      if (m[3] === 'n') {
+        const off = Number(m[1]);
+        if (off < original.length) fail(`object ${num} points into the original bytes (${off})`);
+        if (!text.startsWith(`${num} ${Number(m[2])} obj`, off)) fail(`object ${num} offset ${off} does not start with "${num} ${Number(m[2])} obj"`);
+      }
+    }
+  }
+  skip();
+  const tr = /trailer\s*<<([\s\S]*)>>\s*startxref/y; tr.lastIndex = i;
+  const t = tr.exec(text);
+  if (!t) fail('no trailer after the table');
+  const prev = Number(/\/Prev\s+(\d+)/.exec(t[1])?.[1]);
+  if (prev !== prevOrig) fail(`/Prev ${prev} is not the original startxref ${prevOrig}`);
+  const size = Number(/\/Size\s+(\d+)/.exec(t[1])?.[1]);
+  const origSize = trailerSize(original);
+  if (!(size >= origSize) || numbers.some((n) => n >= size)) fail(`/Size ${size} (original ${origSize}, numbers ${numbers})`);
+  return { prev, size, numbers };
+}
+
+/**
+ * Open with pdf.js without its xref recovery (stopAtErrors) and collect its warnings (a broken
+ * table makes it log "Indexing all PDF objects" and rebuild). Returns { pages, annots, warnings }
+ * with the subtypes of page `pageIndex`'s annotations.
+ */
+export async function pdfjsStrict(bytes, pageIndex = 0) {
+  const pdfjs = await pdfjsPromise;
+  const warnings = [];
+  const log = console.log;
+  console.log = (...a) => { const m = a.join(' '); if (/^Warning:/.test(m)) warnings.push(m); else log(...a); };
+  try {
+    const task = pdfjs.getDocument({ data: bytes.slice(), standardFontDataUrl: STANDARD_FONTS, verbosity: 1, isEvalSupported: false, stopAtErrors: true });
+    const doc = await task.promise;
+    try {
+      const annots = (await (await doc.getPage(pageIndex + 1)).getAnnotations()).map((a) => a.subtype);
+      return { pages: doc.numPages, annots, warnings };
+    } finally { await task.destroy(); }
+  } finally { console.log = log; }
+}
+
+/** `qpdf --check` of `bytes`: { ok, output } (ok = exit 0, no warnings), or null when qpdf is not installed. */
+export function qpdfCheck(bytes) {
+  if (spawnSync('qpdf', ['--version']).error) return null;
+  const dir = mkdtempSync(join(tmpdir(), 'ash-qpdf-'));
+  try {
+    const file = join(dir, 'in.pdf');
+    writeFileSync(file, bytes);
+    const r = spawnSync('qpdf', ['--check', file], { encoding: 'utf8' });
+    const output = `${r.stdout}${r.stderr}`;
+    return { ok: r.status === 0 && !/warning/i.test(output), output };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 }
