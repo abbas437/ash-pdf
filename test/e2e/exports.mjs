@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// End-to-end test of File > Export to Excel and File > Export page as image (renderer/ui/exports.js) in
+// End-to-end test of File > Export to Excel and File > Export to image (one page via saveFile, several via a folder) (renderer/ui/exports.js) in
 // Chromium via playwright-core (run `node scripts/vendor.js` first). A generated 3x4 table PDF is exported
 // to .xlsx through the menu and dialog; the download is unzipped and its sheet XML must hold the table with
 // numbers stored as numbers. Page 1 exported as PNG at 150 dpi must be 1275 x 1650 px (Letter), and as JPEG
@@ -160,6 +160,44 @@ try {
   await page.fill('#xp-img-quality', '80');
   const jpg = await download(() => page.locator('.xp-img-dialog button[data-value="export"]').click());
   check(jpg.name === 'table-page-2.jpg' && jpg.bytes[0] === 0xff && jpg.bytes[1] === 0xd8, `jpeg ${jpg.name}`);
+
+  step = 'image: pages 1-3, PNG, 72 dpi -> one file per page through imageExportBegin/Write/End';
+  const pageCount = await page.evaluate(() => window.ashStudio.state.tabs.find((t) => t.id === window.ashStudio.state.activeId).numPages);
+  check(pageCount === 3, `fixture has ${pageCount} pages`);
+  const many = [];
+  const onDl = (dl) => many.push(dl);
+  page.on('download', onDl);
+  await menu('export-image');
+  await page.fill('#xp-img-page', '1-3');
+  await page.selectOption('#xp-img-format', 'png');
+  await page.selectOption('#xp-img-dpi', '72');
+  await page.locator('.xp-img-dialog button[data-value="export"]').click();
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Exported 3 images/.test(t.textContent)), null, { timeout: 15000 })
+    .catch(() => { throw new Error('no "Exported 3 images" toast'); });
+  page.off('download', onDl);
+  const imgs = await Promise.all(many.map(async (dl) => ({ name: dl.suggestedFilename(), bytes: await readFile(await dl.path()) })));
+  check(JSON.stringify(imgs.map((f) => f.name).sort()) === '["table-p1.png","table-p2.png","table-p3.png"]', `files ${imgs.map((f) => f.name)}`);
+  for (const f of imgs) {
+    check(f.bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), `${f.name} not a PNG`);
+    check(f.bytes.readUInt32BE(16) === 612 && f.bytes.readUInt32BE(20) === 792, `${f.name} size at 72 dpi`);
+  }
+  check(await page.locator('.xp-img-progress').count() === 0, 'progress dialog left open');
+
+  step = 'image: shim rejects what main rejects';
+  const rejected = await page.evaluate(async () => {
+    const out = [];
+    const ok = { baseName: 'x', pageCount: 3, pages: [1, 2], format: 'png' };
+    for (const r of [{ ...ok, folder: '/tmp' }, { ...ok, pages: Array.from({ length: 2001 }, (_, i) => i + 1), pageCount: 3000 }]) {
+      out.push(await window.api.imageExportBegin(r).then(() => 'accepted', (e) => e.message));
+    }
+    const job = await window.api.imageExportBegin(ok);
+    out.push(await window.api.imageExportWrite(job.jobId, 0, [0x89, 0x50]).then(() => 'accepted', (e) => e.message));
+    await window.api.imageExportEnd(job.jobId);
+    out.push(await window.api.imageExportWrite(job.jobId, 1, new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])).then(() => 'accepted', (e) => e.message));
+    return out;
+  });
+  check(/exactly the keys/.test(rejected[0]) && /At most 2000/.test(rejected[1]) && /Uint8Array/.test(rejected[2]) && /no such job/.test(rejected[3]),
+    `shim rejections ${JSON.stringify(rejected)}`);
 
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('EXPORTS OK');

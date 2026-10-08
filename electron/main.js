@@ -18,6 +18,7 @@ import { basename, dirname, extname, isAbsolute, join, resolve, sep } from 'node
 import { fileURLToPath } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerOfficeIpc } from './office.js'; // office conversions
+import { ImageExportJobs, planImageExport } from '../src/core/imgexport.js'; // multi-page image export rules
 
 const APP_NAME = 'ASH PDF Studio';
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // app.asar root when packaged
@@ -600,6 +601,34 @@ function registerIpc() {
     grant(filePath);
     return { path: filePath };
   });
+
+  // Multi-page image export (src/core/imgexport.js): begin validates the request, then the user picks the
+  // folder here (never a renderer path) and confirms replacing existing files once; write/end by job id.
+  const imageJobs = new ImageExportJobs();
+  const senderKey = () => callerWindow().webContents.id;
+  handle('imgexport:begin', async (req) => {
+    const plan = planImageExport(req);
+    const win = callerWindow();
+    const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Export images to folder', properties: ['openDirectory', 'createDirectory'] });
+    if (canceled || !filePaths[0]) return null;
+    const folder = filePaths[0];
+    const existing = (await Promise.all(plan.names.map((n) => lstat(join(folder, n)).then(() => 1, () => 0)))).reduce((a, b) => a + b, 0);
+    if (existing) {
+      const { response } = await dialog.showMessageBox(win, {
+        type: 'warning', buttons: ['Replace', 'Cancel'], defaultId: 1, cancelId: 1,
+        message: `${existing} ${existing === 1 ? 'file already exists' : 'files already exist'} — replace?`,
+        detail: `In ${folder}`,
+      });
+      if (response !== 0) return null;
+    }
+    return { jobId: imageJobs.open(senderKey(), { ...plan, folder }), folder, count: plan.names.length };
+  });
+  handle('imgexport:write', async (jobId, index, bytes) => {
+    const { folder, name } = imageJobs.take(senderKey(), jobId, index, bytes);
+    await atomicWrite(join(folder, name), bytes);
+    return { name };
+  });
+  handle('imgexport:end', (jobId) => imageJobs.close(senderKey(), jobId));
 
   handle('file:write', async (p, bytes) => {
     if (!isGranted(p)) throw new Error('file:write: path was not opened or saved in this session');

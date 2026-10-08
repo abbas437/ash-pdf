@@ -2,15 +2,17 @@
 //   Export to Excel workbook (.xlsx)…  pdf.js text of a page range, grouped into rows and columns by
 //       table-extract.js (helped by the page's ruling lines from pdf.js getOperatorList), one worksheet
 //       "Page N" per page, plain numbers stored as numbers; written by the vendored write-excel-file and saved with api.saveFile.
-//   Export page as image (PNG/JPEG)…   one page at 72/150/300 dpi; with "Include annotations", unsaved
-//       overlay objects are burnt in with the print path's flattenedCopy (viewextras.js). Saved with
-//       api.saveFile.
+//   Export to image (PNG/JPEG)…   pages ("All" or a range like 1-3,7; default the current page) at 72/150/300
+//       dpi; with "Include annotations", unsaved overlay objects are burnt in with the print path's
+//       flattenedCopy (viewextras.js). One page is saved with api.saveFile; several pages go one at a time into a
+//       folder the user picks in main (api.imageExportBegin/Write/End, rules in src/core/imgexport.js).
 import { activeTab } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast } from './dialogs.js';
 import { viewer } from './viewer.js';
 import { flattenedCopy } from './viewextras.js';
 import { textItems, extractTable, rulesFromOps } from './table-extract.js';
+import { MAX_FILES } from '../../src/core/imgexport.js';
 
 const ops = () => import('../../src/core/pdfOps.js');
 const baseName = (tab) => tab.name.replace(/\.pdf$/i, '');
@@ -65,10 +67,13 @@ export async function excelDialog(tab = activeTab()) {
 }
 
 /** One page (0-based) -> image bytes. format 'png' | 'jpeg', dpi, quality 0..1 (JPEG). */
-export async function pageImageBytes(tab, pageIndex, { format = 'png', dpi = 150, quality = 0.9, annotations = true } = {}) {
+/** `flat`: an already flattened copy (several pages share one) instead of making one for this page. */
+export async function pageImageBytes(tab, pageIndex, { format = 'png', dpi = 150, quality = 0.9, annotations = true } = {}, flat = null) {
   let doc = tab.pdfDoc, tmp = null;
   try {
-    if (annotations && tab.objects?.some((o) => o.page === pageIndex)) ({ doc, tmp } = await flattenedCopy(tab));
+    if (annotations && tab.objects?.some((o) => o.page === pageIndex)) {
+      if (flat) doc = flat; else ({ doc, tmp } = await flattenedCopy(tab));
+    }
     const page = doc === tab.pdfDoc ? tab.pages[pageIndex] : await doc.getPage(pageIndex + 1);
     const vp = page.getViewport({ scale: dpi / 72 });
     const c = document.createElement('canvas');
@@ -89,10 +94,11 @@ export async function pageImageBytes(tab, pageIndex, { format = 'png', dpi = 150
   }
 }
 
-/** File > Export page as image: asks for page, format and resolution, then saves. Resolves the saved path or null. */
+/** File > Export to image: asks for pages, format and resolution, then saves one file or a folder of files.
+ *  Resolves the saved path (one page), the folder (several pages) or null. */
 export async function imageDialog(tab = activeTab()) {
   if (!tab?.pdfDoc) return null;
-  const pageNo = h('input.input#xp-img-page', { type: 'number', min: '1', max: String(tab.numPages), value: String(tab.currentPage + 1) });
+  const pageNo = h('input.input#xp-img-page', { type: 'text', value: String(tab.currentPage + 1), placeholder: `All, or e.g. 1-3,7 (1-${tab.numPages})`, 'aria-label': 'Pages' });
   const format = h('select.input#xp-img-format', {}, opt('png', 'PNG', true), opt('jpeg', 'JPEG'));
   const dpi = h('select.input#xp-img-dpi', {}, opt('72', '72 dpi'), opt('150', '150 dpi', true), opt('300', '300 dpi'));
   const quality = h('input.input#xp-img-quality', { type: 'number', min: '10', max: '100', value: '90', disabled: true });
@@ -100,28 +106,70 @@ export async function imageDialog(tab = activeTab()) {
   format.addEventListener('change', () => { quality.disabled = format.value !== 'jpeg'; });
   const error = h('p.vx-error', { role: 'alert' });
   let chosen = null;
-  const validate = () => {
-    const n = Number(pageNo.value), q = Number(quality.value);
-    if (!Number.isInteger(n) || n < 1 || n > tab.numPages) { error.textContent = `Page must be a whole number from 1 to ${tab.numPages}`; return false; }
+  const validate = async () => {
+    const q = Number(quality.value), spec = pageNo.value.trim();
+    let indices;
+    try {
+      indices = !spec || /^all$/i.test(spec) ? [...Array(tab.numPages).keys()] : (await ops()).parseRanges(spec, tab.numPages);
+    } catch (err) { error.textContent = `Pages: ${err.message}`; return false; }
+    if (indices.length > MAX_FILES) { error.textContent = `Pages: at most ${MAX_FILES} pages can be exported at once`; return false; }
     if (!Number.isInteger(q) || q < 10 || q > 100) { error.textContent = 'JPEG quality must be a whole number from 10 to 100'; return false; }
-    chosen = { pageIndex: n - 1, format: format.value, dpi: Number(dpi.value), quality: q / 100, annotations: annots.value === 'yes' };
+    chosen = { indices, format: format.value, dpi: Number(dpi.value), quality: q / 100, annotations: annots.value === 'yes' };
     return true;
   };
-  const body = h('div.vx-print-form', {}, field('Page', pageNo), field('Format', format), field('Resolution', dpi),
+  const body = h('div.vx-print-form', {}, field('Pages', pageNo), field('Format', format), field('Resolution', dpi),
     field('JPEG quality (%)', quality), field('Include annotations', annots), error);
   const res = await showDialog({
-    title: 'Export page as image', body, className: 'xp-dialog xp-img-dialog', initialFocus: '#xp-img-page',
+    title: 'Export to image', body, className: 'xp-dialog xp-img-dialog', initialFocus: '#xp-img-page',
     buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Export…', value: 'export', primary: true, validate }],
   });
   if (res !== 'export' || !chosen) return null;
+  if (chosen.indices.length > 1) return exportImagePages(tab, chosen);
   try {
-    const bytes = await pageImageBytes(tab, chosen.pageIndex, chosen);
+    const pageIndex = chosen.indices[0];
+    const bytes = await pageImageBytes(tab, pageIndex, chosen);
     const ext = chosen.format === 'jpeg' ? 'jpg' : 'png';
-    const saved = await window.api.saveFile({ bytes, defaultPath: `${baseName(tab)}-page-${chosen.pageIndex + 1}.${ext}`,
+    const saved = await window.api.saveFile({ bytes, defaultPath: `${baseName(tab)}-page-${pageIndex + 1}.${ext}`,
       filters: [chosen.format === 'jpeg' ? { name: 'JPEG image', extensions: ['jpg', 'jpeg'] } : { name: 'PNG image', extensions: ['png'] }] });
     if (saved) toast(`Saved ${savedName(saved)}`);
     return saved?.path ?? null;
   } catch (err) { showError('Could not export the image', err); return null; }
+}
+
+/** Several pages -> one image file each in a folder chosen in main; rendered and written one at a time, with Cancel. */
+async function exportImagePages(tab, chosen) {
+  const api = window.api;
+  let job;
+  try {
+    job = await api.imageExportBegin({ baseName: baseName(tab), pageCount: tab.numPages, pages: chosen.indices.map((i) => i + 1), format: chosen.format });
+  } catch (err) { showError('Could not export the images', err); return null; }
+  if (!job) return null;
+  const n = chosen.indices.length;
+  const status = h('p#xp-img-progress', {}, `Exporting page 1 of ${n}`);
+  let done = false, cancelled = false, dialogEl = null;
+  showDialog({
+    title: 'Export to image', body: (el) => { dialogEl = el; return status; },
+    buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }], className: 'xp-dialog xp-img-progress',
+  }).then(() => { if (!done) cancelled = true; });
+  let flat = null, written = 0;
+  try {
+    if (chosen.annotations && tab.objects?.some((o) => chosen.indices.includes(o.page))) flat = await flattenedCopy(tab);
+    for (const [k, pageIndex] of chosen.indices.entries()) {
+      if (cancelled) break;
+      status.textContent = `Exporting page ${k + 1} of ${n}`;
+      const bytes = await pageImageBytes(tab, pageIndex, chosen, flat?.doc);
+      if (cancelled) break;
+      await api.imageExportWrite(job.jobId, k, bytes);
+      written++;
+    }
+    toast(cancelled ? `Export cancelled after ${written} of ${n} images` : `Exported ${n} images to ${savedName({ path: job.folder })}`);
+    return cancelled ? null : job.folder;
+  } catch (err) { showError('Could not export the images', err); return null; } finally {
+    done = true;
+    flat?.tmp?.destroy();
+    await api.imageExportEnd(job.jobId).catch(() => {});
+    dialogEl?.querySelector('.dialog-buttons button')?.click(); // closes the progress dialog
+  }
 }
 
 export function initExports(app) {

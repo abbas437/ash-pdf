@@ -9,11 +9,14 @@
 //   - settings live in localStorage; the signature library lives in memory.
 // Every method returns a Promise, as the IPC-backed versions do; onOpenFile returns an
 // unsubscribe function.
+import { ImageExportJobs, planImageExport } from '../src/core/imgexport.js';
+
 if (!window.api) {
   const APP_NAME = 'ASH PDF Studio';
   const files = new Map(); // pseudo path -> Uint8Array
   // Like main: only paths from the open dialog or a save dialog may be written; folder grants are read-only.
   const writable = new Set();
+  const imageJobs = new ImageExportJobs();
   let seq = 0;
 
   const extensionsOf = (filters) =>
@@ -127,6 +130,20 @@ if (!window.api) {
       download(baseName(path), bytes);
       return { path };
     },
+    // Multi-page image export: same validation as main (src/core/imgexport.js); the "folder" is a fresh
+    // pseudo folder (so nothing exists to replace) and each file is downloaded.
+    async imageExportBegin(req) {
+      const plan = planImageExport(req);
+      const folder = `browser-folder:${++seq}`;
+      return { jobId: imageJobs.open('shim', { ...plan, folder }), folder, count: plan.names.length };
+    },
+    async imageExportWrite(jobId, index, bytes) {
+      const { folder, name } = imageJobs.take('shim', jobId, index, bytes);
+      files.set(`${folder}/${name}`, bytes.slice());
+      download(name, bytes);
+      return { name };
+    },
+    async imageExportEnd(jobId) { return imageJobs.close('shim', jobId); },
     async getLaunchFiles() { return []; },
     onOpenFile(cb) {
       if (typeof cb !== 'function') throw new TypeError('onOpenFile: callback required');
