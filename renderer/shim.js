@@ -77,8 +77,13 @@ if (!window.api) {
   const cache = new Map();
   let nextFolder = null;
   // ---- clipboard and external links: recorded for tests (window.__ashShim.copied / .opened).
+  // clip is the in-memory system clipboard: copyText / copyImage write it (each write replaces both
+  // formats, as a real clipboard write does), readText / readImage read it. setClipboardText(t) and
+  // setClipboardImage(pngBytes, text = '') stand in for another app copying.
   const copied = [];
   const opened = [];
+  const clip = { text: '', image: null };
+  const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   window.__ashShim = Object.freeze({
     addFolder(folder, list) {
       folders.set(folder, list.map((f) => {
@@ -90,6 +95,10 @@ if (!window.api) {
     },
     cacheKeys: () => [...cache.keys()],
     copied, opened,
+    setClipboardText(t) { clip.text = String(t); clip.image = null; },
+    setClipboardImage(bytes, text = '') { clip.image = new Uint8Array(bytes); clip.text = String(text); },
+    clipboardText: () => clip.text,
+    clipboardImage: () => (clip.image ? new Uint8Array(clip.image) : null),
   });
   const library = new Map(); // `${kind}/${id}` -> {meta, bytes}
   const libKey = (kind, id) => {
@@ -182,8 +191,23 @@ if (!window.api) {
       if (typeof text !== 'string') throw new TypeError('copyText: text must be a string');
       if (text.length > 10 * 1024 * 1024) throw new RangeError('copyText: text too large (10 MB max)');
       copied.push(text);
+      clip.text = text;
+      clip.image = null;
       return true;
     },
+    async readText() { return clip.text.length > 10 * 1024 * 1024 ? '' : clip.text; },
+    async copyImage(bytes, text) {
+      if (!(bytes instanceof Uint8Array)) throw new TypeError('copyImage: bytes must be a Uint8Array');
+      if (bytes.length > 50 * 1024 * 1024) throw new RangeError('copyImage: image too large (50 MB max)');
+      if (bytes.length < 8 || PNG_SIGNATURE.some((v, i) => bytes[i] !== v)) throw new TypeError('copyImage: not a PNG image');
+      if (text !== undefined && typeof text !== 'string') throw new TypeError('copyImage: text must be a string');
+      if (text?.length > 10 * 1024 * 1024) throw new RangeError('copyImage: text too large (10 MB max)');
+      try { (await createImageBitmap(new Blob([bytes], { type: 'image/png' }))).close(); } catch { throw new Error('copyImage: the image could not be read'); }
+      clip.image = new Uint8Array(bytes);
+      clip.text = text ?? '';
+      return true;
+    },
+    async readImage() { return clip.image && clip.image.length <= 50 * 1024 * 1024 ? new Uint8Array(clip.image) : null; },
     async openExternal(url) {
       const u = new URL(String(url));
       if (!['http:', 'https:', 'mailto:'].includes(u.protocol)) throw new Error(`openExternal: ${u.protocol} links are not opened`);
