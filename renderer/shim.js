@@ -159,6 +159,12 @@ if (!window.api) {
       return () => {};
     },
     async print() { window.print(); return { ok: true }; },
+    async setFullScreen(on) {
+      if (typeof on !== 'boolean') throw new TypeError('setFullScreen: boolean required');
+      if (on) await document.documentElement.requestFullscreen?.();
+      else if (document.fullscreenElement) await document.exitFullscreen();
+      return on;
+    },
     async setTitle(t) {
       const s = typeof t === 'string' ? t.trim() : '';
       document.title = s ? `${s} — ${APP_NAME}` : APP_NAME;

@@ -28,6 +28,7 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('app:openFile', listener);
   },
   print: () => ipcRenderer.invoke('app:print'),
+  setFullScreen: (on) => ipcRenderer.invoke('app:setFullScreen', on),
   setTitle: (title) => ipcRenderer.invoke('app:setTitle', title),
   showItem: (path) => ipcRenderer.invoke('shell:showItem', path),
   settingsGet: (key) => ipcRenderer.invoke('app:settingsGet', key),

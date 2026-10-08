@@ -508,6 +508,17 @@ try {
   await secondInstance(await winPdf('fifth.pdf'));
   await hasTab(win, 'fifth.pdf');
 
+  step = 'full screen: F11 enters, Esc leaves; non-booleans rejected';
+  const isFull = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some((w) => w.isFullScreen()));
+  const until = async (want) => { for (let i = 0; i < 50 && (await isFull()) !== want; i++) await new Promise((r) => setTimeout(r, 100)); return isFull(); };
+  await win.bringToFront();
+  await win.keyboard.press('F11');
+  expect('F11 -> full screen', await until(true), (await isFull()) === true);
+  await win.keyboard.press('Escape');
+  expect('Esc -> windowed', await until(false), (await isFull()) === false);
+  r = await call('setFullScreen', 'yes');
+  expect('setFullScreen non-boolean', r, r.startsWith('rejected:'));
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');

@@ -36,6 +36,7 @@ import { initCopyText, copySelection } from './ui/copytext.js';
 import { initHandTool } from './ui/tools-hand.js';
 import { initTextEdit } from './ui/textedit.js';
 import { initSession } from './ui/session.js';
+import { initReadMode } from './ui/readmode.js';
 import { initPrefs, openPrefs, prefsForNewTab, applySidebarOnOpen } from './ui/prefs.js';
 
 const api = window.api;
@@ -416,6 +417,7 @@ M('View', { id: 'rotr', label: 'Rotate view right', action: withTab((t) => viewe
 M('View', { separator: true });
 M('View', { id: 'sidebar', label: 'Show sidebar', shortcut: 'Ctrl+B', action: () => { state.sidebarOpen = !state.sidebarOpen; } });
 M('View', { id: 'theme', label: 'Toggle light / dark theme', action: () => setTheme(state.theme === 'dark' ? 'light' : 'dark') });
+const readMode = initReadMode({ registerMenuItem, api });
 M('Tools', { id: 'select', label: 'Select', shortcut: 'V', action: () => setTool('select') });
 initForms({ registerMenuItem });
 const pageMarks = initPageMarks({ registerMenuItem }); // Document menu: must be registered before Help
@@ -444,6 +446,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && k === 'f') return run(() => tab && bus.emit('search:open', {}));
   if (ctrl && e.key === ',') return run(() => openPrefs());
   if ((ctrl && k === 'b' && !e.shiftKey && !e.altKey && !isTyping(e.target)) || e.key === 'F4') return run(() => { state.sidebarOpen = !state.sidebarOpen; });
+  if (readMode.onKey(e, isTyping(e.target))) return e.preventDefault();
   if (ctrl && e.key === 'Tab') return run(() => {
     if (state.tabs.length < 2) return;
     const i = state.tabs.indexOf(tab);

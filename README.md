@@ -119,6 +119,7 @@ All methods return Promises except `onOpenFile`. A *file* object is `{ path, nam
 | `onOpenFile(cb)` | unsubscribe function | `cb(file)` for PDFs opened later (double-click while running): tabs in the last-focused window, or a new window when setting `open.target` is `'window'` (default `'tab'`). |
 | `print()` | `{ ok, reason }` | System print dialog for the current page. Browser: `window.print()`. |
 | `setTitle(text)` | — | Window title becomes `<text> — ASH PDF Studio`; empty resets it. |
+| `setFullScreen(on)` | `on` | Puts the calling window into / out of full screen; rejects non-booleans. |
 | `showItem(path)` | `boolean` | Reveal a granted file in Explorer. Browser: `false`. |
 | `settingsGet(key)` / `settingsSet(key, value)` | value / `true` | Key `/^[A-Za-z0-9_.-]{1,64}$/`, JSON value up to 64 KiB; `undefined` deletes. |
 | `newWindow()` | `true` | Opens another app window (same security settings, shared file grants). Browser: `false`. |
