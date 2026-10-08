@@ -267,6 +267,59 @@ try {
   await win.keyboard.press('Escape');
   await app.evaluate(() => { process.env.ASH_TEST_FAKE_OFFICE = '1'; });
 
+  step = 'image export: pages 1-3 go into the folder picked in main';
+  const stubImageDialogs = (folder, response) => app.evaluate(({ dialog }, [folder, response]) => {
+    globalThis.__imgPicked = []; globalThis.__imgAsked = [];
+    dialog.showOpenDialog = async (_w, o) => { globalThis.__imgPicked.push(o); return { canceled: false, filePaths: [folder] }; };
+    dialog.showMessageBox = async (_w, o) => { globalThis.__imgAsked.push(o.message); return { response }; };
+  }, [folder, response]);
+  const imgState = () => app.evaluate(() => ({ picked: globalThis.__imgPicked, asked: globalThis.__imgAsked }));
+  const exportPages = async (spec) => {
+    await menuClick('export-image');
+    await win.fill('#xp-img-page', spec);
+    await win.selectOption('#xp-img-format', 'png');
+    await win.selectOption('#xp-img-dpi', '72');
+    await win.click('.xp-img-dialog button[data-value="export"]');
+  };
+  const imgDir = join(tmp, 'images');
+  await mkdir(imgDir);
+  await stubImageDialogs(imgDir, 1);
+  await exportPages('1-3');
+  await win.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Exported 3 images to images/.test(t.textContent)), null, { timeout: 15000 });
+  for (const n of [1, 2, 3]) {
+    const b = await readFile(join(imgDir, `sample-p${n}.png`));
+    expect(`sample-p${n}.png`, b.length, b.subarray(0, 8).equals(PNG_SIG) && b.readUInt32BE(16) === 612);
+  }
+  let ist = await imgState();
+  expect('folder dialog', JSON.stringify(ist), ist.picked.length === 1 && ist.picked[0].properties.join() === 'openDirectory,createDirectory' && ist.asked.length === 0);
+
+  step = 'image export: a begin request carrying a folder is refused before any dialog';
+  const okReq = { baseName: 'sample', pageCount: 3, pages: [1, 2], format: 'png' };
+  r = await call('imageExportBegin', { ...okReq, folder: tmp });
+  expect('begin with folder', r, /^rejected:.*exactly the keys/.test(r));
+  r = await call('imageExportWrite', 1, 0, [1, 2, 3]);
+  expect('write without a job', r, /^rejected:.*no such job/.test(r));
+  ist = await imgState();
+  expect('no dialog for a refused request', JSON.stringify(ist), ist.picked.length === 1);
+
+  step = 'image export: existing files + Cancel on the replace prompt -> nothing overwritten';
+  const imgDir2 = join(tmp, 'images2');
+  await mkdir(imgDir2);
+  for (const n of [1, 2]) await writeFile(join(imgDir2, `sample-p${n}.png`), 'keep');
+  await stubImageDialogs(imgDir2, 1);
+  await exportPages('1-2');
+  // Settled when main has asked (the prompt) or the renderer reports the export (no prompt: files written).
+  for (let i = 0; i < 150; i++) {
+    if ((await imgState()).asked.length) break;
+    if (await win.evaluate(() => [...document.querySelectorAll('.toast')].some((t) => /Exported 2 images/.test(t.textContent)))) break;
+    await new Promise((ok) => setTimeout(ok, 100));
+  }
+  await win.waitForTimeout(300);
+  const kept = await Promise.all([1, 2].map((n) => readFile(join(imgDir2, `sample-p${n}.png`), 'utf8')));
+  expect('nothing overwritten', JSON.stringify(kept.map((t) => t.slice(0, 8))), kept.every((t) => t === 'keep'));
+  ist = await imgState();
+  expect('replace prompt', JSON.stringify(ist.asked), ist.asked.length === 1 && ist.asked[0] === '2 files already exist — replace?');
+
   step = 'copyText puts text on the system clipboard';
   r = await call('copyText', 'ASH copy 4711');
   expect('copyText', r, r === 'ok:true');
