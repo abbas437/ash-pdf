@@ -10,7 +10,8 @@ import { state, activeTab } from '../state.js';
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { viewer } from './viewer.js';
-import { dialogOpen } from './dialogs.js';
+import { dialogOpen, toast } from './dialogs.js';
+import { annotations } from './annotations.js';
 import { registerSidebarTab, showSidebarTab, refreshSidebarTab } from './sidebar.js';
 
 const SNIPPET = 40;          // characters of context on each side
@@ -22,7 +23,7 @@ let counter = null;
 let gen = 0;
 let debounce = 0;
 
-export const search = { open, close, run, next: () => step(1), prev: () => step(-1), goTo, getResults: (tab = activeTab()) => results.get(tab) ?? null, options: opts };
+export const search = { markAllForRedaction, open, close, run, next: () => step(1), prev: () => step(-1), goTo, getResults: (tab = activeTab()) => results.get(tab) ?? null, options: opts };
 
 /** Build the find bar inside `host` (main.viewer-host) and register the Search results tab. */
 export function initSearch(host) {
@@ -245,6 +246,42 @@ function paint(tab, i) {
   }
 }
 
+// ---------------------------------------------------------------- mark all for redaction
+/** Every hit of the tab -> redactMark objects in visible page space (points, y down), one per text item part. */
+async function hitMarks(tab, hits) {
+  const marks = [];
+  const pages = [...new Set(hits.map((x) => x.pageIndex))];
+  for (const i of pages) {
+    const items = (await viewer.getTextContent(tab, i)).items.filter((it) => it.str !== undefined);
+    const vp = tab.pages[i].getViewport({ scale: 1 });
+    for (const hit of hits) {
+      if (hit.pageIndex !== i) continue;
+      for (const p of hit.parts) {
+        const it = items[p.item];
+        if (!it || !it.str.length) continue;
+        const hgt = it.height || Math.abs(it.transform[3]) || 0;
+        const x0 = it.transform[4] + it.width * (p.from / it.str.length), x1 = it.transform[4] + it.width * (p.to / it.str.length);
+        const y0 = it.transform[5] - 0.2 * hgt, y1 = it.transform[5] + hgt; // a little below the baseline for descenders
+        const a = vp.convertToViewportPoint(x0, y0), b = vp.convertToViewportPoint(x1, y1);
+        const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
+        marks.push({ type: 'redactMark', page: i, x, y, w: Math.abs(b[0] - a[0]), h: Math.abs(b[1] - a[1]), fill: '#000000' });
+      }
+    }
+  }
+  return marks;
+}
+
+/** Turn all hits of the tab's current search into redaction marks (one undoable step). */
+async function markAllForRedaction(tab = activeTab()) {
+  const r = tab ? results.get(tab) : null;
+  if (!r?.hits.length) return 0;
+  const marks = await hitMarks(tab, r.hits);
+  if (!marks.length) return 0;
+  annotations.addMany(tab, marks);
+  toast(`${marks.length} area${marks.length === 1 ? '' : 's'} marked — use Document > Apply redactions to remove them`);
+  return marks.length;
+}
+
 // ---------------------------------------------------------------- sidebar list
 function renderList(container, tab) {
   const r = tab ? results.get(tab) : null;
@@ -261,7 +298,9 @@ function renderList(container, tab) {
     const b = e.target.closest('.search-hit');
     if (b) goTo(Number(b.dataset.hit), tab);
   });
-  container.replaceChildren(h('p.sb-summary', {}, `${r.hits.length} result${r.hits.length === 1 ? '' : 's'}`), list);
+  const markAll = h('button.search-mark-all', { type: 'button', title: 'Mark every result for redaction' }, 'Mark all for redaction');
+  markAll.addEventListener('click', () => { markAll.disabled = true; markAllForRedaction(tab).finally(() => { markAll.disabled = false; }); });
+  container.replaceChildren(h('p.sb-summary', {}, `${r.hits.length} result${r.hits.length === 1 ? '' : 's'}`), markAll, list);
   container.querySelector('[aria-current="true"]')?.scrollIntoView({ block: 'nearest' });
 }
 

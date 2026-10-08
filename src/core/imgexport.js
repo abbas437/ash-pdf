@@ -86,4 +86,10 @@ export class ImageExportJobs {
   close(sender, jobId) {
     return this.#jobs.delete(`${sender}:${jobId}`);
   }
+  /** Forget every job of `sender` (its window closed mid-export); returns how many. Written files are not touched. */
+  dropJobsFor(sender) {
+    let n = 0;
+    for (const key of [...this.#jobs.keys()]) if (key.startsWith(`${sender}:`)) { this.#jobs.delete(key); n++; }
+    return n;
+  }
 }

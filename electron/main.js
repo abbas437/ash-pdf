@@ -298,6 +298,9 @@ function visibleBounds(b) {
   return onScreen ? { x: b.x, y: b.y, width: Math.max(900, b.width), height: Math.max(600, b.height) } : null;
 }
 
+// Open image-export jobs of all windows, keyed by the caller's webContents.id; a closed window's jobs are dropped.
+const imageJobs = new ImageExportJobs();
+
 // Every window is created here, with the same security settings. `files` (already granted) open as tabs
 // once the page has loaded. The first window uses the saved bounds; later ones cascade from the focused one.
 function createAppWindow(files = []) {
@@ -365,7 +368,9 @@ function createAppWindow(files = []) {
     settings.window = { bounds: win.getNormalBounds(), maximized: win.isMaximized() };
     saveSettings();
   });
+  const senderId = win.webContents.id; // read now: webContents is gone once the window is closed
   win.on('closed', () => {
+    imageJobs.dropJobsFor(senderId); // files already written stay as they are
     appWindows.delete(win);
     // A window closed on its own is forgotten; one closed by the quit, or the last one, is the session.
     const last = windowSessions.get(win);
@@ -604,7 +609,6 @@ function registerIpc() {
 
   // Multi-page image export (src/core/imgexport.js): begin validates the request, then the user picks the
   // folder here (never a renderer path) and confirms replacing existing files once; write/end by job id.
-  const imageJobs = new ImageExportJobs();
   const senderKey = () => callerWindow().webContents.id;
   handle('imgexport:begin', async (req) => {
     const plan = planImageExport(req);

@@ -156,6 +156,40 @@ try {
   check(!t.includes('CONFIDENTIAL') && t.includes('Public line'), `reopened text: ${t}`);
   check(await marks() === 0, 'reopened tab has redaction marks');
 
+  step = 'mark all from search';
+  const doc3 = await PDFDocument.create();
+  const f3 = await doc3.embedFont(StandardFonts.Helvetica);
+  const p3 = doc3.addPage([612, 792]);
+  p3.drawText('Alpha Zebra one', { x: 50, y: 700, size: 12, font: f3 });
+  p3.drawText('two Zebra and more', { x: 120, y: 500, size: 14, font: f3 });
+  p3.drawText('Keep this. Zebra', { x: 300, y: 300, size: 12, font: f3 });
+  const bytes3 = Array.from(await doc3.save());
+  await ev('await app.openBytes({ name: "zebra.pdf", bytes: new Uint8Array(arg) });', bytes3);
+  await page.waitForFunction(() => { const a = window.ashStudio, x = a.state.tabs.find((y) => y.id === a.state.activeId); return x?.name === 'zebra.pdf' && x.numPages === 1 && a.viewer.getOverlaySvg(x, 0); }, null, { timeout: 10_000 });
+  await frames();
+  await page.keyboard.press('Control+f');
+  await page.fill('.find-input', 'Zebra');
+  await page.press('.find-input', 'Enter');
+  await page.waitForSelector('.search-mark-all', { timeout: 10_000 });
+  check(await ev('return app.search.getResults(tab).hits.length;') === 3, 'search did not find Zebra 3 times');
+  const before = await ev('return tab.objects.length;');
+  await page.click('.search-mark-all');
+  await page.waitForFunction(() => { const a = window.ashStudio, x = a.state.tabs.find((y) => y.id === a.state.activeId); return x.objects.some((o) => o.type === 'redactMark'); }, null, { timeout: 5_000 });
+  check(await marks() === 3, `Mark all made ${await marks()} marks, expected 3`);
+  check(await ev('return tab.objects.length;') === before + 3, 'Mark all added other objects');
+  check(await ev('return tab.objects.every((o) => o.type !== "redactMark" || (o.fill === "#000000" && o.w > 20 && o.h > 8));'), 'mark geometry/fill');
+  await ev('await app.annotations.undo(tab);');
+  check(await marks() === 0, 'one Undo did not remove all three marks');
+  await ev('await app.annotations.redo(tab);');
+  check(await marks() === 3, 'Redo did not bring back the marks');
+  await ev("const { applyRedactionsDialog } = await import('/renderer/ui/redact.js'); applyRedactionsDialog(tab);");
+  await page.waitForSelector('.dialog');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.waitForFunction(() => { const a = window.ashStudio, x = a.state.tabs.find((y) => y.id === a.state.activeId); return x?.bytesUndo?.length === 1; }, null, { timeout: 15_000 });
+  await settle();
+  t = await textOf(await tabBytes());
+  check(!t.includes('Zebra') && t.includes('Alpha') && t.includes('Keep this'), `Zebra not gone everywhere (or neighbours lost): ${t}`);
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('REDACT OK');
 } catch (err) {
