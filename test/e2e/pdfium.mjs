@@ -2,7 +2,8 @@
 // End-to-end test of the PDFium edit worker (renderer/pdfium/) in Chromium under the real CSP of
 // renderer/index.html: lazy start (no worker/wasm request before first use), then
 // ashStudio.pdfium.selfTest() -> page count, text of a known text object, incremental save whose output
-// starts with the original bytes; plus error propagation and no CSP violation. Prints "PDFIUM OK".
+// starts with the original bytes; textLines + editLine (a substitute font fetched from the app origin);
+// plus error propagation and no CSP violation. Prints "PDFIUM OK".
 // Run `node scripts/vendor.js` first.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -46,6 +47,36 @@ try {
   check(o.font === 'Helvetica' && Math.round(o.size) === 14 && o.matrix.join() === '1,0,0,1,50,700' && o.bounds.length === 4 && o.bounds[0] > 49, `object ${JSON.stringify(o)}`);
   check(r.originalIsPrefix && r.outLength > r.inLength, `incremental save: prefix=${r.originalIsPrefix} in=${r.inLength} out=${r.outLength}`);
 
+  step = 'textLines + editLine (original text; substitute font fetched from the app origin)';
+  const t = await page.evaluate(async () => {
+    const p = window.ashStudio.pdfium;
+    const { PDFDocument, StandardFonts } = await import('pdf-lib');
+    const doc = await PDFDocument.create();
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    const pg = doc.addPage([612, 792]);
+    pg.drawText('Invoice number 4711 is overdue', { x: 50, y: 700, size: 14, font });
+    pg.drawText('Footer stays', { x: 50, y: 100, size: 10, font });
+    const id = await p.open(await doc.save());
+    try {
+      const lines = await p.textLines(id, 0);
+      const plain = await p.editLine(id, 0, lines[0].id, 'Invoice number 4712 is paid');
+      const lines2 = await p.textLines(id, 0);
+      // 'Ł' is outside Helvetica's WinAnsi encoding: the engine must load Arimo from renderer/vendor/fonts/edit/.
+      const subst = await p.editLine(id, 0, lines2[0].id, 'Łódź 4712');
+      const id2 = await p.open(subst.bytes);
+      try {
+        return { lines: lines.map((l) => l.text), plain: { ...plain, bytes: plain.bytes?.length }, subst: { ...subst, bytes: subst.bytes?.length },
+          after: (await p.textLines(id2, 0)).map((l) => l.text) };
+      } finally { await p.close(id2); }
+    } finally { await p.close(id); }
+  }).catch((e) => ({ error: `${e.name}: ${e.message}` }));
+  check(!t.error, `textedit threw: ${t.error}`);
+  check(t.lines.join('|') === 'Invoice number 4711 is overdue|Footer stays', `lines ${JSON.stringify(t.lines)}`);
+  check(t.plain.ok && t.plain.substituted === null && t.plain.bytes > 0, `plain edit ${JSON.stringify(t.plain)}`);
+  check(t.subst.ok && t.subst.substituted === 'Arimo-Regular.ttf' && t.subst.bytes > 100000, `substituted edit ${JSON.stringify(t.subst)}`);
+  check(t.after.join('|') === 'Łódź 4712|Footer stays', `after ${JSON.stringify(t.after)}`);
+  check(requests.some((u) => u.endsWith('/renderer/vendor/fonts/edit/Arimo-Regular.ttf')), 'font not fetched from the app origin');
+
   step = 'errors propagate; caller bytes stay usable';
   const e = await page.evaluate(async () => {
     const p = window.ashStudio.pdfium, junk = new Uint8Array([1, 2, 3]);
@@ -57,7 +88,7 @@ try {
 
   step = 'no console errors or CSP violations';
   check(!problems.length, problems.join('\n'));
-  console.log(`PDFIUM OK (pages=${r.pageCount}, text="${r.text}", incremental ${r.inLength} -> ${r.outLength} bytes)`);
+  console.log(`PDFIUM OK (pages=${r.pageCount}, text="${r.text}", incremental ${r.inLength} -> ${r.outLength} bytes; edited line "${t.after[0]}" via ${t.subst.substituted})`);
 } catch (err) {
   console.error(`PDFIUM FAILED at step "${step}": ${err.message}`);
   process.exitCode = 1;

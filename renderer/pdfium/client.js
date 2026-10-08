@@ -61,6 +61,10 @@ export const pdfium = {
   pageImages: (docId, pageIndex) => call('pageImages', docId, pageIndex),
   /** Edit one image and save in full; resolves to the new bytes. op: {transform: matrix} | {remove: true} | {replace: {bytes, kind}}. */
   editImage: (docId, pageIndex, id, op) => call('editImage', docId, pageIndex, id, op.replace ? { replace: { ...op.replace, bytes: copy(op.replace.bytes) } } : op),
+  /** Original-text lines of a page: [{ id, text, bbox, font, size, color, embedded, subset, objects, editable, reason? }]. See textedit.js. */
+  textLines: (docId, pageIndex) => call('textLines', docId, pageIndex),
+  /** Replace a line's text + save (full unless incremental); resolves { ok, substituted, widthBefore, widthAfter, bytes } | { ok: false, reason }. */
+  editLine: (docId, pageIndex, lineId, newText, { incremental = false } = {}) => call('editLine', docId, pageIndex, lineId, newText, { incremental }),
   get started() { return !!worker; },
   /** Diagnostics for tests: open a generated 2-page PDF, read it back, save incrementally. */
   async selfTest() {

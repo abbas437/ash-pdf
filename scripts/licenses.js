@@ -168,6 +168,11 @@ const BUNDLED = [
     where: '@tesseract.js-data/eng 4.0.0_best_int/eng.traineddata.gz -> renderer/vendor/tessdata/eng.traineddata.gz',
     note: 'The tessdata_best English LSTM model converted to integer form by the tesseract.js project. Text from github.com/tesseract-ocr/tessdata_best (main), LICENSE.',
     files: [`${TPL}/tessdata_best-LICENSE.txt`] },
+  // Substitute fonts for text editing (renderer/pdfium/textedit.js): the packages' LICENSE (MIT) covers their JS only;
+  // the font files are under the OFL text in LICENSE_FONT.
+  ...[['Carlito', 'carlito'], ['Caladea', 'caladea'], ['Arimo', 'arimo'], ['Tinos', 'tinos'], ['Cousine', 'cousine']].map(([name, pkg]) => ({
+    name: `${name} font`, licence: 'OFL-1.1', where: `@expo-google-fonts/${pkg} *.ttf -> renderer/vendor/fonts/edit/`,
+    files: [`node_modules/@expo-google-fonts/${pkg}/LICENSE_FONT`] })),
 ].map((b) => ({ ...b, allowed: isAllowed(b.licence) }));
 for (const b of BUNDLED) {
   b.texts = b.files.map((f) => ({ file: f, text: existsSync(join(root, f)) ? readFileSync(join(root, f), 'utf8').trim() : null }));
