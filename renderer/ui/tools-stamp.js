@@ -16,6 +16,7 @@ import { annotations, resizeBox, getAuthor } from './annotations.js';
 import { STANDARD_STAMPS, DYNAMIC_STAMPS, stampShape, stampSubtext, stampLayout } from '../../src/core/stamps.js';
 import { DATE_FORMATS, removeBackground } from '../../src/core/siglib.js';
 import { loadImage } from './signatures.js';
+import { pastedImageSize } from './clipboard-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const SHAPES = [['rect', 'Rectangle'], ['rounded', 'Rounded'], ['circle', 'Circle'], ['ellipse', 'Ellipse']];
@@ -411,6 +412,21 @@ const imageTool = {
     onPlaced?.(annotations.getObject(tab, id));
   },
 };
+/**
+ * Paste: an image annotation from PNG / JPEG `bytes` centred on `target` {page, x, y} (page points),
+ * no larger than half the page (clipboard-lib.js pastedImageSize), kept on the page; it becomes the selection.
+ */
+export async function placeImage(tab, target, bytes) {
+  const mime = sniffImage(bytes);
+  if (!mime) { app.toast('Only PNG and JPEG images can be placed'); return false; }
+  let bmp;
+  try { bmp = await createImageBitmap(new Blob([bytes], { type: mime })); } catch { app.toast('The image could not be read'); return false; }
+  const P = pageBox(tab, target.page), { w, h: hh } = pastedImageSize(bmp.width, bmp.height, P);
+  bmp.close();
+  const x = Math.min(Math.max(0, target.x - w / 2), P.width - w), y = Math.min(Math.max(0, target.y - hh / 2), P.height - hh);
+  addObjects(tab, [{ type: 'image', page: target.page, x, y, w, h: hh, bytes, mime, opacity: 1, rotation: 0 }]);
+  return true;
+}
 function imageOptions(c) {
   c.append(
     h('button.btn.opt-image-pick', { type: 'button', onclick: () => pickImage() }, 'Choose image…'),

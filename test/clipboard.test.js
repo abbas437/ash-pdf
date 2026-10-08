@@ -1,7 +1,7 @@
 // Clipboard helpers (renderer/ui/clipboard-lib.js): summary text, clipboard-match rule, paste placement.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { objectsSummary, clipboardMatches, unionBox, pasteDelta } from '../renderer/ui/clipboard-lib.js';
+import { objectsSummary, clipboardMatches, unionBox, pasteDelta, pastedImageSize } from '../renderer/ui/clipboard-lib.js';
 
 test('objectsSummary: texts of text objects, else a count', () => {
   assert.equal(objectsSummary([{ type: 'text', text: ' Hi ' }, { type: 'rect' }, { type: 'callout', text: 'There' }]), 'Hi\nThere');
@@ -32,4 +32,12 @@ test('pasteDelta: offset when it would sit exactly on the originals', () => {
   const page = { width: 600, height: 800 }, box = { x: 100, y: 100, w: 50, h: 40 };
   assert.deepEqual(pasteDelta(box, 0, { page: 0, x: 125, y: 120 }, page), { dx: 12, dy: 12 });
   assert.deepEqual(pasteDelta(box, 0, { page: 1, x: 125, y: 120 }, page), { dx: 0, dy: 0 }); // other page: same place
+});
+
+test('pastedImageSize: 96 dpi, never larger than half the page, aspect kept, never enlarged', () => {
+  const page = { width: 612, height: 792 };
+  assert.deepEqual(pastedImageSize(200, 100, page), { w: 150, h: 75 });          // small: natural size
+  assert.deepEqual(pastedImageSize(800, 400, page), { w: 306, h: 153 });         // wide: half the width
+  const tall = pastedImageSize(400, 2000, page);                                 // tall: half the height
+  assert.equal(tall.h, 396); assert.ok(Math.abs(tall.w / tall.h - 0.2) < 1e-9);
 });

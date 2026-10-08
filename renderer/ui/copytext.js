@@ -4,10 +4,13 @@
 // through api.copyText / api.readText (main: clipboard.writeText / readText).
 //   Copy: a page text selection (pdf.js text layer) wins; otherwise the selected annotation objects
 //     go to the app's object clipboard and their text summary to the system clipboard.
+//     A single image object also goes to the system clipboard as PNG (api.copyImage, in the same
+//     write as the summary text), so other apps can paste it.
 //   Cut: selected objects only (copy + delete, one undo step); original PDF text cannot be cut.
 //   Paste (at the right-click point, or the view centre for Ctrl+V): the copied objects while the
-//     system clipboard still holds their summary (clipboard-lib.js), else a text box with the
-//     clipboard text in the current text style.
+//     system clipboard still holds their summary (clipboard-lib.js); else a text box with the
+//     clipboard text in the current text style; else (no text) the clipboard image as an image
+//     object, no larger than half the page.
 //   Text fields outside dialogs (inputs, textareas, the Edit text editor): Ctrl+X / C / V go through
 //     the same IPC so they behave alike in Electron and the browser shim; the page menu leaves them alone.
 import { h, isTyping } from './dom.js';
@@ -16,6 +19,7 @@ import { activeTab } from '../state.js';
 import { viewer } from './viewer.js';
 import { annotations, copyObjects, cutObjects, pasteObjects, objectClipboardSummary, objectAtPoint } from './annotations.js';
 import { addTextBox } from './tools-text.js';
+import { placeImage, sniffImage } from './tools-stamp.js';
 import { clipboardMatches } from './clipboard-lib.js';
 
 const CUT_TEXT_TIP = 'Use Edit text (D) to change the document\'s text';
@@ -39,16 +43,40 @@ export async function copySelection() {
   return text ? writeText(text) : false;
 }
 
+/** The selection when it is exactly one image object, else null. */
+function selectedImage(tab) {
+  const sel = annotations.getSelection(tab);
+  const o = sel.length === 1 ? annotations.getObject(tab, sel[0]) : null;
+  return o?.type === 'image' && o.bytes?.length ? o : null;
+}
+/** PNG bytes for image bytes (PNG as is; JPEG re-encoded). */
+async function asPng(bytes, mime) {
+  if (sniffImage(bytes) === 'image/png') return bytes;
+  const bmp = await createImageBitmap(new Blob([bytes], { type: mime }));
+  const c = new OffscreenCanvas(bmp.width, bmp.height);
+  c.getContext('2d').drawImage(bmp, 0, 0);
+  bmp.close();
+  return new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
+}
+/** System clipboard for an object copy: the summary text, plus the PNG when `img` is an image object. */
+async function writeObjects(summary, img) {
+  if (img) {
+    try { await window.api.copyImage(await asPng(img.bytes, img.mime), summary); return true; } catch { /* the text alone still pastes the objects */ }
+  }
+  return writeText(summary);
+}
 /** Copy: page text, else the selected objects. */
 async function copy(tab) {
   if (selectedPageText()) return copySelection();
+  const img = tab && selectedImage(tab);
   const summary = tab ? copyObjects(tab) : '';
-  return summary ? writeText(summary) : false;
+  return summary ? writeObjects(summary, img) : false;
 }
 async function cut(tab) {
   if (!tab || tab.readOnly || selectedPageText()) return false;
+  const img = selectedImage(tab);
   const summary = cutObjects(tab);
-  return summary ? writeText(summary) : false;
+  return summary ? writeObjects(summary, img) : false;
 }
 /** Paste at `target` {page, x, y} (page points). */
 async function paste(tab, target) {
@@ -57,6 +85,9 @@ async function paste(tab, target) {
   try { text = await window.api.readText(); } catch (err) { toast(`Could not paste: ${err?.message ?? err}`); return false; }
   if (clipboardMatches(objectClipboardSummary(), text)) return pasteObjects(tab, target);
   if (text) { addTextBox(tab, target.page, target.x, target.y, text); return true; }
+  let png = null;
+  try { png = await window.api.readImage(); } catch (err) { toast(`Could not paste: ${err?.message ?? err}`); return false; }
+  if (png?.length) return placeImage(tab, target, png);
   toast('The clipboard has nothing to paste');
   return false;
 }

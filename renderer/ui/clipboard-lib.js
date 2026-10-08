@@ -35,3 +35,13 @@ export function pasteDelta(box, fromPage, target, pageSize, offset = 12) {
   if (target.page === fromPage && Math.abs(dx) < 1 && Math.abs(dy) < 1) { dx += offset; dy += offset; }
   return { dx, dy };
 }
+
+/**
+ * Size in page points for an image pasted from the system clipboard: its pixel size at 96 dpi, scaled
+ * down (never up) to fit within half the page {width, height}, aspect kept.
+ */
+export function pastedImageSize(nw, nh, pageSize) {
+  const w = Math.max(1, nw) * 0.75, h = Math.max(1, nh) * 0.75;
+  const k = Math.min(1, pageSize.width / 2 / w, pageSize.height / 2 / h);
+  return { w: w * k, h: h * k };
+}

@@ -339,6 +339,68 @@ try {
   expect('clipboard.readText', clip, clip === 'ASH copy 4711');
   r = await call('copyText', 42);
   expect('copyText non-string', r, r.startsWith('rejected:'));
+  step = 'clipboard: readText / copyText round trip through the IPC';
+  r = await call('copyText', 'ASH round trip ü');
+  expect('copyText', r, r === 'ok:true');
+  r = await call('readText');
+  expect('readText', r, r === `ok:${JSON.stringify('ASH round trip ü')}`);
+
+  step = 'clipboard: copyImage / readImage round trip through the IPC';
+  // In the page: PNG (or JPEG) bytes of a w x h canvas; readImage decoded to its size and signature.
+  const canvasBytes = (w, h, type) => `const c = new OffscreenCanvas(${w}, ${h}); c.getContext('2d').fillRect(0, 0, ${w}, ${h});
+    const bytes = new Uint8Array(await (await c.convertToBlob({ type: '${type}' })).arrayBuffer());`;
+  const pageClip = (body) => win.evaluate(`(async () => { try { ${body} } catch (e) { return 'rejected:' + e.message; } })()`);
+  const readBack = `const b = await window.api.readImage(); if (!b) return 'null';
+    const bmp = await createImageBitmap(new Blob([b], { type: 'image/png' }));
+    return (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 ? 'png:' : 'other:') + bmp.width + 'x' + bmp.height;`;
+  r = await pageClip(`${canvasBytes(7, 5, 'image/png')} await window.api.copyImage(bytes, 'ASH image 7x5'); ${readBack}`);
+  expect('copyImage then readImage', r, r === 'png:7x5');
+  const sys = await app.evaluate(async ({ clipboard, nativeImage }) => {
+    const item = (await clipboard.read()).find((it) => it.types.includes('image/png'));
+    const png = item && Buffer.from(await (await item.getType('image/png')).arrayBuffer());
+    return { size: png && nativeImage.createFromBuffer(png).getSize(), text: await clipboard.readText() };
+  });
+  expect('system clipboard after copyImage', JSON.stringify(sys), sys.size?.width === 7 && sys.size?.height === 5 && sys.text === 'ASH image 7x5');
+  await app.evaluate(async ({ clipboard, ClipboardItem, nativeImage }) => {
+    const png = nativeImage.createFromBitmap(Buffer.alloc(9 * 3 * 4, 255), { width: 9, height: 3 }).toPNG();
+    await clipboard.write([new ClipboardItem({ 'image/png': new Blob([png], { type: 'image/png' }) })]);
+  });
+  r = await pageClip(readBack);
+  expect('readImage of an image another app copied', r, r === 'png:9x3');
+  await app.evaluate(async ({ clipboard }) => clipboard.writeText('only text'));
+  r = await pageClip(readBack);
+  expect('readImage with no image on the clipboard', r, r === 'null');
+  r = await pageClip(`${canvasBytes(7, 5, 'image/jpeg')} await window.api.copyImage(bytes); return 'ok';`);
+  expect('copyImage with JPEG (non-PNG) bytes', r, r.startsWith('rejected:') && r.includes('not a PNG'));
+  expect('clipboard unchanged after a refused copyImage', '', (await app.evaluate(({ clipboard }) => clipboard.readText())) === 'only text');
+  r = await call('copyImage', [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0]);
+  expect('copyImage with a plain array', r, r.startsWith('rejected:'));
+
+  step = 'clipboard: a window that is not an app window is refused';
+  r = await app.evaluate(async ({ BrowserWindow }, preload) => {
+    const w = new BrowserWindow({ show: false, webPreferences: { preload, sandbox: true, contextIsolation: true } });
+    try {
+      await w.loadURL('data:text/html,<p>other</p>');
+      return await w.webContents.executeJavaScript(`Promise.all(['readText', 'readImage'].map((f) => window.api[f]().then(() => f + ':ok', (e) => f + ':' + e.message))).then((a) => a.join('|'))`);
+    } finally { w.destroy(); }
+  }, join(root, 'electron', 'preload.js'));
+  expect('clipboard IPC from a foreign window', r, r === 'readText:Error invoking remote method \'clipboard:readText\': Error: clipboard:readText: not allowed|readImage:Error invoking remote method \'clipboard:readImage\': Error: clipboard:readImage: not allowed');
+
+  step = 'clipboard: Ctrl+V in the Preferences author field inserts the system clipboard text';
+  await app.evaluate(async ({ clipboard }) => clipboard.writeText('Pasted Author'));
+  await win.keyboard.press('Control+,');
+  await win.waitForSelector('.prefs-dlg');
+  await win.click('.prefs-tab[data-section="annotations"]');
+  const author = win.locator('.prefs-dlg input[name="annotations.author"]');
+  await author.click();
+  await author.fill('');
+  await win.keyboard.press('Control+v');
+  await win.waitForFunction(() => document.querySelector('.prefs-dlg input[name="annotations.author"]')?.value === 'Pasted Author', null, { timeout: 3000 }).catch(() => {});
+  const authorVal = await author.inputValue();
+  expect('author field after Ctrl+V', authorVal, authorVal === 'Pasted Author');
+  await win.keyboard.press('Escape');
+  await win.waitForSelector('.prefs-dlg', { state: 'detached' });
+
   step = 'openExternal: only http(s)/mailto reach shell.openExternal';
   await app.evaluate(({ shell }) => { globalThis.__opened = []; shell.openExternal = async (u) => { globalThis.__opened.push(u); }; });
   for (const bad of ['file:///etc/passwd', 'javascript:alert(1)', 'ms-settings:privacy']) {

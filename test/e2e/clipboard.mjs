@@ -2,7 +2,8 @@
 // End-to-end test of cut / copy / paste (renderer/ui/copytext.js) in Chromium via playwright-core, with the
 // browser shim's in-memory clipboard: the page context menu (Cut / Copy / Paste at the click point),
 // objects across pages, a changed system clipboard pasting a text box, page text Copy (Cut disabled),
-// Ctrl+X / Ctrl+Z, and Ctrl+V / Ctrl+X inside the Edit text editor. Prints "CLIPBOARD OK".
+// Ctrl+X / Ctrl+Z, a clipboard image pasted as an image object (text preferred when both are there), image
+// objects copied to the clipboard as PNG, and Ctrl+V / Ctrl+X inside the Edit text editor. Prints "CLIPBOARD OK".
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -127,6 +128,66 @@ try {
   check(cutBtn[0] === true && cutBtn[1] === "Use Edit text (D) to change the document's text", `Cut for page text: ${cutBtn}`);
   await choose('copy');
   check(await clip() === selected, `copied page text ${JSON.stringify(await clip())}`);
+
+  step = 'system clipboard holds only an image -> Paste places an image object within half the page';
+  await page.evaluate(() => window.getSelection().removeAllRanges());
+  const png = await page.evaluate(async () => {
+    const c = new OffscreenCanvas(800, 400), g = c.getContext('2d');
+    g.fillStyle = '#2060c0'; g.fillRect(0, 0, 800, 400);
+    return [...new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer())];
+  });
+  await page.evaluate((b) => window.__ashShim.setClipboardImage(new Uint8Array(b)), png);
+  let before = (await objs()).length;
+  await menuAt(0, 300, 400);
+  await choose('paste');
+  await settleObjs(before + 1);
+  o = await objs();
+  let img = o[o.length - 1];
+  check(o.length === before + 1 && img.type === 'image' && img.page === 0, `image paste: ${JSON.stringify(o.slice(before))}`);
+  near(img.w, 306, 0.01, 'pasted image width (half the page)'); near(img.h, 153, 0.01, 'pasted image height (aspect kept)');
+  near(img.x + img.w / 2, 300, 0.5, 'pasted image centre x'); near(img.y + img.h / 2, 400, 0.5, 'pasted image centre y');
+
+  step = 'image and non-empty text on the clipboard -> the text wins';
+  await page.evaluate((b) => window.__ashShim.setClipboardImage(new Uint8Array(b), 'Caption'), png);
+  before = (await objs()).length;
+  await menuAt(0, 150, 150);
+  await choose('paste');
+  await settleObjs(before + 1);
+  o = await objs();
+  check(o.length === before + 1 && o[before].type === 'text' && o[before].text === 'Caption', `image+text paste: ${JSON.stringify(o.slice(before))}`);
+
+  step = 'Copy an image object -> the system clipboard holds its PNG and the summary; Paste pastes the object';
+  await menuAt(0, 300, 400);
+  await choose('copy');
+  const sig = (b) => b && [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((v, i) => b[i] === v);
+  let held = await page.evaluate(async () => {
+    const b = window.__ashShim.clipboardImage();
+    const bmp = b && await createImageBitmap(new Blob([b], { type: 'image/png' }));
+    return { bytes: b ? [...b.slice(0, 8)] : null, w: bmp?.width, h: bmp?.height, text: window.__ashShim.clipboardText() };
+  });
+  check(sig(held.bytes) && held.w === 800 && held.h === 400 && held.text === '1 object (ASH PDF Studio)', `clipboard after image copy: ${JSON.stringify(held)}`);
+  before = (await objs()).length;
+  await menuAt(0, 450, 250);
+  await choose('paste');
+  await settleObjs(before + 1);
+  o = await objs();
+  check(o.length === before + 1 && o[before].type === 'image' && o[before].page === 0 && Math.abs(o[before].w - 306) < 0.01, `image object paste: ${JSON.stringify(o.slice(before))}`);
+
+  step = 'Ctrl+C on a JPEG image object -> the system clipboard holds a PNG of it';
+  await ev(`const c = new OffscreenCanvas(30, 20); c.getContext('2d').fillRect(0, 0, 30, 20);
+    const bytes = new Uint8Array(await (await c.convertToBlob({ type: 'image/jpeg' })).arrayBuffer());
+    const o = an.add(tab, { type: 'image', page: 0, x: 40, y: 40, w: 30, h: 20, bytes, mime: 'image/jpeg', opacity: 1, rotation: 0 });
+    an.select(tab, [o.id]);`);
+  await page.locator('.viewer-scroll:not([hidden])').focus();
+  await page.keyboard.press('Control+c');
+  await page.waitForFunction(() => window.__ashShim.clipboardImage(), null, { timeout: 3000 }).catch(() => {});
+  held = await page.evaluate(async () => {
+    const b = window.__ashShim.clipboardImage();
+    const bmp = b && await createImageBitmap(new Blob([b], { type: 'image/png' }));
+    return { bytes: b ? [...b.slice(0, 8)] : null, w: bmp?.width, h: bmp?.height };
+  });
+  check(sig(held.bytes) && held.w === 30 && held.h === 20, `clipboard after JPEG object copy: ${JSON.stringify(held)}`);
+  await ev('an.select(tab, []);');
 
   step = 'Ctrl+V in the Edit text editor inserts text there, no text box';
   await page.evaluate(() => window.getSelection().removeAllRanges());

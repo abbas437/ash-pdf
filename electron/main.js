@@ -869,11 +869,16 @@ function registerLibraryIpc() {
 // ---- clipboard and external links
 // api.copyText / api.readText: the renderer cannot use navigator.clipboard or execCommand('copy')
 // (every permission check is denied, clipboard-sanitized-write included), so text goes through here.
-// readText returns '' for text over the 10 MB cap. Text fields get a Cut / Copy / Paste context menu
+// readText returns '' for text over the 10 MB cap. api.copyImage / api.readImage carry PNG bytes (50 MB cap;
+// readImage returns null for no image or one over the cap); copyImage takes an optional text written in the
+// same clipboard write, so an object copy keeps its text summary next to the image. Text fields get a Cut / Copy / Paste context menu
 // (Electron shows none by default; the page's own menu leaves text fields alone).
 // api.openExternal: only http:, https: and mailto: URLs reach the system browser / mail client.
-import { clipboard } from 'electron';
+// Electron 44's clipboard is the W3C-style async API: read/write ClipboardItem lists, readText/writeText promises.
+import { clipboard, ClipboardItem, nativeImage } from 'electron';
 const MAX_CLIPBOARD_CHARS = 10 * 1024 * 1024;
+const MAX_CLIPBOARD_IMAGE = 50 * 1024 * 1024;
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const EXTERNAL_SCHEMES = new Set(['http:', 'https:', 'mailto:']);
 function externalUrl(raw) {
   if (typeof raw !== 'string' || raw.length > 8192) throw new TypeError('openExternal: url must be a string');
@@ -883,17 +888,37 @@ function externalUrl(raw) {
   return u.href;
 }
 app.whenReady().then(() => {
-  ipcMain.handle('clipboard:writeText', (event, text) => {
+  ipcMain.handle('clipboard:writeText', async (event, text) => {
     if (!fromApp(event)) throw new Error('clipboard:writeText: not allowed');
     if (typeof text !== 'string') throw new TypeError('copyText: text must be a string');
     if (text.length > MAX_CLIPBOARD_CHARS) throw new RangeError('copyText: text too large (10 MB max)');
-    clipboard.writeText(text);
+    await clipboard.writeText(text);
     return true;
   });
-  ipcMain.handle('clipboard:readText', (event) => {
+  ipcMain.handle('clipboard:readText', async (event) => {
     if (!fromApp(event)) throw new Error('clipboard:readText: not allowed');
-    const text = clipboard.readText();
+    const text = await clipboard.readText();
     return text.length > MAX_CLIPBOARD_CHARS ? '' : text;
+  });
+  ipcMain.handle('clipboard:writeImage', async (event, bytes, text) => {
+    if (!fromApp(event)) throw new Error('clipboard:writeImage: not allowed');
+    if (!(bytes instanceof Uint8Array)) throw new TypeError('copyImage: bytes must be a Uint8Array');
+    if (bytes.length > MAX_CLIPBOARD_IMAGE) throw new RangeError('copyImage: image too large (50 MB max)');
+    if (bytes.length < 8 || PNG_SIGNATURE.some((v, i) => bytes[i] !== v)) throw new TypeError('copyImage: not a PNG image');
+    if (text !== undefined && typeof text !== 'string') throw new TypeError('copyImage: text must be a string');
+    if (text?.length > MAX_CLIPBOARD_CHARS) throw new RangeError('copyImage: text too large (10 MB max)');
+    if (nativeImage.createFromBuffer(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.length)).isEmpty()) throw new Error('copyImage: the image could not be read');
+    const item = { 'image/png': new Blob([bytes], { type: 'image/png' }) };
+    if (text) item['text/plain'] = text;
+    await clipboard.write([new ClipboardItem(item)]);
+    return true;
+  });
+  ipcMain.handle('clipboard:readImage', async (event) => {
+    if (!fromApp(event)) throw new Error('clipboard:readImage: not allowed');
+    const item = (await clipboard.read()).find((it) => it.types.includes('image/png'));
+    if (!item) return null;
+    const png = await item.getType('image/png');
+    return png.size > MAX_CLIPBOARD_IMAGE ? null : new Uint8Array(await png.arrayBuffer());
   });
   ipcMain.handle('shell:openExternal', async (event, raw) => {
     if (!fromApp(event)) throw new Error('shell:openExternal: not allowed');
