@@ -10,6 +10,9 @@ export function objectsSummary(objs) {
   return `${objs.length} object${objs.length === 1 ? '' : 's'} (ASH PDF Studio)`;
 }
 
+/** True for the count-only summary objectsSummary writes for objects without text. */
+export const isCountSummary = (text) => /^\d+ objects? \(ASH PDF Studio\)$/.test(String(text).trim());
+
 /** True when the system clipboard text is still what the object copy wrote. */
 export function clipboardMatches(stored, systemText) {
   return typeof stored === 'string' && stored !== '' && systemText === stored;

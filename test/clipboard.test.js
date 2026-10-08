@@ -41,3 +41,11 @@ test('pastedImageSize: 96 dpi, never larger than half the page, aspect kept, nev
   const tall = pastedImageSize(400, 2000, page);                                 // tall: half the height
   assert.equal(tall.h, 396); assert.ok(Math.abs(tall.w / tall.h - 0.2) < 1e-9);
 });
+
+test('isCountSummary: only the count-only object summary', async () => {
+  const { isCountSummary, objectsSummary } = await import('../renderer/ui/clipboard-lib.js');
+  assert.equal(isCountSummary(objectsSummary([{}])), true);
+  assert.equal(isCountSummary(objectsSummary([{}, {}])), true);
+  assert.equal(isCountSummary('Hello paste'), false);
+  assert.equal(isCountSummary('3 objects (somewhere else)'), false);
+});

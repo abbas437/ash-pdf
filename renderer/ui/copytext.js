@@ -20,7 +20,7 @@ import { viewer } from './viewer.js';
 import { annotations, copyObjects, cutObjects, pasteObjects, objectClipboardSummary, objectAtPoint } from './annotations.js';
 import { addTextBox } from './tools-text.js';
 import { placeImage, sniffImage } from './tools-stamp.js';
-import { clipboardMatches } from './clipboard-lib.js';
+import { clipboardMatches, isCountSummary } from './clipboard-lib.js';
 
 const CUT_TEXT_TIP = 'Use Edit text (D) to change the document\'s text';
 
@@ -84,10 +84,12 @@ async function paste(tab, target) {
   let text = '';
   try { text = await window.api.readText(); } catch (err) { toast(`Could not paste: ${err?.message ?? err}`); return false; }
   if (clipboardMatches(objectClipboardSummary(), text)) return pasteObjects(tab, target);
-  if (text) { addTextBox(tab, target.page, target.x, target.y, text); return true; }
+  // A bare count summary ("1 object (ASH PDF Studio)") left from an earlier session is not real text.
+  if (text && !isCountSummary(text)) { addTextBox(tab, target.page, target.x, target.y, text); return true; }
   let png = null;
   try { png = await window.api.readImage(); } catch (err) { toast(`Could not paste: ${err?.message ?? err}`); return false; }
   if (png?.length) return placeImage(tab, target, png);
+  if (text) { addTextBox(tab, target.page, target.x, target.y, text); return true; }
   toast('The clipboard has nothing to paste');
   return false;
 }
