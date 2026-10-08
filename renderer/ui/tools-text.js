@@ -8,7 +8,8 @@
 // svg.overlay-svg, so zoom and view rotation need no re-layout. Line wrapping and the box height
 // come from the core's measureText, so the overlay, the editor and the saved PDF wrap alike.
 //
-// Exports: initTextTools(app), openTextEditor(tab, pageIndex, boxPts, opts), registerTextObjectType().
+// Exports: initTextTools(app), openTextEditor(tab, pageIndex, boxPts, opts), registerTextObjectType(),
+// addTextBox(tab, page, x, y, text) (paste of plain text).
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
@@ -217,6 +218,21 @@ function createAt(tab, page, box, extra = {}) {
     },
     onCancel: () => extra.onEmpty?.(),
   });
+}
+
+let widthCtx = null;
+/** Paste: a text box with `text` at page point (x, y) in the current text style, kept inside the page; returns it. */
+export function addTextBox(tab, page, x, y, text) {
+  const s = styleFrom(), P = viewer.pageSize(tab, page);
+  widthCtx ??= document.createElement('canvas').getContext('2d');
+  widthCtx.font = `${s.italic ? 'italic ' : ''}${s.bold ? 'bold ' : ''}${s.fontSize}px ${FAMILY[s.font]}`;
+  const natural = Math.max(...String(text).split('\n').map((l) => widthCtx.measureText(l).width)) + 2;
+  const w = Math.max(MIN_W, Math.min(natural, P.width));
+  const h = fitH(text, s, w);
+  const bx = Math.min(Math.max(0, x), Math.max(0, P.width - w)), by = Math.min(Math.max(0, y), Math.max(0, P.height - h));
+  const o = annotations.add(tab, { type: 'text', page, x: bx, y: by, w, h, text, ...s });
+  annotations.select(tab, [o.id]);
+  return o;
 }
 
 function reEdit(tab, o) {

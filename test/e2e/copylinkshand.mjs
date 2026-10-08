@@ -75,7 +75,8 @@ try {
   await page.keyboard.press('Control+v');
   const count = await page.evaluate(() => window.ashStudio.state.tabs[0].objects.length);
   check(count === 2, `object copy/paste: ${count} objects`);
-  check((await copied()).length === 1, 'Ctrl+C with no text selection must not call copyText');
+  const after = await copied();
+  check(after.length === 2 && after[1] === '1 object (ASH PDF Studio)', `Ctrl+C with no text selection copies the objects' summary: ${JSON.stringify(after)}`);
 
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('COPYLINKSHAND OK');

@@ -867,8 +867,10 @@ function registerLibraryIpc() {
 // ---- end signature library -------------------------------------------------------------------
 
 // ---- clipboard and external links
-// api.copyText: the renderer cannot use navigator.clipboard or execCommand('copy') (every
-// permission check is denied, clipboard-sanitized-write included), so text goes through here.
+// api.copyText / api.readText: the renderer cannot use navigator.clipboard or execCommand('copy')
+// (every permission check is denied, clipboard-sanitized-write included), so text goes through here.
+// readText returns '' for text over the 10 MB cap. Text fields get a Cut / Copy / Paste context menu
+// (Electron shows none by default; the page's own menu leaves text fields alone).
 // api.openExternal: only http:, https: and mailto: URLs reach the system browser / mail client.
 import { clipboard } from 'electron';
 const MAX_CLIPBOARD_CHARS = 10 * 1024 * 1024;
@@ -888,6 +890,11 @@ app.whenReady().then(() => {
     clipboard.writeText(text);
     return true;
   });
+  ipcMain.handle('clipboard:readText', (event) => {
+    if (!fromApp(event)) throw new Error('clipboard:readText: not allowed');
+    const text = clipboard.readText();
+    return text.length > MAX_CLIPBOARD_CHARS ? '' : text;
+  });
   ipcMain.handle('shell:openExternal', async (event, raw) => {
     if (!fromApp(event)) throw new Error('shell:openExternal: not allowed');
     await shell.openExternal(externalUrl(raw));
@@ -898,6 +905,14 @@ app.whenReady().then(() => {
 
 // --- Lifecycle ------------------------------------------------------------------------------
 app.on('web-contents-created', (_event, contents) => {
+  contents.on('context-menu', (_e, params) => {
+    if (!params.isEditable) return;
+    const f = params.editFlags;
+    Menu.buildFromTemplate([
+      { role: 'cut', enabled: f.canCut }, { role: 'copy', enabled: f.canCopy }, { role: 'paste', enabled: f.canPaste },
+      { type: 'separator' }, { role: 'selectAll', enabled: f.canSelectAll },
+    ]).popup({ window: BrowserWindow.fromWebContents(contents) ?? undefined });
+  });
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
   contents.on('will-navigate', (event, url) => { if (url !== START_URL) event.preventDefault(); });
 });

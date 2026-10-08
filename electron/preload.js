@@ -45,6 +45,7 @@ contextBridge.exposeInMainWorld('api', {
   recentClear: () => ipcRenderer.invoke('app:recentClear'),
   // ---- clipboard and external links
   copyText: (text) => ipcRenderer.invoke('clipboard:writeText', text),
+  readText: () => ipcRenderer.invoke('clipboard:readText'),
   openExternal: (url) => ipcRenderer.invoke('shell:openExternal', url),
   // ---- advanced search
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),

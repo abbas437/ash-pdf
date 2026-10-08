@@ -77,8 +77,11 @@ if (!window.api) {
   const cache = new Map();
   let nextFolder = null;
   // ---- clipboard and external links: recorded for tests (window.__ashShim.copied / .opened).
+  // clip.text is the in-memory system clipboard (copyText writes it, readText reads it;
+  // window.__ashShim.setClipboardText(t) stands in for another app copying text).
   const copied = [];
   const opened = [];
+  const clip = { text: '' };
   window.__ashShim = Object.freeze({
     addFolder(folder, list) {
       folders.set(folder, list.map((f) => {
@@ -90,6 +93,8 @@ if (!window.api) {
     },
     cacheKeys: () => [...cache.keys()],
     copied, opened,
+    setClipboardText(t) { clip.text = String(t); },
+    clipboardText: () => clip.text,
   });
   const library = new Map(); // `${kind}/${id}` -> {meta, bytes}
   const libKey = (kind, id) => {
@@ -182,8 +187,10 @@ if (!window.api) {
       if (typeof text !== 'string') throw new TypeError('copyText: text must be a string');
       if (text.length > 10 * 1024 * 1024) throw new RangeError('copyText: text too large (10 MB max)');
       copied.push(text);
+      clip.text = text;
       return true;
     },
+    async readText() { return clip.text.length > 10 * 1024 * 1024 ? '' : clip.text; },
     async openExternal(url) {
       const u = new URL(String(url));
       if (!['http:', 'https:', 'mailto:'].includes(u.protocol)) throw new Error(`openExternal: ${u.protocol} links are not opened`);

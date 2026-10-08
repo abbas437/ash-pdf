@@ -49,6 +49,7 @@ import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
 import { restoreDropped, takeObjects } from './pagehistory-lib.js';
+import { objectsSummary, unionBox, pasteDelta } from './clipboard-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -59,7 +60,8 @@ const PASTE_OFFSET = 12; // points
 const types = new Map();
 const selections = new WeakMap(); // tab -> Set<id>
 let idSeq = 0;
-let clipboard = [];
+let clipboard = [];      // object clipboard: clones of the copied objects
+let clipSummary = null;  // the text/plain summary written to the system clipboard with them
 let pasteCount = 0;
 let gesture = null;      // active select-tool drag
 let batchDepth = 0;
@@ -620,22 +622,49 @@ function selectionChanged(tab) {
   bus.emit('annotations:selection', { tab, ids: getSelection(tab) });
   updateChrome();
 }
-function copySel(tab) {
-  clipboard = getSelection(tab).map((id) => clone(getObject(tab, id)));
-  pasteCount = 0;
-  return clipboard.length > 0;
-}
-function paste(tab) {
-  if (!clipboard.length) return;
-  const d = PASTE_OFFSET * ++pasteCount, regroup = new Map();
-  const objs = clipboard.map((o) => {
+/** Copies of `list` moved by (dx, dy) onto `page` (default: their own), each group regrouped. */
+function copiesOf(tab, list, dx, dy, page = null) {
+  const regroup = new Map();
+  return list.map((o) => {
     if (o.group && !regroup.has(o.group)) regroup.set(o.group, newId());
     const def = types.get(o.type);
-    const page = o.page < tab.numPages ? o.page : tab.currentPage;
-    return { ...clone(o), ...(def?.move ? def.move(o, d, d) : {}), page, ...(o.group ? { group: regroup.get(o.group) } : {}) };
+    const pg = page ?? (o.page < tab.numPages ? o.page : tab.currentPage);
+    return { ...clone(o), ...(def?.move ? def.move(o, dx, dy) : {}), page: pg, ...(o.group ? { group: regroup.get(o.group) } : {}) };
   });
-  select(tab, addMany(tab, objs));
 }
+function duplicate(tab) {
+  const list = getSelection(tab).map((id) => clone(getObject(tab, id)));
+  if (list.length) select(tab, addMany(tab, copiesOf(tab, list, PASTE_OFFSET, PASTE_OFFSET)));
+}
+/** Copy the selection to the object clipboard; returns the text summary for the system clipboard ('' = nothing). */
+export function copyObjects(tab) {
+  const list = getSelection(tab).map((id) => clone(getObject(tab, id)));
+  if (!list.length) return '';
+  clipboard = list;
+  pasteCount = 0;
+  clipSummary = objectsSummary(list);
+  return clipSummary;
+}
+/** copyObjects + delete the selection (one undo step). */
+export function cutObjects(tab) {
+  const ids = getSelection(tab), text = copyObjects(tab);
+  if (text) remove(tab, ids);
+  return text;
+}
+/** The object clipboard's summary text, or null when nothing was copied this session. */
+export const objectClipboardSummary = () => (clipboard.length ? clipSummary : null);
+/** Paste the object clipboard centred on `target` {page, x, y} (page points); the copies become the selection. */
+export function pasteObjects(tab, target) {
+  if (!clipboard.length) return false;
+  const box = unionBox(clipboard.map((o) => types.get(o.type)?.bbox?.(o)).filter(Boolean));
+  const from = clipboard[0].page;
+  const size = viewer.pageSize(tab, target.page);
+  const { dx, dy } = box ? pasteDelta(box, from, target, size, PASTE_OFFSET * ++pasteCount) : { dx: 0, dy: 0 };
+  select(tab, addMany(tab, copiesOf(tab, clipboard, dx, dy, target.page)));
+  return true;
+}
+/** Topmost object under page point (x, y) of page `page`, or null. */
+export const objectAtPoint = (tab, page, x, y) => objectAt(ensureTab(tab), page, x, y);
 function onKey(e) {
   const tab = activeTab();
   if (!tab || dialogOpen() || isTyping(e.target) || e.altKey) return;
@@ -645,9 +674,8 @@ function onKey(e) {
   const run = (fn) => { e.preventDefault(); e.stopPropagation(); fn(); };
   if (ctrl && k === 'z' && !e.shiftKey) return run(() => undo(tab));
   if (ctrl && (k === 'y' || (k === 'z' && e.shiftKey))) return run(() => redo(tab));
-  if (ctrl && k === 'c' && sel.length) return run(() => copySel(tab));
-  if (ctrl && k === 'v' && clipboard.length) return run(() => paste(tab));
-  if (ctrl && k === 'd' && sel.length) return run(() => { copySel(tab); paste(tab); });
+  // Ctrl+X / C / V: copytext.js (object and system clipboard together).
+  if (ctrl && k === 'd' && sel.length) return run(() => duplicate(tab));
   if (ctrl) return;
   if (e.key === 'Escape') {
     if (gesture) return run(() => endGesture(false));
