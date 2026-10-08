@@ -15,6 +15,7 @@
 //   Groups: objects sharing a `group` string (e.g. a signature block) are selected, moved and
 //   deleted together: select() widens to every member; paste gives copies a fresh group.
 //   annotations.remapPages(tab, Map<oldIndex, newIndex|null>)  (also on bus 'pages:remapped' {tab, map})
+//   restorePageObjects(tab, items)  page undo/redo puts back the objects a page operation dropped
 //   annotations.registerObjectType(type, { render(obj, svgParent) -> SVGElement,
 //       bbox(obj) -> {x,y,w,h}, handles(obj) -> [{id,x,y}], hit?(obj,x,y,tol) -> bool,
 //       move(obj, dx, dy) -> patch, resize(obj, handleId, dx, dy) -> patch,
@@ -44,6 +45,7 @@ import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
+import { restoreDropped } from './pagehistory-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -362,6 +364,17 @@ function remapPages(tab, map) {
   if (before !== tab.objects.length || tab.objects.length) changed(tab);
   else renderAll(tab);
   selectionChanged(tab);
+}
+
+/**
+ * Page undo/redo: put back the objects the undone (or redone) page operation dropped, with their ids
+ * and stacking order. Mirrors among them need no sync entry here: the reload that follows matches
+ * them to their annotation in the restored bytes by id (one object, not an import beside it).
+ */
+export function restorePageObjects(tab, items) {
+  ensureTab(tab);
+  tab.objects = restoreDropped(tab.objects, items);
+  changed(tab);
 }
 
 // ---------------------------------------------------------------- rendering

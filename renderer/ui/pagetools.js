@@ -1,6 +1,7 @@
 // Page tools: thumbnail context menu, drag-and-drop reordering, page/document dialogs
 // (merge, split, crop, properties, images to PDF, insert pages, replace pages) and the per-tab
-// page-operation undo stack (tab.bytesUndo / tab.bytesRedo, 20 entries each).
+// page-operation undo stack (tab.bytesUndo / tab.bytesRedo, 20 entries each). An entry also keeps
+// the annotation objects its change dropped (deleted/replaced pages), so Undo and Redo bring them back.
 //
 // Every change to the document follows the page protocol other modules rely on:
 //   tab.bytes = newBytes; markDirty(tab);
@@ -11,7 +12,8 @@ import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
-import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors } from './annotations.js';
+import { getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects } from './annotations.js';
+import { invertMap, droppedBy } from './pagehistory-lib.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -44,12 +46,14 @@ function moveOrder(n, sel, pos) {
 const isIdentity = (order) => order.every((v, k) => v === k);
 
 // ---------------------------------------------------------------- protocol + undo
-function commit(tab, bytes, map, select) {
+// `restore`: annotation objects (pagehistory-lib droppedBy items) the undo/redo step brings back.
+function commit(tab, bytes, map, select, restore = null) {
   const refocus = !!thumbs.listEl?.contains(document.activeElement);
   if (select) pendingSelect = { tab, indices: select, focus: refocus };
   tab.bytes = bytes;
   markDirty(tab);
   bus.emit('pages:remapped', { tab, map });
+  if (restore?.length) restorePageObjects(tab, restore); // before the reload reconciles the mirror
   bus.emit('tab:bytesChanged', { tab });
 }
 
@@ -70,7 +74,8 @@ export function runOp(tab, label, fn) {
       const res = await fn(before, n, c);
       if (!res) return false;
       tab.bytesUndo ??= [];
-      pushCapped(tab.bytesUndo, { bytes: before, map: res.map });
+      // `dropped`: the objects on pages this op removes, put back by its Undo.
+      pushCapped(tab.bytesUndo, { bytes: before, map: res.map, dropped: droppedBy(tab.objects ?? [], res.map) });
       tab.bytesRedo = [];
       commit(tab, res.bytes, res.map, res.select);
       offerUndo(tab);
@@ -84,12 +89,6 @@ export function runOp(tab, label, fn) {
   return job;
 }
 
-function invert(map, newCount) {
-  const inv = new Map(range(newCount).map((i) => [i, null]));
-  for (const [o, nw] of map) if (nw != null) inv.set(nw, o);
-  return inv;
-}
-
 function step(tab, from, to) {
   if (!tab || tab.readOnly || !tab[from]?.length) return Promise.resolve(false);
   const job = chain.then(async () => {
@@ -101,10 +100,11 @@ function step(tab, from, to) {
       const curCount = (await c.getInfo(cur)).pageCount;
       // Undo: entry.map is old→new of the op being undone, so emit its inverse.
       // Redo: entry.map was stored inverted by undo, so the same rule applies.
-      const map = invert(entry.map, curCount);
+      // The objects `map` drops go with the opposite entry; the ones entry.map dropped come back.
+      const map = invertMap(entry.map, curCount);
       tab[to] ??= [];
-      pushCapped(tab[to], { bytes: cur, map });
-      commit(tab, entry.bytes, map, null);
+      pushCapped(tab[to], { bytes: cur, map, dropped: droppedBy(tab.objects ?? [], map) });
+      commit(tab, entry.bytes, map, null, entry.dropped);
       toast(from === 'bytesUndo' ? 'Page change undone' : 'Page change redone');
       return true;
     } catch (err) {

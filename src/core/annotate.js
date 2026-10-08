@@ -162,6 +162,20 @@ export const DEFAULT_COLOR = { note: '#ffd400', underline: '#00a000', strikeout:
 const TEXT_MARKUPS = new Set(['underline', 'strikeout', 'squiggly', 'textHighlight']);
 const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
 
+/**
+ * Sticky-note icons (/Name of a /Text annotation): a filled body in the note colour plus a stroked glyph,
+ * as SVG paths in a 20x20 y-down box using only absolute M/L/C/Z (so every point is an 'x y' pair).
+ * The names are the ones the note tool offers (renderer/ui/tools-markup.js NOTE_ICONS); others draw as Comment.
+ */
+export const NOTE_ICON_PATHS = {
+  Comment: { body: 'M 2 1 L 18 1 L 19 2 L 19 14 L 18 15 L 9 15 L 4 19 L 5 15 L 2 15 L 1 14 L 1 2 Z', glyph: 'M 4 5 L 16 5 M 4 8 L 16 8 M 4 11 L 16 11' },
+  Note: { body: 'M 3 1 L 13 1 L 17 5 L 17 19 L 3 19 Z', glyph: 'M 13 1 L 13 5 L 17 5 M 6 9 L 14 9 M 6 12 L 14 12 M 6 15 L 11 15' },
+  Key: { body: 'M 1 3 L 19 3 L 19 17 L 1 17 Z', glyph: 'M 4 10 C 4 6 10 6 10 10 C 10 14 4 14 4 10 Z M 10 10 L 17 10 M 14.5 10 L 14.5 13 M 17 10 L 17 12.5' },
+  Help: { body: 'M 1 10 C 1 -2 19 -2 19 10 C 19 22 1 22 1 10 Z', glyph: 'M 7.5 7.5 C 7.5 4.5 12.5 4.5 12.5 7.5 C 12.5 9.5 10 9.5 10 12 M 10 14.5 L 10 15.5' },
+  Paragraph: { body: 'M 1 1 L 19 1 L 19 19 L 1 19 Z', glyph: 'M 11 4 L 11 16 M 14 4 L 14 16 M 15.5 4 L 8.5 4 C 4.5 4 4.5 10 8.5 10 L 11 10' },
+  Insert: { body: 'M 1 18 L 10 3 L 19 18 L 15 18 L 10 9.5 L 5 18 Z', glyph: '' },
+};
+
 /** Note icon / text markup (quads) in visible y-up space; `svg(d, opts)` draws a y-down path. */
 function drawNoteOrMarkup(svg, o) {
   const color = parseColor(o.color, DEFAULT_COLOR[o.type]) || rgb(0, 0, 0);
@@ -171,10 +185,13 @@ function drawNoteOrMarkup(svg, o) {
     if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) throw new TypeError(`note object ${o.id ?? ''} needs numeric x and y`);
     const sx = num(o.w, 20) / 20;
     const sy = num(o.h, 20) / 20;
+    const icon = Object.hasOwn(NOTE_ICON_PATHS, o.icon) ? NOTE_ICON_PATHS[o.icon] : NOTE_ICON_PATHS.Comment;
+    // Icon paths are in a 20x20 y-down box: 'P x y' points map to the note's box; other tokens pass through.
     const p = (x, y) => P(o.x + x * sx, o.y + y * sy);
-    svg(`M ${p(2, 1)} L ${p(18, 1)} L ${p(19, 2)} L ${p(19, 14)} L ${p(18, 15)} L ${p(9, 15)} L ${p(4, 19)} L ${p(5, 15)} L ${p(2, 15)} L ${p(1, 14)} L ${p(1, 2)} Z`,
-      { color, borderColor: rgb(0.2, 0.2, 0.2), borderWidth: 0.75, opacity, borderOpacity: opacity });
-    svg([5, 8, 11].map((y) => `M ${p(4, y)} L ${p(16, y)}`).join(' '), { borderColor: rgb(0.2, 0.2, 0.2), borderWidth: 1, borderOpacity: opacity });
+    const map = (d) => d.replace(/(-?[\d.]+) (-?[\d.]+)/g, (_, x, y) => p(Number(x), Number(y)));
+    const ink = rgb(0.2, 0.2, 0.2);
+    svg(map(icon.body), { color, borderColor: ink, borderWidth: 0.75, opacity, borderOpacity: opacity });
+    if (icon.glyph) svg(map(icon.glyph), { borderColor: ink, borderWidth: 1, borderOpacity: opacity });
     return;
   }
   if (!Array.isArray(o.quads) || !o.quads.length || o.quads.some((q) => !Array.isArray(q) || q.length !== 8 || !q.every(Number.isFinite))) {
