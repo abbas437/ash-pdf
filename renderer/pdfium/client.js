@@ -57,6 +57,10 @@ export const pdfium = {
   save: (docId, { incremental = false } = {}) => call('save', docId, { incremental }),
   /** True redaction + full save; resolves to the new bytes. See redact.js. */
   redact: (docId, areas, { fill = [0, 0, 0] } = {}) => call('redact', docId, areas, { fill }),
+  /** Image objects of a page: [{id, bbox, matrix, width, height, filter, inForm}] (see imgedit.js). */
+  pageImages: (docId, pageIndex) => call('pageImages', docId, pageIndex),
+  /** Edit one image and save in full; resolves to the new bytes. op: {transform: matrix} | {remove: true} | {replace: {bytes, kind}}. */
+  editImage: (docId, pageIndex, id, op) => call('editImage', docId, pageIndex, id, op.replace ? { replace: { ...op.replace, bytes: copy(op.replace.bytes) } } : op),
   get started() { return !!worker; },
   /** Diagnostics for tests: open a generated 2-page PDF, read it back, save incrementally. */
   async selfTest() {
