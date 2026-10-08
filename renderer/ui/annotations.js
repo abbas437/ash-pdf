@@ -19,7 +19,9 @@
 //   annotations.registerObjectType(type, { render(obj, svgParent) -> SVGElement,
 //       bbox(obj) -> {x,y,w,h}, handles(obj) -> [{id,x,y}], hit?(obj,x,y,tol) -> bool,
 //       move(obj, dx, dy) -> patch, resize(obj, handleId, dx, dy) -> patch,
-//       style?(obj, toolStyle, changedKeys) -> patch })
+//       style?(obj, toolStyle, changedKeys) -> patch, fixed?: true, outline?(obj) -> [[[x,y],...],...] })
+//     fixed types (text markups) are selectable but never moved by drag or arrow keys; outline gives
+//     the polygons drawn as the selection outline instead of the dashed bounding box.
 //     move/resize receive the object as it was when the drag started plus the TOTAL delta and
 //     return a patch (they must not mutate). Box types use handles nw,n,ne,e,se,s,sw,w.
 //   annotations.applyStyle(tab, changedKeys)  -> applies state.toolStyle keys to the selection
@@ -408,6 +410,11 @@ function renderPage(tab, i) {
   const selected = tab.objects.filter((o) => o.page === i && sel.has(o.id));
   for (const o of selected) {
     const def = types.get(o.type);
+    const outline = def.outline?.(o);
+    if (outline) {
+      svgEl('path', { class: 'ann-bbox', d: outline.map((poly) => `M${poly.map(([x, y]) => `${r3(x)} ${r3(y)}`).join('L')}Z`).join('') }, L.sel);
+      continue;
+    }
     const b = def.bbox?.(o);
     if (!b) continue;
     const pad = 3 * px;
@@ -501,7 +508,7 @@ export const selectHandlers = {
     window.getSelection?.()?.removeAllRanges();
     for (const [id, o0] of gesture.orig) {
       const o = getObject(tab, id), def = types.get(o0.type);
-      if (!o || !def) continue;
+      if (!o || !def || (def.fixed && gesture.mode === 'move')) continue;
       Object.assign(o, gesture.mode === 'move' ? def.move(o0, dx, dy) : def.resize(o0, gesture.handle, dx, dy));
     }
     renderAll(tab, [gesture.page]);
@@ -518,10 +525,11 @@ function endGesture(commitIt) {
     const o = getObject(g.tab, id);
     if (!o) continue;
     const keys = Object.keys(o).filter((k) => k !== 'id' && JSON.stringify(o[k]) !== JSON.stringify(o0[k]));
+    if (!keys.length) continue;
     patches.set(id, Object.fromEntries(keys.map((k) => [k, o[k]])));
     Object.assign(o, clone(o0)); // restore, then apply as one undoable update
   }
-  if (commitIt) updateMany(g.tab, patches);
+  if (commitIt && patches.size) updateMany(g.tab, patches);
   else renderAll(g.tab);
 }
 function hover(e, tab) {
@@ -530,7 +538,7 @@ function hover(e, tab) {
   const sc = viewer.getScrollEl(tab);
   if (!hit || !sc) return;
   const hd = handleAt(tab, hit.pageIndex, hit.x, hit.y);
-  sc.style.cursor = hd ? handleCursor(hd.handle, tab.viewRotation) : objectAt(tab, hit.pageIndex, hit.x, hit.y) ? 'move' : '';
+  sc.style.cursor = hd ? handleCursor(hd.handle, tab.viewRotation) : (() => { const o = objectAt(tab, hit.pageIndex, hit.x, hit.y); return o ? (types.get(o.type)?.fixed ? 'pointer' : 'move') : ''; })();
 }
 /** Resize cursor for a handle as it appears on screen (view rotation 90/270 swaps the axes). */
 function handleCursor(id, rot = 0) {
@@ -625,7 +633,8 @@ function onKey(e) {
   const step = e.shiftKey ? 10 : 1;
   const dir = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
   if (dir) return run(() => {
-    const patches = new Map(sel.map((id) => { const o = getObject(tab, id); return [id, types.get(o.type).move(o, dir[0], dir[1])]; }));
+    const patches = new Map(sel.map((id) => getObject(tab, id)).filter((o) => !types.get(o.type).fixed).map((o) => [o.id, types.get(o.type).move(o, dir[0], dir[1])]));
+    if (!patches.size) return;
     updateMany(tab, patches, { coalesce: `nudge:${sel.join(',')}` });
   });
 }

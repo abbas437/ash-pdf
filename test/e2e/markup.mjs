@@ -14,6 +14,7 @@ const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 import { pdfjsDoc } from '../helpers.js';
 
+const PARA = ['Supply air ducts shall be insulated with mineral wool', 'and sealed at every joint before the pressure test of', 'each zone is witnessed by the engineer on site today.'];
 async function makePdf() {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
@@ -22,6 +23,8 @@ async function makePdf() {
     p.drawText('Markup target words', { x: 72, y: 600, size: 20, font });
     if (k === 1) p.setRotation(degrees(90));
   }
+  // Page 3: a 3-line paragraph, 11 pt Helvetica at 1.2 line spacing (text-selection highlight).
+  doc.addPage([612, 792]).drawText(PARA.join('\n'), { x: 72, y: 700, size: 11, lineHeight: 13.2, font });
   return Buffer.from(await doc.save());
 }
 
@@ -58,7 +61,7 @@ try {
   const chooser = page.waitForEvent('filechooser');
   await page.click('#btn-open');
   await (await chooser).setFiles({ name: 'markup.pdf', mimeType: 'application/pdf', buffer: pdf });
-  await page.waitForFunction(() => window.ashStudio.state.tabs[0]?.numPages === 2, null, { timeout: 10_000 });
+  await page.waitForFunction(() => window.ashStudio.state.tabs[0]?.numPages === 3, null, { timeout: 10_000 });
   await ev('v.setZoom(tab, 1);');
 
   // Word `w` on page i: its text-layer box in page space, its direction, and drag end points.
@@ -74,7 +77,10 @@ try {
     const ext = (r) => Math.abs(dx) * r.width + Math.abs(dy) * r.height;
     const pts = [[all.left, all.top], [all.right, all.bottom]].map(([x, y]) => v.clientToPage(tab, x, y));
     const p0 = v.clientToPage(tab, fx, fy), p1 = v.clientToPage(tab, lx, ly);
-    return { box: { x0: Math.min(pts[0].x, pts[1].x), y0: Math.min(pts[0].y, pts[1].y), x1: Math.max(pts[0].x, pts[1].x), y1: Math.max(pts[0].y, pts[1].y) },
+    const tc = await v.getTextContent(tab, arg[0]), it = tc.items.find((t) => t.str.includes(arg[1])), st = tc.styles[it.fontName];
+    const [, , tc2, td2, te, tf] = it.transform, vp1 = tab.pages[arg[0]].getViewport({ scale: 1 });
+    const ip = [st.ascent, st.descent].map((hh) => vp1.convertToViewportPoint(te + tc2 * hh, tf + td2 * hh));
+    return { item: { x0: Math.min(ip[0][0], ip[1][0]), x1: Math.max(ip[0][0], ip[1][0]), y0: Math.min(ip[0][1], ip[1][1]), y1: Math.max(ip[0][1], ip[1][1]) }, box: { x0: Math.min(pts[0].x, pts[1].x), y0: Math.min(pts[0].y, pts[1].y), x1: Math.max(pts[0].x, pts[1].x), y1: Math.max(pts[0].y, pts[1].y) },
       dir: [p1.x - p0.x, p1.y - p0.y], from: [fx - dx * (ext(f) / 2 - 1), fy - dy * (ext(f) / 2 - 1)], to: [lx + dx * (ext(l) / 2 - 1), ly + dy * (ext(l) / 2 - 1)] };`, [i, w]);
   const markWord = async (tool, i, w) => {
     // A second click on the active tool turns it off (back to Select), so click only when it is not active.
@@ -90,8 +96,11 @@ try {
     const { W, o } = await markWord('text-highlight', i, 'target');
     check(o?.type === 'textHighlight' && o.page === i && o.quads.length === 1, `page ${i}: highlight object ${JSON.stringify(o)}`);
     const q = o.quads[0], xs = [q[0], q[2], q[4], q[6]], ys = [q[1], q[3], q[5], q[7]];
-    near(Math.min(...xs), W.box.x0, `page ${i} x0`); near(Math.max(...xs), W.box.x1, `page ${i} x1`);
-    near(Math.min(...ys), W.box.y0, `page ${i} y0`); near(Math.max(...ys), W.box.y1, `page ${i} y1`);
+    // Along the text the quad spans the word's characters; across it, the text item's font ascent..descent.
+    const [qa0, qa1, qc0, qc1] = i === 0 ? [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)] : [Math.min(...ys), Math.max(...ys), Math.min(...xs), Math.max(...xs)];
+    const [wa0, wa1] = i === 0 ? [W.box.x0, W.box.x1] : [W.box.y0, W.box.y1], [ic0, ic1] = i === 0 ? [W.item.y0, W.item.y1] : [W.item.x0, W.item.x1];
+    near(qa0, wa0, `page ${i} start`); near(qa1, wa1, `page ${i} end`);
+    near(qc0, ic0, `page ${i} glyph top/side`, 0.5); near(qc1, ic1, `page ${i} glyph bottom/side`, 0.5);
     // TL -> TR must run along the text (down the page on /Rotate 90), or underlines land on the wrong edge.
     const tx = q[2] - q[0], ty = q[3] - q[1];
     check((tx * W.dir[0] + ty * W.dir[1]) / (Math.hypot(tx, ty) * Math.hypot(...W.dir)) > 0.99, `page ${i}: quad TL->TR (${tx},${ty}) not along text ${W.dir}`);
@@ -193,6 +202,63 @@ try {
   const pl = await PDFDocument.load(out3), names = pl.getPages()[0].node.Annots().asArray().map((r) => pl.context.lookup(r))
     .filter((d) => d.get(PDFName.of('Subtype')) === PDFName.of('Text')).map((d) => d.get(PDFName.of('Name'))?.decodeText?.() ?? String(d.get(PDFName.of('Name'))));
   check(names.length === 1 && names[0] === 'Key', `note /Name: ${names}`);
+
+  step = 'text selection highlight (3-line paragraph)';
+  // Char k of paragraph line L: client rect and page-space x edges (from the text layer).
+  const ch = (L, k) => ev(`
+    v.scrollToPage(tab, 2);
+    for (let t = 0; t < 100 && !v.getPageEl(tab, 2).querySelector('.textLayer span'); t++) await new Promise((r) => setTimeout(r, 50));
+    const span = [...v.getPageEl(tab, 2).querySelectorAll('.textLayer span')].find((s) => s.textContent === arg[0]);
+    const r = document.createRange(); r.setStart(span.firstChild, arg[1]); r.setEnd(span.firstChild, arg[1] + 1);
+    const cr = r.getBoundingClientRect();
+    return { cr: { left: cr.left, right: cr.right, top: cr.top, bottom: cr.bottom, w: cr.width }, x0: v.clientToPage(tab, cr.left, cr.top).x, x1: v.clientToPage(tab, cr.right, cr.top).x };`, [PARA[L], k]);
+  const pt = (c, f) => [c.cr.left + f * c.cr.w, (c.cr.top + c.cr.bottom) / 2];
+  const kA = PARA[0].indexOf('insulated') + 1, kB = PARA[2].indexOf('witnessed') + 2, kW = PARA[1].indexOf('pressure');
+  await page.click('[data-tool="select"]');
+  await page.click('[data-tool="text-highlight"]');
+  const cA = await ch(0, kA), cB = await ch(2, kB);
+  const before = (await objs()).length;
+  await page.mouse.click(...pt(cA, 0.3));
+  await page.waitForTimeout(100);
+  check((await objs()).length === before, 'a click without drag created a markup');
+  await page.mouse.move(...pt(cA, 0.3)); await page.mouse.down(); await page.mouse.move(...pt(cB, 0.7), { steps: 10 }); await page.mouse.up();
+  await page.waitForTimeout(100);
+  const th = (await objs()).at(-1);
+  check((await objs()).length === before + 1 && th.type === 'textHighlight' && th.page === 2 && th.quads.length === 3, `paragraph highlight: ${JSON.stringify(th)}`);
+  const qb = th.quads.map((q) => { const b = { x0: Math.min(q[0], q[2], q[4], q[6]), x1: Math.max(q[0], q[2], q[4], q[6]), y0: Math.min(q[1], q[3], q[5], q[7]), y1: Math.max(q[1], q[3], q[5], q[7]) }; return b; });
+  const end = async (L) => (await ch(L, PARA[L].length - 1)).x1, start = async (L) => (await ch(L, 0)).x0;
+  // Starts/ends on character boundaries (the pointer was 30 % / 70 % into a character), lines in between in full.
+  near(qb[0].x0, cA.x0, 'line 1 start = left edge of the pressed char', 0.6); near(qb[0].x1, await end(0), 'line 1 runs to its last char', 0.6);
+  near(qb[1].x0, await start(1), 'line 2 start', 0.6); near(qb[1].x1, await end(1), 'line 2 end', 0.6);
+  near(qb[2].x0, await start(2), 'line 3 start', 0.6); near(qb[2].x1, cB.x1, 'line 3 end = right edge of the released char', 0.6);
+  // Vertically each quad sits on its own line: >= 80 % of the line's em box (baseline - 0.8 em .. + 0.2 em), no other line.
+  const em = [0, 1, 2].map((L) => { const base = 792 - (700 - 13.2 * L); return [base - 0.8 * 11, base + 0.2 * 11]; });
+  const ov = (q, [a, b]) => Math.max(0, Math.min(q.y1, b) - Math.max(q.y0, a));
+  qb.forEach((q, L) => {
+    check(ov(q, em[L]) >= 0.8 * 11, `quad ${L + 1} covers ${ov(q, em[L]).toFixed(2)} pt of its line (${q.y0.toFixed(2)}..${q.y1.toFixed(2)})`);
+    check(em.every((r, M) => M === L || ov(q, r) === 0), `quad ${L + 1} overlaps another line`);
+  });
+
+  step = 'text highlight is not movable';
+  await page.click('[data-tool="select"]'); await frames();
+  const mid = await ev('const c = v.pageToClient(tab, 2, arg[0], arg[1]); return [c.clientX, c.clientY];', [(qb[1].x0 + qb[1].x1) / 2, (qb[1].y0 + qb[1].y1) / 2]);
+  await page.mouse.click(...mid);
+  check((await ev('return an.getSelection(tab);')).join() === th.id, 'click does not select the text highlight');
+  check(await page.$('.ann-selection path.ann-bbox') && !(await page.$('.ann-selection rect.ann-bbox')), 'selection outline is not drawn along the quads');
+  await page.mouse.move(...mid); await page.mouse.down(); await page.mouse.move(mid[0] + 60, mid[1] + 40, { steps: 6 }); await page.mouse.up();
+  await page.keyboard.press('ArrowRight');
+  check(JSON.stringify((await objs()).find((o) => o.id === th.id).quads) === JSON.stringify(th.quads), 'text highlight moved by a drag / arrow key');
+
+  step = 'double-click highlights a word';
+  await page.click('[data-tool="text-highlight"]');
+  const w0 = await ch(1, kW), w1 = await ch(1, kW + 'pressure'.length - 1);
+  await page.waitForTimeout(600);
+  await page.mouse.dblclick(...pt(await ch(1, kW + 3), 0.5));
+  await page.waitForTimeout(100);
+  const wh = (await objs()).at(-1);
+  check(wh.id !== th.id && wh.type === 'textHighlight' && wh.quads.length === 1, `double-click word: ${JSON.stringify(wh)}`);
+  const wq = wh.quads[0];
+  near(Math.min(wq[0], wq[4]), w0.x0, 'word start', 0.6); near(Math.max(wq[2], wq[6]), w1.x1, 'word end', 0.6);
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('MARKUP OK');

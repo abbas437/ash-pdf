@@ -2,8 +2,11 @@
 // "Add comment" (Enter / Edit > Comment…) for any selected object. Objects follow
 // docs/CORE-API.md: text markups carry `quads` in visible page space (text-frame corner order,
 // see markup-geom.js); notes are {x, y, w, h, icon, color, note}; any object may carry `note`.
-// Text markups read the browser selection on the pdf.js text layer: drag across text with the
-// tool active, or select text first and then pick the tool.
+// Text markups select TEXT like a text selection: a drag runs from the char boundary under the
+// press to the one under the release in reading order (markup-geom.js character model built from
+// the page's text content); double-click marks a word; a plain click does nothing. Text selected
+// with the Select tool first is converted the same way when the tool is picked. Text markups are
+// fixed to their text: they can be selected, restyled, commented and deleted, never moved.
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
@@ -11,7 +14,7 @@ import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { annotations, getAuthor } from './annotations.js';
-import { textAngle, quadsFromBoxes, quadsBox } from './markup-geom.js';
+import { quadsBox, buildCharModel, caretAt, wordAt, rangeQuads } from './markup-geom.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const TEXT_TYPES = {
@@ -73,7 +76,10 @@ function renderMarkup(o, parent) {
 }
 const markupType = {
   render: renderMarkup,
+  fixed: true, // attached to its text: never moved or resized
   bbox: (o) => quadsBox(o.quads),
+  outline: (o) => o.quads.map((q) => [0, 1, 3, 2].map((i) => qPt(q, i))),
+  hit: (o, x, y, tol) => o.quads.some((q) => { const b = quadsBox([q]); return x >= b.x - tol && x <= b.x + b.w + tol && y >= b.y - tol && y <= b.y + b.h + tol; }),
   handles: () => [],
   move: (o, dx, dy) => ({ quads: o.quads.map((q) => q.map((v, i) => v + (i % 2 ? dy : dx))) }),
   resize: () => ({}),
@@ -97,50 +103,114 @@ const noteType = {
   style: () => ({}),
 };
 
-// ---------------------------------------------------------------- selection -> quads
-/** Page-space fragment boxes of the current text-layer selection, grouped by page index. */
-function selectionBoxes(tab) {
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
-  const range = sel.getRangeAt(0);
-  const byPage = new Map();
-  for (let i = 0; i < tab.numPages; i++) {
-    const pageEl = viewer.getPageEl(tab, i);
-    const tl = pageEl?.querySelector('.textLayer');
-    if (!tl || !range.intersectsNode(tl)) continue;
-    const main = Number(tl.getAttribute('data-main-rotation')) || 0;
-    const boxes = [];
-    for (const span of tl.querySelectorAll('span')) {
-      const node = span.firstChild;
-      if (span.classList.contains('hl') || node?.nodeType !== 3 || !range.intersectsNode(node)) continue;
-      const r = document.createRange();
-      r.setStart(node, node === range.startContainer ? range.startOffset : 0);
-      r.setEnd(node, node === range.endContainer ? range.endOffset : node.length);
-      if (r.collapsed || !r.toString().trim()) continue;
-      const angle = textAngle(main, tab.viewRotation ?? 0, parseFloat(span.style.getPropertyValue('--rotate')) || 0);
-      for (const cr of r.getClientRects()) {
-        if (cr.width < 0.5 || cr.height < 0.5) continue;
-        const pts = [[cr.left, cr.top], [cr.right, cr.top], [cr.left, cr.bottom], [cr.right, cr.bottom]].map(([x, y]) => annotations.toPage(tab, i, x, y));
-        const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
-        boxes.push({ x0: Math.min(...xs), y0: Math.min(...ys), x1: Math.max(...xs), y1: Math.max(...ys), angle });
-      }
-    }
-    if (boxes.length) byPage.set(i, boxes);
-  }
-  return byPage.size ? byPage : null;
+// ---------------------------------------------------------------- text -> quads
+const models = new WeakMap(); // textContent -> character model (one per page, rebuilt with the text cache)
+let measureCtx = null;
+function measure(chars, family) {
+  measureCtx ??= document.createElement('canvas').getContext('2d');
+  measureCtx.font = `100px ${family}`;
+  return chars.map((ch) => measureCtx.measureText(ch).width);
 }
-/** Turn the text selection into one markup object per page; returns the new objects. */
-function applyTextMarkup(tab, type) {
-  if (!tab || tab.readOnly) return [];
-  const byPage = selectionBoxes(tab);
-  if (!byPage) return [];
+async function pageModel(tab, i) {
+  const tc = await viewer.getTextContent(tab, i);
+  if (!tc) return null;
+  if (!models.has(tc)) {
+    const vp = tab.pages[i].getViewport({ scale: 1 });
+    models.set(tc, buildCharModel(tc.items, tc.styles, (x, y) => vp.convertToViewportPoint(x, y), measure));
+  }
+  return models.get(tc);
+}
+/** Add one markup of `type` per page from {page: quads}; selects and returns the new objects. */
+function addMarkups(tab, type, byPage) {
   const made = [];
   annotations.batch(tab, () => {
-    for (const [page, boxes] of byPage) made.push(annotations.add(tab, { type, page, quads: quadsFromBoxes(boxes), ...styles[type] }));
+    for (const [page, quads] of byPage) if (quads.length) made.push(annotations.add(tab, { type, page, quads, ...styles[type] }));
   });
-  window.getSelection().removeAllRanges();
-  annotations.select(tab, made.map((o) => o.id));
+  if (made.length) annotations.select(tab, made.map((o) => o.id));
   return made;
+}
+/** Convert the browser's text-layer selection (made with the Select tool) into markups; returns the new objects. */
+async function applyTextMarkup(tab, type) {
+  const sel = window.getSelection();
+  if (!tab || tab.readOnly || !sel || sel.isCollapsed || !sel.rangeCount) return [];
+  const range = sel.getRangeAt(0);
+  const caret = (node, off, end) => {
+    const r = document.createRange();
+    r.setStart(node, off); r.setEnd(node, off);
+    const rects = [...r.getClientRects()];
+    let cr = rects[0] ?? r.getBoundingClientRect();
+    if (!cr.width && !cr.height) { const el = node.nodeType === 3 ? node.parentElement : node; cr = el?.getBoundingClientRect(); if (!cr) return null; return { x: end ? cr.right : cr.left, y: cr.top + cr.height / 2 }; }
+    return { x: cr.left, y: cr.top + cr.height / 2 };
+  };
+  const p0 = caret(range.startContainer, range.startOffset, false), p1 = caret(range.endContainer, range.endOffset, true);
+  if (!p0 || !p1) return [];
+  const h0 = viewer.clientToPage(tab, p0.x, p0.y), h1 = viewer.clientToPage(tab, p1.x, p1.y);
+  if (!h0 || !h1) return [];
+  const byPage = new Map();
+  for (let i = h0.pageIndex; i <= h1.pageIndex; i++) {
+    const m = await pageModel(tab, i);
+    if (!m?.chars.length) continue;
+    const a = i === h0.pageIndex ? caretAt(m, h0.x, h0.y) : 0, b = i === h1.pageIndex ? caretAt(m, h1.x, h1.y) : m.chars.length;
+    byPage.set(i, rangeQuads(m, a, b));
+  }
+  sel.removeAllRanges();
+  return addMarkups(tab, type, byPage);
+}
+
+// Drag selection: press -> caret, live preview while dragging, release -> one markup.
+let drag = null;
+function endDrag(e) {
+  const g = drag;
+  if (!g || (e && e.pointerId !== g.pointerId)) return;
+  drag = null;
+  window.removeEventListener('pointermove', g.onMove, true);
+  window.removeEventListener('pointerup', endDrag, true);
+  window.removeEventListener('pointercancel', endDrag, true);
+  annotations.renderPreview(g.tab, g.page, null);
+  if (!e || e.type !== 'pointerup' || !g.moved) return;
+  g.ready.then(() => {
+    const b = g.model && g.a != null ? caretAt(g.model, ...g.at(e)) : null;
+    if (b != null && b !== g.a) addMarkups(g.tab, g.type, new Map([[g.page, rangeQuads(g.model, g.a, b)]]));
+  });
+}
+function startDrag(e, tab, type, page) {
+  endDrag(null);
+  const at = (ev) => { const p = annotations.toPage(tab, page, ev.clientX, ev.clientY); return [p.x, p.y]; };
+  const g = { tab, type, page, pointerId: e.pointerId, x: e.clientX, y: e.clientY, at, model: null, a: null, moved: false };
+  g.ready = pageModel(tab, page).then((m) => {
+    if (!m) return;
+    g.model = m;
+    const [x, y] = at(e), L = m.lines[0];
+    g.a = caretAt(m, x, y, L ? 1.5 * (L.c1 - L.c0) : 0); // the press must be on or next to text
+  });
+  g.onMove = (ev) => {
+    if (ev.pointerId !== g.pointerId) return;
+    if (!g.moved && Math.hypot(ev.clientX - g.x, ev.clientY - g.y) < 3) return;
+    g.moved = true;
+    if (!g.model || g.a == null) return;
+    const quads = rangeQuads(g.model, g.a, caretAt(g.model, ...at(ev)));
+    annotations.renderPreview(tab, page, quads.length ? { type, page, quads, ...styles[type] } : null);
+  };
+  window.addEventListener('pointermove', g.onMove, true);
+  window.addEventListener('pointerup', endDrag, true);
+  window.addEventListener('pointercancel', endDrag, true);
+  drag = g;
+}
+const textToolHandlers = (type) => ({
+  onPointerDown(e, { tab, hit }) {
+    if (e.button !== 0 || !hit || tab.readOnly || e.target.closest?.('.mk-popup')) return;
+    e.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    startDrag(e, tab, type, hit.pageIndex);
+  },
+});
+/** Double-click with a text tool: mark the word under the pointer. */
+async function markWord(tab, type, clientX, clientY) {
+  const hit = viewer.clientToPage(tab, clientX, clientY);
+  if (!hit || tab.readOnly) return [];
+  const m = await pageModel(tab, hit.pageIndex);
+  const w = m && wordAt(m, hit.x, hit.y);
+  return w ? addMarkups(tab, type, new Map([[hit.pageIndex, rangeQuads(m, ...w)]])) : [];
 }
 
 // ---------------------------------------------------------------- comment / note popup
@@ -216,7 +286,8 @@ export function initMarkupTools(app) {
     registerTool({
       id: d.tool, label: d.label, icon: svgIcon(d.icon), shortcut: d.key === 'H' ? 'H with text selected' : d.key, cursor: 'text', options: [colorCtl, opacityCtl],
       onActivate: () => applyTextMarkup(activeTab(), type),
-      onPointerUp: (e, { tab }) => { if (e.button === 0) setTimeout(() => applyTextMarkup(tab, type), 0); },
+      onDeactivate: () => endDrag(null),
+      ...textToolHandlers(type),
     });
   }
   app?.registerMenuItem?.('Tools', { id: 'squiggly', label: 'Squiggly underline', shortcut: 'G', action: () => setTool('squiggly') });
@@ -225,10 +296,13 @@ export function initMarkupTools(app) {
   const selected = () => { const t = activeTab(); const s = t ? annotations.getSelection(t) : []; return s.length === 1 ? s[0] : null; };
   app?.registerMenuItem?.('Edit', { id: 'add-comment', label: 'Comment on selection…', shortcut: 'Enter', action: () => { const id = selected(); if (id) openComment(activeTab(), id); }, enabled: () => !!selected() });
   window.addEventListener('pointerdown', (e) => { if (popup && !e.target.closest?.('.mk-popup')) closePopup(true); }, true);
+  const typeOfTool = Object.fromEntries(Object.entries(TEXT_TYPES).map(([t, d]) => [d.tool, t]));
+  bus.on('tool:changed', ({ tool }) => document.body.classList.toggle('tm-text', !!typeOfTool[tool]));
   document.addEventListener('dblclick', (e) => {
     const tab = activeTab();
     const n = tab && e.target.closest?.('.page') && noteAt(tab, e.clientX, e.clientY);
-    if (n) { annotations.select(tab, [n.id]); openComment(tab, n.id); }
+    if (n) { annotations.select(tab, [n.id]); openComment(tab, n.id); return; }
+    if (tab && typeOfTool[state.tool] && e.button === 0 && e.target.closest?.('.page')) markWord(tab, typeOfTool[state.tool], e.clientX, e.clientY);
   });
   bus.on('tab:activated', () => closePopup(true));
   document.addEventListener('keydown', (e) => {
@@ -242,4 +316,4 @@ export function initMarkupTools(app) {
   }, true);
 }
 
-export const markupTools = { applyTextMarkup, openComment, closePopup, styles, noteStyle, NOTE_ICONS };
+export const markupTools = { applyTextMarkup, markWord, openComment, closePopup, styles, noteStyle, NOTE_ICONS };
