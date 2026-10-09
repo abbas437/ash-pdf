@@ -308,6 +308,20 @@ body.forms-highlight .form-unsupported { background-color: rgba(120, 120, 120, .
 .pt-icon-btn:disabled { opacity: .3; }
 .pt-margins { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 .pt-margins .input { width: 100%; box-sizing: border-box; }
+.pt-crop-range { display: flex; align-items: center; gap: 8px; } .pt-crop-range .input { flex: 1; min-width: 0; }
+.pt-crop-draw-row { display: flex; align-items: center; gap: 8px; }
+.dialog-backdrop.crop-drawing { background: transparent; pointer-events: none; place-items: end; padding: 16px; }
+.dialog-backdrop.crop-drawing .dialog { pointer-events: auto; }
+/* compact while drawing so the corner dialog hides as little of the page as possible */
+.dialog-backdrop.crop-drawing .pt-dialog { min-width: 0; width: 340px; }
+.dialog-backdrop.crop-drawing .pt-dialog p.pt-hint, .dialog-backdrop.crop-drawing .pt-dialog .pt-fieldset { display: none; }
+.crop-draw { position: absolute; inset: 0; z-index: 6; cursor: crosshair; touch-action: none; }
+.crop-dim { fill: rgba(0, 0, 0, .45); }
+.crop-box { fill: transparent; stroke: #1a73e8; stroke-width: 1.5; stroke-dasharray: 4 3; cursor: move; vector-effect: non-scaling-stroke; }
+.crop-handle { fill: #fff; stroke: #1a73e8; vector-effect: non-scaling-stroke; }
+.crop-h-n, .crop-h-s { cursor: ns-resize; } .crop-h-e, .crop-h-w { cursor: ew-resize; }
+.crop-h-nw, .crop-h-se { cursor: nwse-resize; } .crop-h-ne, .crop-h-sw { cursor: nesw-resize; }
+.crop-readout { position: absolute; left: 8px; top: 8px; padding: 2px 6px; border-radius: 4px; background: rgba(0, 0, 0, .7); color: #fff; font-size: 12px; pointer-events: none; }
 .pt-rs-custom { grid-template-columns: repeat(3, 1fr); }
 .pt-rs-custom[hidden] { display: none; }
 .toast-row { display: flex; align-items: center; gap: 14px; }
