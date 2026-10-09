@@ -14,6 +14,8 @@ import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
 import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects, setHistoryRouter } from './annotations.js';
 import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan } from './pagehistory-lib.js';
+import { unitFactor, marginsToRect, rectToMargins, clampRect, pickPages } from './crop-lib.js';
+import { startCropDraw } from './crop-draw.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -548,47 +550,103 @@ export async function splitDialog(tab = activeTab()) {
 }
 
 // ---------------------------------------------------------------- Crop pages…
-export async function cropDialog(tab = activeTab()) {
+// One crop box, drawn or typed as margins on the current page, applied to every chosen page at the
+// same place (clamped to each page's size). The margin fields and the drawn box follow each other.
+const SIDES = ['top', 'right', 'bottom', 'left'];
+const cap = (k) => k[0].toUpperCase() + k.slice(1);
+export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   if (!editable(tab)) return;
   const sel = sorted(thumbs.selection);
   const err = errEl();
-  const m = Object.fromEntries(['top', 'right', 'bottom', 'left'].map((k) => [k, h('input.input', { type: 'number', min: '0', step: 'any', value: '0', id: `pt-crop-${k}` })]));
+  const ref = tab.currentPage;
+  const refSize = app.viewer.pageSize(tab, ref);
+  const m = Object.fromEntries(SIDES.map((k) => [k, h('input.input', { type: 'number', min: '0', step: 'any', value: '0', id: `pt-crop-${k}` })]));
   const unit = h('select.input', { id: 'pt-crop-unit' }, h('option', { value: 'mm' }, 'mm'), h('option', { value: 'pt' }, 'pt (1/72 in)'));
+  const spec = h('input.input', { type: 'text', id: 'pt-crop-pages', placeholder: 'e.g. 1-3, 5, 8-10', 'aria-label': 'Pages' });
+  const drawBtn = h('button.btn', { type: 'button', id: 'pt-crop-draw' }, 'Draw on page');
   const form = h('div.pt-form', {},
     h('p.pt-hint', {}, 'Margins are trimmed from the page as displayed. The hidden area stays in the file (this is not redaction).'),
-    h('div.pt-margins', {}, ...['top', 'right', 'bottom', 'left'].map((k) => field(k[0].toUpperCase() + k.slice(1), m[k]))),
+    h('div.pt-margins', {}, ...SIDES.map((k) => field(cap(k), m[k]))),
     field('Unit', unit),
+    h('div.pt-crop-draw-row', {}, drawBtn, h('small.pt-hint', {}, `Drag a box on page ${ref + 1}; Enter applies, Esc cancels.`)),
     h('fieldset.pt-fieldset', {}, h('legend', {}, 'Apply to'),
-      radio('pt-crop-to', 'current', `Current page (${tab.currentPage + 1})`, !sel.length || sel.length === 1),
+      radio('pt-crop-to', 'current', `Current page (${ref + 1})`, !sel.length || sel.length === 1),
       radio('pt-crop-to', 'selected', sel.length ? `Selected pages (${sel.length})` : 'Selected pages (none selected)', sel.length > 1),
+      h('div.pt-crop-range', {}, radio('pt-crop-to', 'range', 'Pages:', false), spec),
+      radio('pt-crop-to', 'odd', 'Odd pages', false),
+      radio('pt-crop-to', 'even', 'Even pages', false),
       radio('pt-crop-to', 'all', `All pages (${tab.numPages})`, false)),
     err);
   if (!sel.length) form.querySelector('input[value="selected"]').disabled = true;
-  let margins = null, targets = null;
+  spec.addEventListener('input', () => { form.querySelector('input[value="range"]').checked = true; });
+
+  let drawn = null;   // exact box from the pointer (points); typed margins replace it
+  let ctl = null;     // draw mode controller
+  let before = null;  // {drawn, values} restored by Esc
+  const f = () => unitFactor(unit.value);
+  const fieldMargins = () => Object.fromEntries(SIDES.map((k) => [k, num(m[k]) * f()]));
+  const fill = (r) => { const mg = rectToMargins(r, refSize); for (const k of SIDES) m[k].value = String(Math.round(Math.max(0, mg[k]) / f() * 100) / 100); };
+  const typedRect = () => { const mg = fieldMargins(); return SIDES.every((k) => Number.isFinite(mg[k]) && mg[k] >= 0) ? clampRect(marginsToRect(mg, refSize), refSize) : null; };
+  for (const k of SIDES) m[k].addEventListener('input', () => { drawn = null; ctl?.setRect(typedRect()); });
+  let unitWas = unit.value;
+  unit.addEventListener('change', () => {
+    const k0 = unitFactor(unitWas); unitWas = unit.value;
+    if (drawn) fill(drawn);
+    else for (const k of SIDES) { const x = num(m[k]); if (Number.isFinite(x)) m[k].value = String(Math.round(x * k0 / f() * 100) / 100); }
+    ctl?.refresh();
+  });
+
+  let dlgEl = null;
+  const stopDraw = () => { ctl?.stop(); ctl = null; dlgEl?.closest('.dialog-backdrop')?.classList.remove('crop-drawing'); drawBtn.setAttribute('aria-pressed', 'false'); };
+  const startDraw = () => {
+    if (ctl) return;
+    app.viewer.scrollToPage(tab, ref);
+    before = { drawn, values: SIDES.map((k) => m[k].value) };
+    dlgEl.closest('.dialog-backdrop').classList.add('crop-drawing');
+    drawBtn.setAttribute('aria-pressed', 'true');
+    ctl = startCropDraw(app.viewer, tab, ref, {
+      rect: drawn ?? (Object.values(fieldMargins()).some((x) => x > 0) ? typedRect() : null),
+      unit: () => unit.value,
+      onChange: (r) => { drawn = r; fill(r); setErr(err, null); },
+      onKey: (k) => {
+        if (k === 'apply') { stopDraw(); dlgEl.querySelector('.dialog-buttons button.primary')?.click(); return; }
+        drawn = before.drawn; SIDES.forEach((s, j) => { m[s].value = before.values[j]; });
+        stopDraw(); drawBtn.focus();
+      },
+    });
+  };
+  drawBtn.addEventListener('click', () => (ctl ? stopDraw() : startDraw()));
+
+  let rect = null, targets = null;
   const v = await showDialog({
-    title: 'Crop pages', body: form, className: 'pt-dialog', initialFocus: '#pt-crop-top',
-    buttons: [CANCEL, { label: 'Crop', value: 'ok', primary: true, validate: (dlg) => {
-      const f = unit.value === 'mm' ? MM : 1;
-      margins = {};
-      for (const k of ['top', 'right', 'bottom', 'left']) {
-        const x = num(m[k]);
-        if (!Number.isFinite(x) || x < 0) return setErr(err, `${k[0].toUpperCase() + k.slice(1)} margin must be a number of 0 or more.`, m[k]);
-        margins[k] = x * f;
+    title: 'Crop pages', body: (dlg) => { dlgEl = dlg; if (draw) queueMicrotask(startDraw); return form; }, className: 'pt-dialog', initialFocus: '#pt-crop-top',
+    buttons: [CANCEL, { label: 'Crop', value: 'ok', primary: true, validate: async (dlg) => {
+      if (drawn) rect = drawn;
+      else {
+        for (const k of SIDES) {
+          const x = num(m[k]);
+          if (!Number.isFinite(x) || x < 0) return setErr(err, `${cap(k)} margin must be a number of 0 or more.`, m[k]);
+        }
+        const mg = fieldMargins();
+        if (!Object.values(mg).some((x) => x > 0)) return setErr(err, 'Enter at least one margin greater than 0, or draw a box on the page.', m.top);
+        rect = marginsToRect(mg, refSize);
       }
-      if (!Object.values(margins).some((x) => x > 0)) return setErr(err, 'Enter at least one margin greater than 0.', m.top);
       const to = radioValue(dlg, 'pt-crop-to');
-      targets = to === 'all' ? range(tab.numPages) : to === 'selected' ? sel : [tab.currentPage];
+      try { targets = pickPages(to, { n: tab.numPages, current: ref, selected: sel, spec: spec.value }, (await core()).parseRanges); }
+      catch (e) { return setErr(err, `Pages: ${e.message}.`, spec); }
+      if (!targets.length) return setErr(err, 'There are no pages to crop for that choice.', null);
       for (const i of targets) {
         const s = app.viewer.pageSize(tab, i);
-        if (s.width - margins.left - margins.right < 1 || s.height - margins.top - margins.bottom < 1) {
-          return setErr(err, `The margins are larger than page ${i + 1} (${(s.width / f).toFixed(1)} × ${(s.height / f).toFixed(1)} ${unit.value}).`, m.left);
+        if (!clampRect(rect, s)) {
+          return setErr(err, `The margins are larger than page ${i + 1} (${(s.width / f()).toFixed(1)} × ${(s.height / f()).toFixed(1)} ${unit.value}).`, drawn ? drawBtn : m.left);
         }
       }
       return setErr(err, null);
     } }],
   });
+  stopDraw();
   if (v !== 'ok') return;
-  return runOp(tab, 'Crop pages', async (bytes, n, c) => ({ bytes: await c.cropPages(bytes, targets, margins), map: shiftMap(n, n, 0), select: targets.length < n ? targets : null }));
+  return runOp(tab, 'Crop pages', async (bytes, n, c) => ({ bytes: await c.cropPagesToRect(bytes, targets, rect), map: shiftMap(n, n, 0), select: targets.length < n ? targets : null }));
 }
 
 // ---------------------------------------------------------------- Edit properties…
