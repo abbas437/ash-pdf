@@ -177,6 +177,13 @@ test('inkMargins: pixel box to margins in points, padded 2 mm and kept on the pa
   const pad = 2 * MM;
   const mg = inkMargins({ x0: 100, y0: 100, x1: 300, y1: 500 }, 600, 800, { width: 300, height: 400 });
   for (const [k, v] of Object.entries({ left: 50 - pad, top: 50 - pad, right: 150 - pad, bottom: 150 - pad })) assert.ok(Math.abs(mg[k] - v) < 1e-9, `${k}: ${mg[k]}`);
+  // Overlay object boxes (points) are joined in; a page with only an object is trimmed to it.
+  const size = { width: 300, height: 400 };
+  const mo = inkMargins({ x0: 100, y0: 100, x1: 300, y1: 500 }, 600, 800, size, [{ x: 160, y: 300, w: 20, h: 40 }]);
+  for (const [k, v] of Object.entries({ left: 50 - pad, top: 50 - pad, right: 120 - pad, bottom: 60 - pad })) assert.ok(Math.abs(mo[k] - v) < 1e-9, `${k}: ${mo[k]}`);
+  const only = inkMargins(null, 600, 800, size, [{ x: 10, y: 20, w: 30, h: 40 }]);
+  for (const [k, v] of Object.entries({ left: 10 - pad, top: 20 - pad, right: 260 - pad, bottom: 340 - pad })) assert.ok(Math.abs(only[k] - v) < 1e-9, `${k}: ${only[k]}`);
+  assert.equal(inkMargins(null, 600, 800, size, []), null);
   // Content touching the edges: no negative margins.
   assert.deepEqual(inkMargins({ x0: 0, y0: 1, x1: 600, y1: 800 }, 600, 800, { width: 300, height: 400 }), { top: 0, right: 0, bottom: 0, left: 0 });
 });

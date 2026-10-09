@@ -12,7 +12,7 @@ import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
-import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects, setHistoryRouter } from './annotations.js';
+import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects, setHistoryRouter, objectBox } from './annotations.js';
 import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan } from './pagehistory-lib.js';
 import { unitFactor, rectToMargins, marginsToRect, pickPages, cropBoxFor, sizesDiffer, inkBox, inkMargins } from './crop-lib.js';
 import { startCropDraw } from './crop-draw.js';
@@ -560,7 +560,12 @@ const SIDES = ['top', 'right', 'bottom', 'left'];
 const cap = (k) => k[0].toUpperCase() + k.slice(1);
 const DETECT_SCALE = 96 / 72; // ~96 dpi is enough to find the content box
 
-/** Margins (points, page as displayed) around page i's content plus 2 mm; null for a blank page. */
+/**
+ * Margins (points, page as displayed) around page i's content plus 2 mm; null for a blank page.
+ * The page is rendered as on screen: form fields drawn, the layers the user has shown; the app's
+ * overlay objects on the page (tab.objects, page points) are joined in by their boxes, except
+ * whiteout, which only hides.
+ */
 async function detectMargins(tab, i) {
   const page = tab.pages[i];
   const vp = page.getViewport({ scale: DETECT_SCALE });
@@ -569,10 +574,11 @@ async function detectMargins(tab, i) {
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, c.width, c.height);
-  await page.render({ canvas: c, viewport: vp, background: '#ffffff' }).promise;
+  await page.render({ canvas: c, viewport: vp, background: '#ffffff', annotationMode: app.viewer.pdfjs.AnnotationMode.ENABLE, ...app.viewer.optionalContent(tab) }).promise;
   const box = inkBox(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
   c.width = c.height = 0;
-  return inkMargins(box, vp.width, vp.height, app.viewer.pageSize(tab, i));
+  const objs = (tab.objects ?? []).filter((o) => o.page === i && o.type !== 'whiteout').map(objectBox).filter(Boolean);
+  return inkMargins(box, vp.width, vp.height, app.viewer.pageSize(tab, i), objs);
 }
 export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   if (!editable(tab)) return;
@@ -588,13 +594,14 @@ export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   const trimBtn = h('button.btn', { type: 'button', id: 'pt-crop-trim' }, 'Remove white margins');
   const each = h('input', { type: 'checkbox', id: 'pt-crop-each', checked: true });
   const eachRow = h('div.pt-radio', { hidden: true }, each, h('label', { for: each.id }, 'Detect each page separately'));
+  const blankRef = h('small.pt-hint#pt-crop-blank', { hidden: true }, `Page ${ref + 1} is blank: each chosen page is detected separately and blank pages are left as they are.`);
   const note = h('small.pt-hint#pt-crop-note', { hidden: true }, 'Pages differ in size: the drawn box is placed at the same position on each page.');
   const form = h('div.pt-form', {},
     h('p.pt-hint', {}, 'Margins are trimmed from each page\'s own edges as displayed. The hidden area stays in the file (this is not redaction).'),
     h('div.pt-margins', {}, ...SIDES.map((k) => field(cap(k), m[k]))),
     field('Unit', unit),
     h('div.pt-crop-draw-row', {}, drawBtn, h('small.pt-hint', {}, `Drag a box on page ${ref + 1}; Enter applies, Esc cancels.`)),
-    h('div.pt-crop-draw-row', {}, trimBtn), eachRow,
+    h('div.pt-crop-draw-row', {}, trimBtn), eachRow, blankRef,
     note,
     h('fieldset.pt-fieldset', {}, h('legend', {}, 'Apply to'),
       radio('pt-crop-to', 'current', `Current page (${ref + 1})`, !sel.length || sel.length === 1),
@@ -613,7 +620,7 @@ export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
 
   let drawn = null;   // exact box from the pointer (points); typed margins replace it
   let auto = false;   // the fields hold detected margins (Remove white margins); typing or drawing ends it
-  const endAuto = () => { auto = false; eachRow.hidden = true; };
+  const endAuto = () => { auto = false; eachRow.hidden = true; blankRef.hidden = true; };
   let ctl = null;     // draw mode controller
   let before = null;  // {drawn, values} restored by Esc
   const f = () => unitFactor(unit.value);
@@ -624,10 +631,11 @@ export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   trimBtn.addEventListener('click', async () => {
     let mg;
     try { mg = await detectMargins(tab, ref); } catch (e) { setErr(err, `Could not read page ${ref + 1}: ${e.message}`, null); return; }
-    if (!mg) { setErr(err, `Page ${ref + 1} is blank: there is no content to trim to.`, null); return; }
     drawn = null;
-    fill(marginsToRect(mg, refSize));
+    // A blank current page still turns on per-page detection (blank pages are left alone).
+    if (mg) fill(marginsToRect(mg, refSize)); else for (const k of SIDES) m[k].value = '0';
     auto = true; eachRow.hidden = false; each.checked = true;
+    blankRef.hidden = !!mg;
     ctl?.setRect(typedRect()); setErr(err, null); showNote();
   });
   let unitWas = unit.value;

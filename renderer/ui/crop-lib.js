@@ -144,15 +144,18 @@ export function inkBox(data, width, height, { white = WHITE, speck = SPECK_PX, g
 
 /**
  * Margins (points) that trim a page of `size` (points, as displayed) to the ink box `box` of its
- * rendering `pxWidth` x `pxHeight` pixels, padded by `pad` points and kept on the page; null when
- * there is no ink.
+ * rendering `pxWidth` x `pxHeight` pixels joined with `extra` boxes ({x, y, w, h}, points: the
+ * page's own overlay objects), padded by `pad` points and kept on the page; null when there is
+ * neither ink nor an extra box.
  */
-export function inkMargins(box, pxWidth, pxHeight, size, pad = PAD_MM * MM) {
-  if (!box) return null;
+export function inkMargins(box, pxWidth, pxHeight, size, extra = [], pad = PAD_MM * MM) {
   const sx = size.width / pxWidth, sy = size.height / pxHeight;
+  const rs = extra.map((b) => ({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h }));
+  if (box) rs.push({ x0: box.x0 * sx, y0: box.y0 * sy, x1: box.x1 * sx, y1: box.y1 * sy });
+  if (!rs.length) return null;
   const r = {
-    x0: Math.max(0, box.x0 * sx - pad), y0: Math.max(0, box.y0 * sy - pad),
-    x1: Math.min(size.width, box.x1 * sx + pad), y1: Math.min(size.height, box.y1 * sy + pad),
+    x0: Math.max(0, Math.min(...rs.map((b) => b.x0)) - pad), y0: Math.max(0, Math.min(...rs.map((b) => b.y0)) - pad),
+    x1: Math.min(size.width, Math.max(...rs.map((b) => b.x1)) + pad), y1: Math.min(size.height, Math.max(...rs.map((b) => b.y1)) + pad),
   };
   return rectToMargins(r, size);
 }

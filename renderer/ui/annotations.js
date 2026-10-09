@@ -282,6 +282,8 @@ function changed(tab, pages = null) {
 }
 
 // ---------------------------------------------------------------- store API
+/** Bounding box {x, y, w, h} (visible page points) of an object; null for an unknown type. */
+export function objectBox(o) { return types.get(o.type)?.bbox?.(o) ?? null; }
 export function newId() { return `ann-${Date.now().toString(36)}-${(++idSeq).toString(36)}`; }
 
 function add(tab, obj) {

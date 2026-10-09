@@ -3,7 +3,8 @@
 // playwright-core with the browser shim: Pages "2-3,5" with a box drawn on the page, a rotated page,
 // handle resize, Esc/Enter, Undo; while drawing the rest of the app ignores the mouse, Enter on
 // Cancel cancels, a page-count change cancels the dialog; typed margins on mixed A3/A4 pages trim
-// each page from its own edges; Remove white margins trims each page to its content + 2 mm. Prints "CROP OK".
+// each page from its own edges; Remove white margins trims each page to its content + 2 mm (overlay objects
+// included), also when the current page is blank. Prints "CROP OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -230,6 +231,29 @@ try {
   await ev('await pt.undo(tab);');
   await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.find((t) => t.id === s.activeId).bytesUndo?.length === 0; }, null, { timeout: 10_000 });
   for (const [i, p] of (await boxes()).entries()) { const b = p.getCropBox(); near([b.x, b.y, b.width, b.height], [0, 0, 612, 792], `page ${i + 1} after undo`); }
+
+  step = 'Remove white margins with a blank current page: per-page mode still on; blank pages left alone; an overlay object counts as content';
+  const gapped = await PDFDocument.create();
+  gapped.addPage([612, 792]); gapped.addPage([612, 792]).drawRectangle({ x: 100, y: 500, width: 200, height: 150 }); gapped.addPage([612, 792]);
+  const chooser4 = page.waitForEvent('filechooser');
+  await page.click('#btn-open');
+  await (await chooser4).setFiles({ name: 'gapped.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await gapped.save()) });
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.length === 4 && s.tabs.find((t) => t.id === s.activeId)?.numPages === 3 && s.tabs.find((t) => t.id === s.activeId).view; }, null, { timeout: 10_000 });
+  await ev("app.annotations.add(tab, { type: 'rect', page: 2, x: 100, y: 100, w: 50, h: 60, stroke: '#ff0000', strokeWidth: 1 });");
+  await ev('tab.currentPage = 0; app.thumbs.setSelection([]); pt.cropDialog(tab);');
+  await page.waitForSelector('#pt-crop-trim');
+  await page.click('#pt-crop-trim');
+  await page.waitForSelector('#pt-crop-each', { state: 'visible' });
+  check(await page.isChecked('#pt-crop-each') && await page.isVisible('#pt-crop-blank'), 'blank current page: per-page mode not on, or no blank-page hint');
+  check(!(await page.isVisible('.dialog .pt-error')), 'blank current page: an error is shown');
+  await page.click('.pt-radio label:text-is("All pages (3)")');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.find((t) => t.id === s.activeId).bytesUndo?.length === 1 && !document.querySelector('.dialog'); }, null, { timeout: 10_000 });
+  const gp = await boxes();
+  const cb = (i) => { const b = gp[i].getCropBox(); return [b.x, b.y, b.width, b.height]; };
+  near(cb(0), [0, 0, 612, 792], 'blank page 1 was cropped');
+  near(cb(1), [100 - p2, 500 - p2, 200 + 2 * p2, 150 + 2 * p2], 'page 2 CropBox is not its box + 2 mm', 1);
+  near(cb(2), [100 - p2, 792 - 160 - p2, 50 + 2 * p2, 60 + 2 * p2], 'page 3 CropBox is not its overlay object + 2 mm', 0.5);
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {
