@@ -139,15 +139,30 @@ function bitmap(w, h, rects) {
 
 test('inkBox: the bounding box of the content', () => {
   assert.deepEqual(inkBox(bitmap(100, 80, [[20, 10, 40, 30], [50, 60, 70, 65]]), 100, 80), { x0: 20, y0: 10, x1: 70, y1: 65 });
-  const grey = bitmap(10, 10, []);
-  for (const k of [44, 45, 54, 55]) grey.set([250, 250, 200, 255], k * 4); // light but one channel < 245
-  assert.deepEqual(inkBox(grey, 10, 10), { x0: 4, y0: 4, x1: 6, y1: 6 });
+  const grey = bitmap(10, 10, []); // a 4 x 4 block (2 x 2 would be a speck)
+  for (let y = 3; y < 7; y++) for (let x = 3; x < 7; x++) grey.set([250, 250, 200, 255], (y * 10 + x) * 4); // light but one channel < 245
+  assert.deepEqual(inkBox(grey, 10, 10), { x0: 3, y0: 3, x1: 7, y1: 7 });
 });
 
 test('inkBox: isolated specks are ignored; a 1 px line is kept', () => {
   const specks = [[2, 2, 3, 3], [97, 5, 98, 6], [3, 77, 4, 78], [96, 76, 97, 77]];
   assert.deepEqual(inkBox(bitmap(100, 80, [[20, 10, 40, 30], ...specks]), 100, 80), { x0: 20, y0: 10, x1: 40, y1: 30 });
   assert.deepEqual(inkBox(bitmap(100, 80, [[10, 40, 90, 41]]), 100, 80), { x0: 10, y0: 40, x1: 90, y1: 41 });
+});
+
+test('inkBox: an anti-aliased dust dot (a few grey pixels) is ignored; dots of a dotted line are kept', () => {
+  // 30 x 20 content block, plus a 0.2 mm dot rendered as 2 x 2 grey pixels near the corner.
+  const d = bitmap(100, 80, [[30, 20, 60, 40]]);
+  for (const [x, y, v] of [[2, 2, 120], [3, 2, 200], [2, 3, 210], [3, 3, 235]]) d.set([v, v, v, 255], (y * 100 + x) * 4);
+  assert.deepEqual(inkBox(d, 100, 80), { x0: 30, y0: 20, x1: 60, y1: 40 });
+  // A 3 x 3 dot (dark centre, faint ring) at the far corner too.
+  const e = bitmap(100, 80, [[30, 20, 60, 40], [95, 75, 98, 78]]);
+  assert.deepEqual(inkBox(e, 100, 80), { x0: 30, y0: 20, x1: 60, y1: 40 });
+  // A dotted line of 2 x 2 dots 3 px apart along the top is content, not dust.
+  const dots = Array.from({ length: 20 }, (_, k) => [10 + 5 * k, 4, 12 + 5 * k, 6]);
+  assert.deepEqual(inkBox(bitmap(120, 80, [[30, 20, 60, 40], ...dots]), 120, 80), { x0: 10, y0: 4, x1: 107, y1: 40 });
+  // Small marks next to content (a full stop after a word) stay part of it.
+  assert.deepEqual(inkBox(bitmap(100, 80, [[30, 20, 60, 30], [62, 28, 64, 30]]), 100, 80), { x0: 30, y0: 20, x1: 64, y1: 30 });
 });
 
 test('inkBox / inkMargins: an all-white page gives no crop', () => {
@@ -157,10 +172,11 @@ test('inkBox / inkMargins: an all-white page gives no crop', () => {
 });
 
 test('inkMargins: pixel box to margins in points, padded 2 mm and kept on the page', () => {
-  // Rendering at 2 px per point of a 300 x 400 pt page: box 100..300 x 200..600 px = 50..150 x 100..300 pt.
+  // Rendering at 2 px per point of a 300 x 400 pt page: box 100..300 x 100..500 px = 50..150 x 50..250 pt,
+  // so 50 pt is trimmed from the top and 150 pt from the bottom (and 50 / 150 from left / right).
   const pad = 2 * MM;
-  const mg = inkMargins({ x0: 100, y0: 200, x1: 300, y1: 600 }, 600, 800, { width: 300, height: 400 });
-  for (const [k, v] of Object.entries({ left: 50 - pad, top: 100 - pad, right: 150 - pad, bottom: 100 - pad })) assert.ok(Math.abs(mg[k] - v) < 1e-9, k);
+  const mg = inkMargins({ x0: 100, y0: 100, x1: 300, y1: 500 }, 600, 800, { width: 300, height: 400 });
+  for (const [k, v] of Object.entries({ left: 50 - pad, top: 50 - pad, right: 150 - pad, bottom: 150 - pad })) assert.ok(Math.abs(mg[k] - v) < 1e-9, `${k}: ${mg[k]}`);
   // Content touching the edges: no negative margins.
   assert.deepEqual(inkMargins({ x0: 0, y0: 1, x1: 600, y1: 800 }, 600, 800, { width: 300, height: 400 }), { top: 0, right: 0, bottom: 0, left: 0 });
 });

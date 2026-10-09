@@ -86,36 +86,59 @@ export function sizeLabel({ x0, y0, x1, y1 }, unit) {
 export const WHITE = 245; // a pixel is ink when any channel is below this
 export const PAD_MM = 2;
 
+export const SPECK_PX = 3;  // a speck spans at most 3 x 3 px (~0.8 mm at 96 dpi): a 0.2-0.5 mm dot, anti-aliased
+export const SPECK_GAP_PX = 4; // ...with no other ink within 4 px (~1 mm): dots of a dotted line are kept
+
 /**
  * Bounding box {x0, y0, x1, y1} (pixels, x1 / y1 exclusive) of the ink in an RGBA bitmap
  * (`data` of `width` x `height`); null for a blank page. A pixel is ink when any channel is below
- * `white` (alpha ignored: render on white). Isolated specks are ignored: an ink pixel counts only
- * when one of its 8 neighbours is ink too.
+ * `white` (alpha ignored: render on white). Specks are ignored: a connected (8-neighbour) group of
+ * ink pixels no more than `speck` px across either way, with no other ink within `gap` px of it.
+ * Thin content is kept: a hairline is long, a text line is many glyphs close together.
  */
-export function inkBox(data, width, height, { white = WHITE } = {}) {
-  const ink = new Uint8Array(width * height);
-  for (let p = 0, q = 0; q < ink.length; p += 4, q++) ink[q] = data[p] < white || data[p + 1] < white || data[p + 2] < white ? 1 : 0;
-  const hasNeighbour = (x, y) => {
-    for (let dy = -1; dy <= 1; dy++) {
-      const yy = y + dy;
-      if (yy < 0 || yy >= height) continue;
-      for (let dx = -1; dx <= 1; dx++) {
-        const xx = x + dx;
-        if ((dx || dy) && xx >= 0 && xx < width && ink[yy * width + xx]) return true;
+export function inkBox(data, width, height, { white = WHITE, speck = SPECK_PX, gap = SPECK_GAP_PX } = {}) {
+  const n = width * height;
+  const label = new Int32Array(n); // 0 = paper, -1 = ink not yet labelled, k > 0 = group k
+  for (let p = 0, q = 0; q < n; p += 4, q++) if (data[p] < white || data[p + 1] < white || data[p + 2] < white) label[q] = -1;
+  const stack = new Int32Array(n);
+  const boxes = []; // group k -> [x0, y0, x1, y1] (inclusive)
+  for (let q0 = 0; q0 < n; q0++) {
+    if (label[q0] !== -1) continue;
+    const k = boxes.length + 1, b = [width, height, -1, -1];
+    let top = 0;
+    stack[top++] = q0; label[q0] = k;
+    while (top) {
+      const q = stack[--top], x = q % width, y = (q - x) / width;
+      if (x < b[0]) b[0] = x;
+      if (x > b[2]) b[2] = x;
+      if (y < b[1]) b[1] = y;
+      if (y > b[3]) b[3] = y;
+      for (let yy = Math.max(0, y - 1); yy <= Math.min(height - 1, y + 1); yy++) {
+        for (let xx = Math.max(0, x - 1); xx <= Math.min(width - 1, x + 1); xx++) {
+          const r = yy * width + xx;
+          if (label[r] === -1) { label[r] = k; stack[top++] = r; }
+        }
       }
     }
-    return false;
+    boxes.push(b);
+  }
+  const isolated = (k, [x0, y0, x1, y1]) => {
+    for (let y = Math.max(0, y0 - gap); y <= Math.min(height - 1, y1 + gap); y++) {
+      for (let x = Math.max(0, x0 - gap); x <= Math.min(width - 1, x1 + gap); x++) {
+        const l = label[y * width + x];
+        if (l && l !== k) return false;
+      }
+    }
+    return true;
   };
   let x0 = width, y0 = height, x1 = -1, y1 = -1;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (!ink[y * width + x] || !hasNeighbour(x, y)) continue;
-      if (x < x0) x0 = x;
-      if (x > x1) x1 = x;
-      if (y < y0) y0 = y;
-      if (y > y1) y1 = y;
-    }
-  }
+  boxes.forEach((b, j) => {
+    if (b[2] - b[0] < speck && b[3] - b[1] < speck && isolated(j + 1, b)) return;
+    if (b[0] < x0) x0 = b[0];
+    if (b[1] < y0) y0 = b[1];
+    if (b[2] > x1) x1 = b[2];
+    if (b[3] > y1) y1 = b[3];
+  });
   return x1 < 0 ? null : { x0, y0, x1: x1 + 1, y1: y1 + 1 };
 }
 
