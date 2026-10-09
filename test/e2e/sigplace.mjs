@@ -3,7 +3,9 @@
 // saved signature from the Sign menu and place it, a locked item asks for its password, Place on
 // pages 1-3 (page 3 a different size: centre scaled by the page size, one undo), Signature block
 // (image + name + date in one group, moved together, one undo), save -> one /Stamp annotation per
-// placed signature; light and dark screenshots of the open menu with a contrast check.
+// placed signature; Apply signature on the block (confirm; burned into the page content, no longer
+// objects or selectable, ink in the page render, one page undo brings the group back at the same rect,
+// redo burns it again, saved file: no annotation there, ink in the content); light and dark screenshots of the open menu with a contrast check.
 // Prints "SIGPLACE OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
@@ -55,6 +57,19 @@ try {
   const sigs = async () => (await objs()).filter((o) => o.type === 'image' && o.sig);
   const toClient = (i, x, y) => ev('const c = v.pageToClient(tab, arg[0], arg[1], arg[2]); return [c.clientX, c.clientY];', [i, x, y]);
   const top = '.dialog-backdrop:last-child .dialog';
+  // Dark pixels of page `i` of `bytes` rendered as page content only (pdf.js annotationMode 0) in [x0, y0, x1, y1].
+  const ink = (bytes, i, [x0, y0, x1, y1]) => ev(`
+    const d = await v.pdfjs.getDocument({ data: new Uint8Array(arg.bytes) }).promise, S = 2;
+    const pg = await d.getPage(arg.i + 1), vp = pg.getViewport({ scale: S });
+    const c = document.createElement('canvas'); c.width = Math.ceil(vp.width); c.height = Math.ceil(vp.height);
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, c.width, c.height);
+    await pg.render({ canvasContext: ctx, viewport: vp, annotationMode: 0 }).promise;
+    const [x0, y0, x1, y1] = arg.r.map((q) => Math.round(q * S));
+    const D = ctx.getImageData(x0, y0, x1 - x0, y1 - y0).data;
+    let n = 0; for (let k = 0; k < D.length; k += 4) if (D[k] < 120 && D[k + 1] < 120) n++;
+    await d.loadingTask.destroy(); return n / (D.length / 4);`, { bytes, i, r: [x0, y0, x1, y1] });
+  const tabBytes = () => ev('return Array.from(tab.bytes);');
   const openSign = async () => { if (await page.$eval('.sign-menu', (m) => m.hidden)) await page.click('#btn-sign'); await page.waitForSelector('.sign-menu:not([hidden]) .sign-manage'); };
   const placeAt = async (i, x, y) => {
     await page.waitForFunction(() => document.body.classList.contains('img-armed'));
@@ -163,13 +178,55 @@ try {
   blk = (await objs()).slice(n0);
   check(blk.length === 3, 'redo did not restore the block');
 
+  step = 'apply signature';
+  const rects = blk.map(({ id, x, y, w, h, group }) => ({ id, x, y, w, h, group }));
+  const inner = [blk[0].x + 4, blk[0].y + 4, blk[0].x + blk[0].w - 4, blk[0].y + blk[0].h - 4];
+  check(await ink(await tabBytes(), 0, inner) < 0.05, 'signature already in the page content before Apply');
+  await ev('an.select(tab, []);'); await frames();
+  await openSign();
+  check(await page.$eval('.sign-menu .sign-apply', (b) => b.disabled), 'Apply signature enabled without a selection');
+  await page.keyboard.press('Escape');
+  await ev('an.select(tab, [arg]); app.setTool?.("select");', blk[1].id); await frames(); // a text member: the group counts
+  await openSign();
+  check(!(await page.$eval('.sign-menu .sign-apply', (b) => b.disabled)), 'Apply signature disabled with a block selected');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.opt-sign-apply');
+  await page.click('.opt-sign-apply');
+  await page.waitForSelector(`${top} .sign-apply-noask`);
+  check(/can no longer be moved or edited/.test(await page.textContent(`${top} .sign-apply`)), 'confirm text');
+  await page.click(`${top} .dialog-buttons button:text-is("Apply")`);
+  const gone = () => page.waitForFunction((ids) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return ids.every((id) => !t.objects.some((o) => o.id === id)); }, rects.map((r) => r.id), { timeout: 10_000 });
+  await gone();
+  check((await objs()).length === n0, `apply left ${(await objs()).length - n0} block objects`);
+  check(await ink(await tabBytes(), 0, inner) > 0.9, 'applied signature not in the page content');
+  await ev('an.select(tab, []);'); await frames();
+  await page.mouse.click(...await toClient(0, blk[0].x + blk[0].w / 2, blk[0].y + blk[0].h / 2)); await frames();
+  check((await ev('return an.getSelection(tab);')).length === 0, 'something selectable at the applied signature');
+  await key('Control+z');
+  await page.waitForFunction((n) => window.ashStudio.state.tabs[0].objects.length === n, n0 + 3, { timeout: 10_000 });
+  const back = (await objs()).slice(n0).map(({ id, x, y, w, h, group }) => ({ id, x, y, w, h, group }));
+  check(JSON.stringify(back) === JSON.stringify(rects), `undo restored ${JSON.stringify(back)}, expected ${JSON.stringify(rects)}`);
+  check(await ink(await tabBytes(), 0, inner) < 0.05, 'undo left the signature in the page content');
+  await key('Control+y');
+  await gone();
+  check(await ink(await tabBytes(), 0, inner) > 0.9, 'redo did not apply the signature again');
+
   step = 'save';
   const final = await sigs();
   check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false');
-  const doc = await PDFDocument.load(Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));')));
+  const saved = await ev('return Array.from(await window.api.readFile(tab.path));');
+  const doc = await PDFDocument.load(Uint8Array.from(saved));
   const stamps = doc.getPages().map((p) => (p.node.Annots()?.asArray() ?? []).map((r) => doc.context.lookup(r)).filter((a) => a.get(PDFName.of('Subtype'))?.toString() === '/Stamp').length);
   const want = [0, 1, 2].map((p) => final.filter((o) => o.page === p).length);
   check(JSON.stringify(stamps) === JSON.stringify(want), `/Stamp per page ${stamps}, expected ${want}`);
+  // The applied block: no annotation over it, its ink in the page content of the saved file.
+  const H = doc.getPage(0).getHeight(), bx0 = blk[0].x, by0 = blk[0].y, bx1 = bx0 + blk[0].w, by1 = Math.max(...rects.map((r) => r.y + r.h));
+  const over = (doc.getPage(0).node.Annots()?.asArray() ?? []).map((r) => doc.context.lookup(r)).filter((a) => {
+    const [x0, y0, x1, y1] = a.get(PDFName.of('Rect')).asArray().map((n) => n.asNumber());
+    return x0 < bx1 && x1 > bx0 && H - y1 < by1 && H - y0 > by0;
+  });
+  check(!over.length, `${over.length} annotation(s) over the applied block in the saved file`);
+  check(await ink(saved, 0, inner) > 0.9, 'applied signature not in the saved page content');
 
   step = 'screenshots';
   for (const theme of ['light', 'dark']) {

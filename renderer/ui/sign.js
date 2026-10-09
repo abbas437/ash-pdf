@@ -7,6 +7,14 @@
 //                    relative position (centre scaled by the page size), one undo step.
 //   Signature block… signature image + name / optional title / date text objects sharing one
 //                    `group` (selected, moved and deleted together), one undo step.
+//   Apply signature  options-bar button (and Sign menu item) while a placed signature is selected:
+//                    burns it, with the rest of its signature block group, into the page content
+//                    (core flattenObjects) like a wet signature: no longer an object, not movable or
+//                    editable here or in other viewers once saved. One page-operation undo step
+//                    (pagetools runOp with `remove`): Undo brings the movable objects back, Redo
+//                    burns them again. Asks first unless "Don't ask again" (settings APPLY_KEY);
+//                    always asks on a digitally signed document, as saving it then rewrites the file.
+// Placed signatures are image objects with `sig` (the library item id); block members share `group`.
 // These are visual signatures (images), not digital certificates; the UI says so.
 import { activeTab } from '../state.js';
 import { h } from './dom.js';
@@ -18,6 +26,7 @@ import { armImage } from './tools-stamp.js';
 import { signatureLibrary, openSignatureManager } from './signatures.js';
 import { targetPages, formatDate, DATE_FORMATS } from '../../src/core/siglib.js';
 import { parseRanges } from '../../src/core/pdfOps.js';
+import { runOp } from './pagetools.js';
 
 const SIGN_FRAC = 0.25;        // default signature width, fraction of the page width
 const BLOCK_FONT = 10;         // signature block text size (points)
@@ -27,6 +36,7 @@ const SIGN_ICON = '<svg class="icon" width="18" height="18" viewBox="0 0 24 24" 
 const CARET = '<svg class="icon" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><path d="M2 3.5l3 3 3-3"/></svg>';
 
 const widthKey = (id) => `sign.width.${id}`;
+const APPLY_KEY = 'sign.applyNoConfirm'; // true: Apply signature without the confirmation
 const pad2 = (n) => String(n).padStart(2, '0');
 const todayIso = () => { const d = new Date(); return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`; };
 const kindLabel = (it) => (it.kind === 'initials' ? 'Initials' : 'Signature');
@@ -86,6 +96,7 @@ async function openMenu(focusFirst = false) {
   rows.push(h('div.menu-sep', { role: 'separator' }),
     item('sign-manage', 'Manage signatures…', () => openSignatureManager()),
     item('sign-block', 'Signature block…', () => blockDialog(), { disabled: off || !list.length }),
+    item('sign-apply', 'Apply signature', () => applySignature(tab), { disabled: off || !toApply(tab).length, title: 'Fix the selected signature into the page (Undo reverses it)' }),
     h('p.sign-note', {}, NOTE));
   menuEl.replaceChildren(...rows);
   menuEl.hidden = false;
@@ -154,13 +165,59 @@ async function placeOnPagesDialog(tab, objs) {
   toast(`Signature placed on ${pages.length} more page${pages.length === 1 ? '' : 's'}`);
   return ids;
 }
-/** Select-tool options: "Place on pages…" while the selection is a placed signature (one page). */
+/** Select-tool options while the selection holds a placed signature: "Place on pages…" (one page), "Apply signature". */
 function selectionOptions(c) {
   const tab = activeTab();
   if (!tab || tab.readOnly) return;
   const objs = annotations.getSelection(tab).map((id) => annotations.getObject(tab, id)).filter(Boolean);
-  if (!objs.some((o) => o.type === 'image' && o.sig) || new Set(objs.map((o) => o.page)).size !== 1) return;
-  c.append(h('button.btn.opt-sign-pages', { type: 'button', title: 'Copy this signature to other pages', onclick: () => placeOnPagesDialog(tab, objs) }, 'Place on pages…'));
+  if (!objs.some(isSignature)) return;
+  if (new Set(objs.map((o) => o.page)).size === 1) {
+    c.append(h('button.btn.opt-sign-pages', { type: 'button', title: 'Copy this signature to other pages', onclick: () => placeOnPagesDialog(tab, objs) }, 'Place on pages…'));
+  }
+  c.append(h('button.btn.opt-sign-apply', { type: 'button', title: 'Fix this signature into the page like a wet signature (Undo reverses it)', onclick: () => applySignature(tab) }, 'Apply signature'));
+}
+
+// ---------------------------------------------------------------- apply signature
+const isSignature = (o) => o.type === 'image' && !!o.sig;
+/** The selected placed signatures with every member of their groups (signature blocks), in z-order. */
+function toApply(tab) {
+  if (!tab || tab.readOnly) return [];
+  const sel = new Set(annotations.getSelection(tab));
+  const sigs = (tab.objects ?? []).filter((o) => sel.has(o.id) && isSignature(o));
+  const ids = new Set(sigs.map((o) => o.id)), groups = new Set(sigs.map((o) => o.group).filter(Boolean));
+  return tab.objects.filter((o) => ids.has(o.id) || (o.group && groups.has(o.group)));
+}
+async function confirmApply(tab, n) {
+  const { detectSignatures } = await import('../../src/core/index.js');
+  const signed = await detectSignatures(tab.bytes).then((r) => r.signed, () => false);
+  if (!signed && (await window.api.settingsGet(APPLY_KEY).catch(() => undefined)) === true) return true;
+  const again = h('input.sign-apply-noask', { type: 'checkbox' });
+  const body = h('div.sign-apply', {},
+    h('p', {}, `Apply the signature${n > 1 ? 's' : ''} to the page? It becomes part of the page and can no longer be moved or edited (Undo reverses it until you close the file).`),
+    signed ? h('p.sign-apply-signed', {}, 'This document is digitally signed. Applying changes the page content, so saving over the original invalidates its digital signature; Save as a copy keeps the signed original intact.') : null,
+    signed ? null : h('label.sign-radio', {}, again, h('span', {}, "Don't ask again")));
+  const v = await showDialog({
+    title: 'Apply signature', body, className: 'sign-apply-wrap',
+    buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Apply', value: 'ok', primary: true }],
+  });
+  if (v !== 'ok') return false;
+  if (again.checked) window.api.settingsSet(APPLY_KEY, true).catch(() => {});
+  return true;
+}
+/** Burn the selected signature(s) into the page content as one page-operation undo step. */
+async function applySignature(tab) {
+  const objs = toApply(tab);
+  if (!objs.length) { toast('Select a placed signature first'); return false; }
+  if (!(await confirmApply(tab, objs.filter(isSignature).length))) return false;
+  const ids = objs.map((o) => o.id);
+  const ok = await runOp(tab, 'Apply signature', async (bytes, n) => {
+    const live = tab.objects.filter((o) => ids.includes(o.id)); // as they are now, in z-order
+    if (!live.length) return null;
+    const { flattenObjects } = await import('../../src/core/index.js');
+    const out = await flattenObjects(bytes, live.map((o) => structuredClone(o)));
+    return { bytes: out, map: new Map(Array.from({ length: n }, (_, i) => [i, i])), remove: live.map((o) => o.id) };
+  });
+  return ok;
 }
 
 // ---------------------------------------------------------------- signature block
