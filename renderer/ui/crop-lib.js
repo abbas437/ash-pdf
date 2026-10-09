@@ -155,7 +155,9 @@ export function rotatedBox({ x, y, w, h }, deg) {
 /**
  * Boxes {x, y, w, h} (page points as displayed) of what the app draws over page `i` itself, not in
  * the page's content: its overlay objects (tab.objects; `objectBox` is annotations.objectBox, the
- * unturned box) as drawn, turned by their `rotation`, except whiteout, which only hides.
+ * unturned box) as drawn, turned by their `rotation`, except whiteout, which only hides; and its
+ * form field widgets (tab.forms.widgets, same space), whose typed values and missing appearances
+ * the viewer draws as HTML, so a page render does not show them.
  */
 export function overlayBoxes(tab, i, objectBox) {
   const out = [];
@@ -164,6 +166,7 @@ export function overlayBoxes(tab, i, objectBox) {
     const b = objectBox(o);
     if (b) out.push(o.rotation ? rotatedBox(b, o.rotation) : b);
   }
+  for (const ws of tab.forms?.widgets?.values() ?? []) for (const w of ws) if (w.pageIndex === i) out.push(w.rect);
   return out;
 }
 

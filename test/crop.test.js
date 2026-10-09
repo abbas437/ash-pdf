@@ -214,6 +214,16 @@ test('overlayBoxes: stamps and images are counted as drawn, turned about their c
   near(img, { x: 30, y: -30, w: 40, h: 100 });
 });
 
+test('overlayBoxes: the page\'s form field widgets count (typed values are drawn as HTML)', () => {
+  const widgets = new Map([
+    ['name', [{ pageIndex: 1, rect: { x: 50, y: 700, w: 200, h: 20 }, buttonValue: null }]],
+    ['agree', [{ pageIndex: 0, rect: { x: 5, y: 5, w: 10, h: 10 }, buttonValue: 'Yes' }, { pageIndex: 1, rect: { x: 300, y: 720, w: 12, h: 12 }, buttonValue: 'Yes' }]],
+  ]);
+  const tab = { objects: [{ type: 'rect', page: 1, x: 10, y: 20, w: 30, h: 40 }], forms: { fields: [], widgets, values: { name: 'Ann' } } };
+  assert.deepEqual(overlayBoxes(tab, 1, boxOf), [{ x: 10, y: 20, w: 30, h: 40 }, { x: 50, y: 700, w: 200, h: 20 }, { x: 300, y: 720, w: 12, h: 12 }]);
+  assert.deepEqual(overlayBoxes({ forms: null }, 1, boxOf), []);
+});
+
 test('cropPagesEach: each page trimmed by its own margins, on rotated pages too', async () => {
   const out = await ops.cropPagesEach(await rotatedDoc(), [
     { index: 0, margins: { left: 10, top: 20, right: 490, bottom: 580 } },
