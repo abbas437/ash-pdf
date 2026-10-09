@@ -280,6 +280,41 @@ export async function replacePages(destBytes, srcBytes, srcIndices, atIndex) {
 }
 
 /**
+ * Rectangle on the page as displayed ({x0, y0, x1, y1} in points, origin top-left, y down, /Rotate
+ * applied) -> [x, y, width, height] in PDF user space for /CropBox. `view` is the visible box
+ * (pageGeometry().view) the displayed page shows; `rotation` its /Rotate (0, 90, 180, 270).
+ */
+export function displayedRectToCropBox(view, rotation, { x0, y0, x1, y1 }) {
+  const { xMin, yMin, xMax, yMax } = view;
+  let b;
+  switch (rotation) {
+    case 90: b = [xMin + y0, yMin + x0, xMin + y1, yMin + x1]; break;
+    case 180: b = [xMax - x1, yMin + y0, xMax - x0, yMin + y1]; break;
+    case 270: b = [xMax - y1, yMax - x1, xMax - y0, yMax - x0]; break;
+    default: b = [xMin + x0, yMax - y1, xMin + x1, yMax - y0];
+  }
+  return [b[0], b[1], b[2] - b[0], b[3] - b[1]];
+}
+
+/**
+ * Crop to a rectangle drawn on the page as displayed ({x0, y0, x1, y1}, points, top-left origin),
+ * the same box on every page in `indices`, clamped to each page's visible size. Sets /CropBox.
+ */
+export async function cropPagesToRect(bytes, indices, rect) {
+  for (const k of ['x0', 'y0', 'x1', 'y1']) if (!Number.isFinite(rect?.[k])) throw new RangeError(`Crop rectangle ${k} must be a number`);
+  const doc = await loadPdf(bytes);
+  assertPageIndices(indices, doc.getPageCount());
+  for (const i of new Set(indices)) {
+    const page = doc.getPage(i);
+    const g = pageGeometry(page);
+    const r = { x0: Math.max(0, rect.x0), y0: Math.max(0, rect.y0), x1: Math.min(g.width, rect.x1), y1: Math.min(g.height, rect.y1) };
+    if (r.x1 - r.x0 < 1 || r.y1 - r.y0 < 1) throw new RangeError(`The crop box leaves nothing of page ${i + 1}`);
+    page.setCropBox(...displayedRectToCropBox(g.view, g.rotation, r));
+  }
+  return saveEdited(doc);
+}
+
+/**
  * Crop by margins measured on the page as displayed (after /Rotate).
  * Sets /CropBox; MediaBox is unchanged.
  */
@@ -292,22 +327,9 @@ export async function cropPages(bytes, indices, { left = 0, top = 0, right = 0, 
   for (const i of new Set(indices)) {
     const page = doc.getPage(i);
     const g = pageGeometry(page);
-    let { xMin, yMin, xMax, yMax } = g.view;
-    switch (g.rotation) {
-      case 90:
-        yMin += left; yMax -= right; xMin += top; xMax -= bottom;
-        break;
-      case 180:
-        xMax -= left; xMin += right; yMin += top; yMax -= bottom;
-        break;
-      case 270:
-        yMax -= left; yMin += right; xMax -= top; xMin += bottom;
-        break;
-      default:
-        xMin += left; xMax -= right; yMax -= top; yMin += bottom;
-    }
-    if (xMax - xMin < 1 || yMax - yMin < 1) throw new RangeError(`Crop margins leave nothing of page ${i + 1}`);
-    page.setCropBox(xMin, yMin, xMax - xMin, yMax - yMin);
+    const r = { x0: left, y0: top, x1: g.width - right, y1: g.height - bottom };
+    if (r.x1 - r.x0 < 1 || r.y1 - r.y0 < 1) throw new RangeError(`Crop margins leave nothing of page ${i + 1}`);
+    page.setCropBox(...displayedRectToCropBox(g.view, g.rotation, r));
   }
   return saveEdited(doc);
 }
