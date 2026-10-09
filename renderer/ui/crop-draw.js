@@ -16,8 +16,7 @@ const svgEl = (tag, attrs = {}) => { const e = document.createElementNS(SVG_NS, 
  * Returns {setRect(rect|null), refresh(), stop()}.
  */
 export function startCropDraw(viewer, tab, i, { rect = null, unit, onChange, onKey }) {
-  const pageEl = viewer.getPageEl(tab, i);
-  const ref = viewer.getOverlaySvg(tab, i);
+  let pageEl, ref; // the viewer's page box and overlay; replaced when the document reloads
   const { width, height } = viewer.pageSize(tab, i);
   const size = { width, height };
   const layer = document.createElement('div');
@@ -31,8 +30,17 @@ export function startCropDraw(viewer, tab, i, { rect = null, unit, onChange, onK
   const readout = document.createElement('div');
   readout.className = 'crop-readout';
   layer.append(svg, readout);
-  pageEl.append(layer);
   let cur = rect, drag = null;
+  // (Re)attach to the page's current element: a reload (e.g. an Undo still landing when the dialog
+  // opened) rebuilds every page element and may change the fit zoom.
+  function attach() {
+    pageEl = viewer.getPageEl(tab, i);
+    ref = viewer.getOverlaySvg(tab, i);
+    if (!pageEl || !ref) return;
+    drag = null;
+    pageEl.append(layer);
+    paint();
+  }
 
   function toPage(e) {
     const r = pageEl.getBoundingClientRect();
@@ -80,10 +88,11 @@ export function startCropDraw(viewer, tab, i, { rect = null, unit, onChange, onK
   }
   window.addEventListener('keydown', onKeyDown, true); // before the dialog's document-level handler
   const offZoom = bus.on('zoom:changed', ({ tab: t }) => { if (t === tab) paint(); });
-  paint();
+  const offLoad = bus.on('tab:loaded', ({ tab: t }) => { if (t === tab && i < tab.numPages) attach(); });
+  attach();
   return {
     setRect(r) { cur = r; paint(); },
     refresh: paint,
-    stop() { window.removeEventListener('keydown', onKeyDown, true); offZoom(); layer.remove(); },
+    stop() { window.removeEventListener('keydown', onKeyDown, true); offZoom(); offLoad(); layer.remove(); },
   };
 }

@@ -556,6 +556,7 @@ const SIDES = ['top', 'right', 'bottom', 'left'];
 const cap = (k) => k[0].toUpperCase() + k.slice(1);
 export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   if (!editable(tab)) return;
+  const { parseRanges } = await core(); // loaded up front so Crop's checks report synchronously
   const sel = sorted(thumbs.selection);
   const err = errEl();
   const ref = tab.currentPage;
@@ -620,7 +621,7 @@ export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   let rect = null, targets = null;
   const v = await showDialog({
     title: 'Crop pages', body: (dlg) => { dlgEl = dlg; if (draw) queueMicrotask(startDraw); return form; }, className: 'pt-dialog', initialFocus: '#pt-crop-top',
-    buttons: [CANCEL, { label: 'Crop', value: 'ok', primary: true, validate: async (dlg) => {
+    buttons: [CANCEL, { label: 'Crop', value: 'ok', primary: true, validate: (dlg) => {
       if (drawn) rect = drawn;
       else {
         for (const k of SIDES) {
@@ -632,7 +633,7 @@ export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
         rect = marginsToRect(mg, refSize);
       }
       const to = radioValue(dlg, 'pt-crop-to');
-      try { targets = pickPages(to, { n: tab.numPages, current: ref, selected: sel, spec: spec.value }, (await core()).parseRanges); }
+      try { targets = pickPages(to, { n: tab.numPages, current: ref, selected: sel, spec: spec.value }, parseRanges); }
       catch (e) { return setErr(err, `Pages: ${e.message}.`, spec); }
       if (!targets.length) return setErr(err, 'There are no pages to crop for that choice.', null);
       for (const i of targets) {

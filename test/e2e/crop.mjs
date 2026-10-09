@@ -49,7 +49,11 @@ try {
   const AsyncFunction = (async () => {}).constructor;
   const ev = (body, arg) => page.evaluate(new AsyncFunction('arg', `${S}\n${body}`), arg);
   const boxes = async () => (await PDFDocument.load(Buffer.from(await ev('return [...tab.bytes];')))).getPages();
-  const undoLen = (n) => page.waitForFunction((k) => (window.ashStudio.state.tabs[0].bytesUndo?.length ?? 0) === k && !document.querySelector('.dialog'), n, { timeout: 10_000 });
+  // mark() before a page change, then undoLen(n) waits for its history entry and for the viewer's
+  // reload (new page elements, possibly a new fit zoom) so later measurements see the final layout.
+  const mark = () => ev('window.__view0 = tab.view;');
+  const reloaded = () => page.waitForFunction(() => { const t = window.ashStudio.state.tabs[0]; return t.view && t.view !== window.__view0; }, null, { timeout: 10_000 });
+  const undoLen = async (n) => { await page.waitForFunction((k) => (window.ashStudio.state.tabs[0].bytesUndo?.length ?? 0) === k && !document.querySelector('.dialog'), n, { timeout: 10_000 }); await reloaded(); };
   const pageRect = (i) => ev('const r = v.getPageEl(tab, arg).getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height };', i);
   const toPage = (x, y) => ev('const h = v.clientToPage(tab, arg[0], arg[1]); return { x: h.x, y: h.y };', [x, y]);
   const drag = async (a, b) => { await page.mouse.move(a[0], a[1]); await page.mouse.down(); await page.mouse.move((a[0] + b[0]) / 2, (a[1] + b[1]) / 2); await page.mouse.move(b[0], b[1]); await page.mouse.up(); };
@@ -91,6 +95,7 @@ try {
   const w = d1.rect.x1 - d1.rect.x0, hgt = d1.rect.y1 - d1.rect.y0;
   check((await page.textContent('.crop-readout')).trim() === `${w.toFixed(1)} × ${hgt.toFixed(1)} pt`, `readout "${await page.textContent('.crop-readout')}" for ${w} × ${hgt}`);
   near([Number(await page.inputValue('#pt-crop-top')), Number(await page.inputValue('#pt-crop-left'))], [d1.rect.y0, d1.rect.x0], 'margin fields follow the box', 0.01);
+  await mark();
   await page.keyboard.press('Enter');
   await undoLen(1);
   let pg = await boxes();
@@ -101,6 +106,7 @@ try {
   near(visible(origPages[2], pg[2].getCropBox()), R(c3), 'rotated page 3 crop');
 
   step = 'undo restores';
+  await mark();
   await ev('await pt.undo(tab);');
   await undoLen(0);
   pg = await boxes();
@@ -109,6 +115,11 @@ try {
   step = 'rotated current page: Esc cancels the drawing, handle resize, Enter applies';
   await ev('v.scrollToPage(tab, 2); tab.currentPage = 2; pt.cropDialog(tab, { draw: true });');
   await page.waitForSelector('.crop-draw[data-page-index="2"]');
+  // A reload while drawing (an Undo landing late) rebuilds the page elements: the box layer follows.
+  await mark();
+  await ev('app.bus.emit("tab:bytesChanged", { tab });');
+  await reloaded();
+  check(await ev('return !!v.getPageEl(tab, 2).querySelector(".crop-draw");'), 'the drawing layer did not survive a reload');
   await drawBox(2, [0.1, 0.1], [0.5, 0.5]);
   check(Number(await page.inputValue('#pt-crop-top')) > 0, 'fields not filled by the box');
   await page.keyboard.press('Escape');
@@ -122,11 +133,13 @@ try {
   const [pf, pto] = [await toPage(...from), await toPage(...to)];
   await drag(from, to);
   const exp = { ...d2.rect, x1: d2.rect.x1 + (pto.x - pf.x), y1: d2.rect.y1 + (pto.y - pf.y) };
+  await mark();
   await page.keyboard.press('Enter');
   await undoLen(1);
   pg = await boxes();
   near(visible(origPages[2], pg[2].getCropBox()), R(exp), 'rotated page 3 crop after handle resize', 0.1);
   for (const i of [0, 1, 3, 4, 5]) { const b = pg[i].getCropBox(); near([b.x, b.y, b.x + b.width, b.y + b.height], MEDIA, `page ${i + 1} changed by a current-page crop`); }
+  await mark();
   await ev('await pt.undo(tab);');
   await undoLen(0);
 } catch (err) {
