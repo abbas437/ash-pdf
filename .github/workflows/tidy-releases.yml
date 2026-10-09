@@ -1,0 +1,29 @@
+name: tidy-releases
+# Marks every test build (pre-release) older than the newest release as superseded in its title, and the newest
+# test build (if it is the newest release) as the latest,
+# so the GitHub release list (which orders beta.10 before beta.7) can't mislead. Nothing is deleted.
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: write
+
+jobs:
+  tidy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Retitle pre-releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          APP: ASH PDF Studio
+        run: |
+          set -euo pipefail
+          # newest release of any kind by creation time (a full release supersedes every earlier test build)
+          latest=$(gh api "repos/$REPO/releases?per_page=100" --jq 'sort_by(.created_at) | last | .tag_name // empty')
+          [ -z "$latest" ] && exit 0
+          gh api "repos/$REPO/releases?per_page=100" --jq '.[] | select(.prerelease) | .tag_name' | while read -r tag; do
+            if [ "$tag" = "$latest" ]; then title="$APP $tag (latest test build)"; else title="$APP $tag (superseded by $latest)"; fi
+            gh release edit "$tag" --repo "$REPO" --title "$title"
+          done
