@@ -697,3 +697,26 @@ body.reading-mode { cursor: default; }
 .rm-btn { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
 .rm-btn:hover { background: rgb(255 255 255 / 0.16); }
 .rm-btn svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+/* ---------------------------------------------------------------- customize toolbar (ui/toolbar-custom.js) */
+.tb-tools [data-tb-hidden], .tb-tools [data-tb-folded] { display: none !important; }
+.tb-tg.tb-tg-void, .tb-sep:has(+ .tb-tg.tb-tg-void) { display: none; }
+/* Compact group: the last used tool and a narrow caret listing the group's tools. */
+.tb-cg { display: flex; align-items: center; gap: 0; }
+.toolbar .tb-cg .tb-btn.tb-cg-caret, .tool-labels .toolbar .tb-cg .tb-btn.tb-cg-caret { display: flex; width: 14px; min-width: 14px; padding: 0; justify-content: center; align-self: stretch; }
+.toolbar .tb-cg .tb-cg-caret > .icon:first-child, .toolbar .tb-cg .tb-cg-caret .tb-dd-label { display: none; }
+.toolbar .tb-more-panel .tb-cg { justify-content: flex-start; }
+.dialog.tbc-dlg { width: 560px; max-width: 94vw; }
+.tbc-dlg .dialog-body { max-height: 65vh; overflow: auto; }
+.tbc-dlg .dialog-buttons [data-value="reset"] { margin-right: auto; }
+.tbc-groupbox { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.tbc-head { display: flex; align-items: center; gap: 6px; }
+.tbc-title { flex: 1; margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.tbc-compact { display: inline-flex; align-items: center; gap: 4px; margin: 0 6px; }
+.tbc-list { list-style: none; margin: 4px 0 0; padding: 0; }
+.tbc-row { display: flex; align-items: center; gap: 6px; padding: 2px 0 2px 8px; }
+.tbc-check { flex: 1; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.tbc-icon { display: inline-grid; place-items: center; width: 20px; }
+.btn.tbc-mini { min-width: 30px; padding: 2px 6px; }
+.tbc-group { width: 140px; }
+.tbc-empty { margin: 4px 8px; color: var(--muted); }
