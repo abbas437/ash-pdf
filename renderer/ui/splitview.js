@@ -15,7 +15,7 @@ import { state, getTab } from '../state.js';
 import { h } from './dom.js';
 import { viewer } from './viewer.js';
 import { showDialog } from './dialogs.js';
-import { defaultPair, chooseTab, pickForPane, closeTabIn } from './splitview-lib.js';
+import { defaultPair, chooseTab, pickForPane, closeTabIn, clampRatio } from './splitview-lib.js';
 
 let host = null;
 let activate = null;
@@ -23,6 +23,9 @@ let split = null; // {dir: 'v'|'h', ratio, ids: [paneA tab id, paneB tab id], fo
 let recent = []; // tab ids, most recently active first (the plain Split pairs the current and the previous one)
 const heads = [];
 let divider = null;
+// Every change of the split (opened, closed, orientation, documents, focused pane, divider) emits
+// split:changed, so the last session can record it.
+const changed = () => bus.emit('split:changed', split ? { split: true, dir: split.dir } : { split: false });
 
 export const splitView = {
   split: splitOn,
@@ -48,6 +51,7 @@ export function initSplitView(app) {
     if (!split || !tab) return;
     Object.assign(split, chooseTab(split, tab.id));
     apply();
+    changed();
   });
   // A closed tab shown in a pane is replaced by another open document (none left: unsplit).
   bus.on('tab:closed', ({ tab }) => {
@@ -57,6 +61,7 @@ export function initSplitView(app) {
     if (!next) { unsplit(); return; }
     Object.assign(split, next);
     apply();
+    changed();
   });
   bus.on('state:changed', ({ key }) => { if (key === 'tabs' && split) syncPickers(); });
   host.addEventListener('pointerdown', onPaneFocus, true);
@@ -80,21 +85,26 @@ function splitOn(dir) {
   if (split) {
     split.dir = dir;
     apply();
-    bus.emit('split:changed', { split: true, dir });
+    changed();
   } else openSplit(defaultPair(state.activeId, state.tabs.map((t) => t.id), recent), dir);
 }
 
-/** Show tabs ids[0] (left / top) and ids[1] (right / bottom); the pane of the active tab keeps the focus. */
-function openSplit(ids, dir = split?.dir ?? 'v') {
+/**
+ * Show tabs ids[0] (left / top) and ids[1] (right / bottom); the pane of the active tab keeps the
+ * focus unless `opts.focus` (0 | 1) names the focused pane. `opts.ratio` sets the divider (a restored
+ * session); otherwise a new split starts at 50 / 50 and an open one keeps its divider.
+ */
+function openSplit(ids, dir = split?.dir ?? 'v', opts = {}) {
   if (!ids?.every(getTab)) return;
-  const focus = ids[0] !== ids[1] && ids[1] === state.activeId ? 1 : 0;
+  const focus = opts.focus === 0 || opts.focus === 1 ? opts.focus : ids[0] !== ids[1] && ids[1] === state.activeId ? 1 : 0;
+  const ratio = Number.isFinite(opts.ratio) ? clampRatio(opts.ratio) : split?.ratio ?? 0.5;
   if (!split) {
-    split = { dir, ratio: 0.5, ids: [...ids], focus };
+    split = { dir, ratio, ids: [...ids], focus };
     buildChrome();
-  } else Object.assign(split, { dir, ids: [...ids], focus });
+  } else Object.assign(split, { dir, ratio, ids: [...ids], focus });
   apply();
   if (ids[focus] !== state.activeId) activate(ids[focus]);
-  bus.emit('split:changed', { split: true, dir });
+  changed();
 }
 
 /** Show tab `id` in pane k (0 = first, 1 = second) and focus that pane. */
@@ -103,6 +113,7 @@ function setPane(k, id) {
   Object.assign(split, pickForPane(split, k, id));
   apply();
   activate(split.ids[split.focus]);
+  changed();
 }
 
 /** "Choose documents…": a document for each pane and the orientation. */
@@ -132,7 +143,7 @@ function buildChrome() {
   }
   divider = h('div.split-divider', { role: 'separator', tabindex: '-1', title: 'Drag to resize; double-click for 50 / 50', style: 'grid-area: dv' });
   divider.addEventListener('pointerdown', startDrag);
-  divider.addEventListener('dblclick', () => { split.ratio = 0.5; applyTracks(); viewer.refit(); });
+  divider.addEventListener('dblclick', () => { split.ratio = 0.5; applyTracks(); viewer.refit(); changed(); });
   host.append(heads[0], divider, heads[1]);
 }
 
@@ -199,12 +210,14 @@ function onPaneFocus(e) {
   const el = e.target.closest?.('.viewer-scroll, .split-head');
   const k = PANE.indexOf(el?.dataset.pane || '-');
   if (k < 0) return;
-  if (k !== split.focus) {
+  const changedFocus = k !== split.focus;
+  if (changedFocus) {
     if (same()) viewer.swapViews(getTab(split.ids[0])); // the focused pane holds the tab's own view
     split.focus = k;
     markFocus();
   }
   if (split.ids[k] !== state.activeId) activate(split.ids[k]);
+  if (changedFocus) changed();
 }
 
 function startDrag(e) {
@@ -215,12 +228,13 @@ function startDrag(e) {
   const move = (ev) => {
     const r = host.getBoundingClientRect();
     const f = split.dir === 'v' ? (ev.clientX - r.left) / r.width : (ev.clientY - r.top) / r.height;
-    split.ratio = Math.min(0.85, Math.max(0.15, f));
+    split.ratio = clampRatio(f);
     applyTracks();
     if (!raf) raf = requestAnimationFrame(() => { raf = 0; viewer.refit(); });
   };
   const up = () => {
     divider.classList.remove('dragging');
+    changed();
     divider.removeEventListener('pointermove', move);
     divider.removeEventListener('pointerup', up);
     divider.removeEventListener('pointercancel', up);
@@ -234,7 +248,7 @@ function unsplit() {
   if (!split) return;
   const ids = split.ids;
   split = null;
-  bus.emit('split:changed', { split: false });
+  changed();
   for (const t of state.tabs) viewer.dropSecondary(t); // the focused pane (the tab's own view) stays
   viewer.setShown([]);
   host.classList.remove('split', 'split-v', 'split-h');
