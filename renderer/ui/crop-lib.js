@@ -143,16 +143,26 @@ export function inkBox(data, width, height, { white = WHITE, speck = SPECK_PX, g
 }
 
 /**
+ * Bounding box {x, y, w, h} of box `b` drawn turned by `deg` degrees about its centre, as stamps and
+ * images with a `rotation` are (tools-stamp.js rotAttr: SVG rotate(deg cx cy)).
+ */
+export function rotatedBox({ x, y, w, h }, deg) {
+  const a = (deg * Math.PI) / 180, c = Math.abs(Math.cos(a)), s = Math.abs(Math.sin(a));
+  const W = w * c + h * s, H = w * s + h * c;
+  return { x: x + w / 2 - W / 2, y: y + h / 2 - H / 2, w: W, h: H };
+}
+
+/**
  * Boxes {x, y, w, h} (page points as displayed) of what the app draws over page `i` itself, not in
- * the page's content: its overlay objects (tab.objects; `objectBox` is annotations.objectBox),
- * except whiteout, which only hides.
+ * the page's content: its overlay objects (tab.objects; `objectBox` is annotations.objectBox, the
+ * unturned box) as drawn, turned by their `rotation`, except whiteout, which only hides.
  */
 export function overlayBoxes(tab, i, objectBox) {
   const out = [];
   for (const o of tab.objects ?? []) {
     if (o.page !== i || o.type === 'whiteout') continue;
     const b = objectBox(o);
-    if (b) out.push(b);
+    if (b) out.push(o.rotation ? rotatedBox(b, o.rotation) : b);
   }
   return out;
 }

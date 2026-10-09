@@ -202,6 +202,18 @@ test('overlayBoxes: the page\'s own overlay objects, except whiteout and unknown
   assert.deepEqual(overlayBoxes({}, 0, boxOf), []);
 });
 
+test('overlayBoxes: stamps and images are counted as drawn, turned about their centre', () => {
+  // A 200 x 50 pt stamp at 45 degrees near the top: its corners reach 88.4 pt either way of the centre (200, 35).
+  const d = (200 + 50) / 2 * Math.SQRT1_2;
+  const near = (got, want) => { for (const k of 'xywh') assert.ok(Math.abs(got[k] - want[k]) < 1e-9, `${k}: ${got[k]} vs ${want[k]}`); };
+  for (const rotation of [45, -45]) {
+    const [b] = overlayBoxes({ objects: [{ type: 'stamp', page: 0, x: 100, y: 10, w: 200, h: 50, rotation }] }, 0, boxOf);
+    near(b, { x: 200 - d, y: 35 - d, w: 2 * d, h: 2 * d });
+  }
+  const [img] = overlayBoxes({ objects: [{ type: 'image', page: 0, x: 0, y: 0, w: 100, h: 40, rotation: 90 }] }, 0, boxOf);
+  near(img, { x: 30, y: -30, w: 40, h: 100 });
+});
+
 test('cropPagesEach: each page trimmed by its own margins, on rotated pages too', async () => {
   const out = await ops.cropPagesEach(await rotatedDoc(), [
     { index: 0, margins: { left: 10, top: 20, right: 490, bottom: 580 } },
