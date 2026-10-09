@@ -1,5 +1,5 @@
 // Edit > Preferences… (Ctrl+,): the user's default settings in one dialog, sectioned
-// General / Documents / Annotations / Toolbar, plus View > Show tool labels and View > Coloured tool icons.
+// General / Documents / Annotations (incl. Ask before applying a signature) / Toolbar, plus View > Show tool labels and View > Coloured tool icons.
 //   initPrefs({ registerMenuItem, setTheme }) -> { openPrefs, loadPrefs }
 //   prefsForNewTab() -> {zoomMode, zoom} for a tab about to be built
 //   applySidebarOnOpen() after a document opened
@@ -69,7 +69,8 @@ const radios = (key, legend, options) => h('fieldset.prefs-group', {}, h('legend
   options.map(([v, label]) => h('label.prefs-choice', {}, h('input', { type: 'radio', name: key, value: v }), h('span', {}, label))));
 const select = (key, label, options) => h('label.prefs-field', {}, h('span', {}, label),
   h('select.input', { name: key }, options.map(([v, l]) => h('option', { value: v }, l))));
-const check = (key, label) => h('label.prefs-choice', {}, h('input', { type: 'checkbox', name: key }), h('span', {}, label));
+// `invert`: the box shows the opposite of the stored boolean (e.g. "Ask before…" for a "no confirm" setting).
+const check = (key, label, invert = false) => h('label.prefs-choice', {}, h('input', { type: 'checkbox', name: key, dataset: invert ? { invert: '1' } : {} }), h('span', {}, label));
 
 const SECTIONS = [
   ['general', 'General', () => [
@@ -86,6 +87,7 @@ const SECTIONS = [
     h('label.prefs-field', {}, h('span', {}, 'Author name'),
       h('input.input', { type: 'text', name: 'annotations.author', maxlength: String(AUTHOR_MAX), placeholder: DEFAULT_AUTHOR, autocomplete: 'off' })),
     select('stamps.shape', 'Default stamp shape', [['rect', 'Rectangle'], ['rounded', 'Rounded'], ['circle', 'Circle'], ['ellipse', 'Ellipse']]),
+    check('sign.applyNoConfirm', 'Ask before applying a signature to the page', true),
   ]],
   ['toolbar', 'Toolbar', () => [check('ui.toolLabels', 'Show tool labels under the icons'), check('ui.toolColors', 'Coloured tool icons')]],
 ];
@@ -94,7 +96,7 @@ function fill(root, values) {
   for (const [k, v] of Object.entries(values)) {
     for (const el of root.querySelectorAll(`[name="${k}"]`)) {
       if (el.type === 'radio') el.checked = el.value === String(v);
-      else if (el.type === 'checkbox') el.checked = !!v;
+      else if (el.type === 'checkbox') el.checked = el.dataset.invert ? !v : !!v;
       else el.value = String(v);
     }
   }
@@ -105,7 +107,7 @@ function read(root) {
   for (const k of Object.keys(PREF_DEFAULTS)) {
     const els = [...root.querySelectorAll(`[name="${k}"]`)];
     const el = els.find((e) => e.type !== 'radio' || e.checked) ?? els[0];
-    out[k] = cleanPref(k, el.type === 'checkbox' ? el.checked : el.value);
+    out[k] = cleanPref(k, el.type === 'checkbox' ? el.checked !== !!el.dataset.invert : el.value);
   }
   return out;
 }
@@ -154,6 +156,7 @@ async function applyPrefs(next) {
   await save('ocr.prompt', next['ocr.prompt']);
   await setAuthor(next['annotations.author']).catch(() => {});
   await save('stamps.shape', next['stamps.shape']);
+  await save('sign.applyNoConfirm', next['sign.applyNoConfirm']);
   Object.assign(cache, next);
   bus.emit('prefs:changed', { prefs: { ...cache } });
 }

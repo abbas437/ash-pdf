@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { encryptBytes, decryptBytes, removeBackground, formatDate, targetPages, PBKDF2_ITERATIONS, WrongPasswordError } from '../src/core/siglib.js';
+import { encryptBytes, decryptBytes, removeBackground, formatDate, targetPages, applyPlan, objectLabel, PBKDF2_ITERATIONS, WrongPasswordError } from '../src/core/siglib.js';
 
 test('encrypt/decrypt round trip with PBKDF2 310k + AES-GCM, random salt/iv', async () => {
   const png = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4, 5]);
@@ -46,4 +46,40 @@ test('formatDate and targetPages', () => {
   assert.deepEqual(targetPages('even', 5), [1, 3]);
   assert.deepEqual(targetPages('all', 3), [0, 1, 2]);
   assert.deepEqual(targetPages('range', 5, [1, 2]), [1, 2]);
+});
+
+test('applyPlan: whiteout below and overlapping is burned too; objects above, elsewhere or on other pages are not', () => {
+  const box = (id, type, x, y, w, h, extra = {}) => ({ id, type, page: 0, x, y, w, h, ...extra });
+  const objs = [
+    box('wo', 'whiteout', 100, 100, 100, 40),          // under the signature
+    box('far', 'rect', 400, 400, 50, 50),              // elsewhere
+    box('wo2', 'whiteout', 100, 100, 100, 40, { page: 1 }), // same rect, other page
+    box('edge', 'whiteout', 50, 100, 50, 40),          // touches the signature's left edge only
+    box('sig', 'image', 110, 105, 80, 30, { sig: 'a' }),
+    box('over', 'rect', 100, 100, 100, 40),            // above: stays an overlay
+  ];
+  const p = applyPlan(objs, [objs[4]], { boxOf: (o) => o, canBurn: () => true });
+  assert.deepEqual(p.burn.map((o) => o.id), ['wo', 'sig']); // z-order: whiteout first
+  assert.deepEqual(p.auto.map((o) => o.id), ['wo']);
+  assert.deepEqual(p.covering, []);
+});
+
+test('applyPlan: other objects below are listed as covering, and what lies below them follows', () => {
+  const box = (id, type, x, y, w, h, extra = {}) => ({ id, type, page: 0, x, y, w, h, ...extra });
+  const objs = [
+    box('wo', 'whiteout', 300, 100, 40, 40),   // under the rectangle only
+    box('mark', 'redactMark', 100, 100, 100, 40), // not burnable: left alone
+    box('img', 'image', 0, 0, 20, 20),         // under nothing
+    box('rect', 'rect', 150, 100, 170, 40),    // under the signature, reaches the whiteout
+    box('txt', 'text', 110, 110, 30, 10, { text: 'Old date 2024-01-01 written here' }),
+    box('sig', 'image', 110, 105, 80, 30, { sig: 'a', group: 'g' }),
+    box('name', 'text', 110, 140, 80, 12, { group: 'g', text: 'Name' }),
+  ];
+  const p = applyPlan(objs, [objs[5], objs[6]], { boxOf: (o) => o, canBurn: (o) => o.type !== 'redactMark' });
+  assert.deepEqual(p.burn.map((o) => o.id), ['wo', 'rect', 'txt', 'sig', 'name']);
+  assert.deepEqual(p.covering.map((o) => o.id), ['rect', 'txt']);
+  assert.deepEqual(p.auto.map((o) => o.id), ['wo']);
+  assert.equal(objectLabel(objs[3]), 'Rectangle');
+  assert.equal(objectLabel(objs[4]), 'Text box “Old date 2024-01-01 wri…”');
+  assert.equal(objectLabel(objs[5]), 'Signature');
 });

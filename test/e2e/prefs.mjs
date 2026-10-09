@@ -97,6 +97,8 @@ try {
   await page.selectOption('.prefs-dlg select[name="view.defaultZoom"]', '1');
   await section('annotations');
   await page.fill('.prefs-dlg input[name="annotations.author"]', 'QA Tester');
+  check(await page.isChecked('.prefs-dlg input[name="sign.applyNoConfirm"]'), 'Ask before applying a signature not on by default');
+  await page.uncheck('.prefs-dlg input[name="sign.applyNoConfirm"]');
   await section('toolbar');
   await page.check('.prefs-dlg input[name="ui.toolLabels"]');
   await page.screenshot({ path: join(OUT, 'prefs-light.png') });
@@ -112,8 +114,10 @@ try {
   check(await labelsShown(), 'tool labels not persisted after reload');
   check((await page.evaluate(() => window.ashStudio.annotations.getAuthor())) === 'QA Tester', 'author not persisted');
   check((await setting('view.defaultZoom')) === '1', 'default zoom not persisted');
+  check((await setting('sign.applyNoConfirm')) === true, 'unticked Ask before applying a signature not saved as sign.applyNoConfirm');
   await openPrefs();
   await section('annotations');
+  check(!(await page.isChecked('.prefs-dlg input[name="sign.applyNoConfirm"]')), 'dialog shows Ask before applying a signature ticked');
   check((await page.inputValue('.prefs-dlg input[name="annotations.author"]')) === 'QA Tester', 'dialog does not show saved author');
   await page.keyboard.press('Escape');
   await page.waitForSelector('.prefs-dlg', { state: 'detached' });
@@ -142,6 +146,7 @@ try {
   check((await page.getAttribute('html', 'data-theme')) === 'light', 'reset did not restore light theme');
   check(!(await labelsShown()), 'reset did not hide tool labels');
   check((await setting('view.defaultZoom')) === 'fit-width', 'reset did not restore default zoom');
+  check((await setting('sign.applyNoConfirm')) === false, 'reset did not bring back the Apply signature confirmation');
   check((await page.evaluate(() => window.ashStudio.annotations.getAuthor())) !== 'QA Tester', 'reset did not clear author');
   await boot();
   check((await page.getAttribute('html', 'data-theme')) === 'light' && !(await labelsShown()), 'reset not persisted');

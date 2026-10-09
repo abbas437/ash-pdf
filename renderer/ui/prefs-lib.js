@@ -14,6 +14,7 @@ export const PREF_DEFAULTS = Object.freeze({
   'stamps.shape': 'rect',
   'ui.toolLabels': false,
   'ui.toolColors': true,             // group colours on the toolbar icons
+  'sign.applyNoConfirm': false,      // true: Apply signature without asking (sign.js APPLY_KEY); shown inverted
 });
 
 export const PREF_CHOICES = Object.freeze({

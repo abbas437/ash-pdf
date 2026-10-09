@@ -126,6 +126,37 @@ async function foreignPdf() {
   return { bytes: await doc.save(), sq };
 }
 
+describe('signature identity (sig, group) in the private extra key', () => {
+  const objs = (img) => [
+    { id: 'sg', page: 0, type: 'image', x: 40, y: 300, w: 40, h: 20, bytes: img, mime: 'image/png', sig: 'abc', group: 'g1' },
+    { id: 'sn', page: 0, type: 'text', x: 40, y: 330, w: 80, h: 14, text: 'Ahmad', fontSize: 10, group: 'g1' },
+    { id: 'pl', page: 0, type: 'image', x: 140, y: 300, w: 40, h: 20, bytes: img, mime: 'image/png' },
+  ];
+  test('sig and group survive write -> read', async () => {
+    const out = await writeAnnotations(await makePdf(1), { add: objs(makeImage('png')) }, OPTS);
+    const { objects, skipped } = await readAnnotations(out);
+    assert.deepEqual(skipped, []);
+    const by = Object.fromEntries(objects.map((o) => [o.id, o]));
+    assert.equal(by.sg.sig, 'abc');
+    assert.equal(by.sg.group, 'g1');
+    assert.equal(by.sn.group, 'g1');
+    assert.equal(by.sn.sig, undefined);
+    assert.ok(!('sig' in by.pl) && !('group' in by.pl), 'plain image gets no sig/group');
+  });
+  test('malformed or foreign-typed extra JSON is ignored', async () => {
+    for (const bad of ['{not json', 'null', '[1]', '{"sig":5,"group":{"a":1}}']) {
+      const out = await writeAnnotations(await makePdf(1), { add: objs(makeImage('png')) }, OPTS);
+      const doc = await PDFDocument.load(out);
+      const a = doc.context.lookup(doc.getPage(0).node.Annots().get(0));
+      a.set(PDFName.of('ASHStudio'), PDFHexString.fromText(bad));
+      const { objects } = await readAnnotations(await doc.save());
+      const sg = objects.find((o) => o.id === 'sg');
+      assert.ok(sg, `object kept for ${bad}`);
+      assert.ok(!('sig' in sg) && !('group' in sg), `ignored: ${bad}`);
+    }
+  });
+});
+
 describe('foreign annotations', () => {
   test('read without /NM or /AP; non-markups are skipped', async () => {
     const { bytes, sq } = await foreignPdf();

@@ -657,6 +657,8 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     const page = pages[o.page];
     const who = o.author ?? author ?? '';
     const { entries, extra } = typeEntries(o, g, lay);
+    // Signature identity: the library item id and the block id, so Apply signature still works after reopening.
+    for (const k of ['sig', 'group']) if (typeof o[k] === 'string' && o[k]) extra[k] = o[k];
     const contents = o.type === 'text' || o.type === 'callout' ? o.text : (o.note ?? (o.type === 'stamp' ? o.text : undefined));
     const opacity = o.type === 'highlight' ? Math.min(Math.max(num(o.opacity, 0.4), 0), 0.5) : Math.min(Math.max(num(o.opacity, 1), 0), 1);
     const rect = visRectToPdf(g, lay.bbox).map(r4);
@@ -857,6 +859,7 @@ function toObject(doc, en, g) {
   let extra = {};
   try {
     extra = JSON.parse(readText(dict, EXTRA_KEY) || '{}');
+    if (!extra || typeof extra !== 'object' || Array.isArray(extra)) extra = {};
   } catch {
     extra = {};
   }
@@ -998,6 +1001,7 @@ function toObject(doc, en, g) {
       throw new Error('unsupported subtype');
   }
   if (dash) o.dash = dash;
+  for (const k of ['sig', 'group']) if (typeof extra[k] === 'string' && extra[k]) o[k] = extra[k];
   o.opacity = ca instanceof PDFNumber ? ca.asNumber() : 1;
   if (contents !== undefined && o.type !== 'text' && o.type !== 'callout' && !(o.type === 'stamp' && contents === o.text)) o.note = contents;
   const author = readText(dict, 'T');

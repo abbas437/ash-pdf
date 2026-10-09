@@ -81,3 +81,40 @@ export function targetPages(mode, numPages, rangeIndices = []) {
   if (mode === 'range') return rangeIndices;
   return all;
 }
+
+const overlaps = (a, b) => !!a && !!b && a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+/**
+ * What "Apply signature" burns besides `core` (the selected signatures with their block groups).
+ * `objects` is the tab's object list in z-order (later = drawn on top); overlays always draw above
+ * page content, so any object below a burned one that overlaps it would end up drawn over it.
+ * Whiteout below and overlapping is burned with it (`auto`: save burns whiteout anyway); any other
+ * such object `canBurn` accepts is `covering` (the user confirms it). Covering objects are burned
+ * too, so what lies below them is checked in turn. `boxOf(o)` -> {x, y, w, h} or null.
+ * Returns { burn, auto, covering }: objects, `burn` in z-order (core + auto + covering).
+ */
+export function applyPlan(objects, core, { boxOf, canBurn }) {
+  const z = new Map(objects.map((o, i) => [o.id, i]));
+  const inBurn = new Set(core.map((o) => o.id)), auto = new Set(), covering = new Set();
+  const todo = [...core];
+  while (todo.length) {
+    const top = todo.pop(), tb = boxOf(top);
+    for (const o of objects.slice(0, z.get(top.id))) {
+      if (inBurn.has(o.id) || o.page !== top.page || !overlaps(boxOf(o), tb)) continue;
+      if (o.type === 'whiteout') { inBurn.add(o.id); auto.add(o.id); continue; }
+      if (!canBurn(o)) continue;
+      inBurn.add(o.id); covering.add(o.id); todo.push(o);
+    }
+  }
+  const pick = (s) => objects.filter((o) => s.has(o.id));
+  return { burn: pick(inBurn), auto: pick(auto), covering: pick(covering) };
+}
+
+const TYPE_LABEL = { rect: 'Rectangle', ellipse: 'Ellipse', cloud: 'Cloud', line: 'Line', arrow: 'Arrow', polyline: 'Polyline', ink: 'Freehand drawing',
+  highlight: 'Highlight', image: 'Image', callout: 'Callout', stamp: 'Stamp', note: 'Note', text: 'Text box', underline: 'Underline',
+  strikeout: 'Strikeout', squiggly: 'Squiggly underline', textHighlight: 'Text highlight' };
+/** Short name of an object for the Apply signature confirmation list. */
+export function objectLabel(o) {
+  const name = o.type === 'image' && o.sig ? 'Signature' : TYPE_LABEL[o.type] ?? o.type;
+  const t = String(o.text ?? '').replace(/\s+/g, ' ').trim();
+  return t ? `${name} “${t.length > 24 ? `${t.slice(0, 23)}…` : t}”` : name;
+}
