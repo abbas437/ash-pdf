@@ -8,6 +8,7 @@ import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, d
 import { signedSaveMode } from './ui/save-lib.js';
 import { clearBytesHistory } from './ui/pagehistory-lib.js';
 import { viewer } from './ui/viewer.js';
+import { moveItem, dropSlot, slotToIndex } from './ui/tabs-lib.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
 import { initSplitView } from './ui/splitview.js';
@@ -299,6 +300,50 @@ async function showProperties(tab = activeTab()) {
 }
 
 // ---------------------------------------------------------------- tab strip
+let justDragged = false;
+/** Moves a tab to `to` (final index); the active document is unchanged. */
+function moveTab(tab, to) {
+  const from = state.tabs.indexOf(tab);
+  if (from < 0 || from === to) return;
+  moveItem(state.tabs, from, to);
+  bus.emit('tab:reordered', { tab });
+}
+/** Drag a tab sideways to reorder it (pointer events; Esc cancels). */
+function startTabDrag(e, tab, el) {
+  if (e.button !== 0 || e.target.closest('.tab-close')) return;
+  const x0 = e.clientX;
+  let active = false, slot = -1;
+  const els = () => [...tabstrip.querySelectorAll('.doc-tab')];
+  const clear = () => { for (const n of els()) n.classList.remove('dragging', 'drop-left', 'drop-right'); };
+  const finish = (commit) => {
+    document.removeEventListener('pointermove', move, true);
+    document.removeEventListener('pointerup', up, true);
+    document.removeEventListener('keydown', key, true);
+    document.removeEventListener('pointercancel', cancel, true);
+    if (!active) return;
+    clear();
+    justDragged = true;
+    setTimeout(() => { justDragged = false; }, 0);
+    if (commit && slot >= 0) moveTab(tab, slotToIndex(state.tabs.indexOf(tab), slot));
+  };
+  const move = (ev) => {
+    if (!active && Math.abs(ev.clientX - x0) < 5) return;
+    active = true;
+    const list = els();
+    slot = dropSlot(list.map((n) => { const r = n.getBoundingClientRect(); return r.left + r.width / 2; }), ev.clientX);
+    clear();
+    el.classList.add('dragging');
+    if (slot < list.length) list[slot].classList.add('drop-left'); else list[list.length - 1].classList.add('drop-right');
+  };
+  const up = () => finish(true);
+  const cancel = () => finish(false);
+  const key = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); } };
+  document.addEventListener('pointermove', move, true);
+  document.addEventListener('pointerup', up, true);
+  document.addEventListener('pointercancel', cancel, true);
+  document.addEventListener('keydown', key, true);
+}
+
 function renderTabs() {
   tabstrip.replaceChildren();
   for (const t of state.tabs) {
@@ -308,7 +353,8 @@ function renderTabs() {
     const el = h('div.doc-tab', { role: 'tab', tabindex: selected ? '0' : '-1', 'aria-selected': String(selected), title: t.path ?? t.name, dataset: { tabId: t.id } },
       t.encrypted ? h('span.tab-lock', { html: icon('lock', 13) }) : null,
       h('span.tab-name', {}, t.name), t.dirty ? h('span.tab-dirty', { 'aria-label': 'modified' }, '●') : null, close);
-    el.addEventListener('click', () => activate(t.id));
+    el.addEventListener('click', () => { if (!justDragged) activate(t.id); });
+    el.addEventListener('pointerdown', (e) => startTabDrag(e, t, el));
     el.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t); } });
     el.addEventListener('keydown', (e) => {
       const k = state.tabs.indexOf(t);
@@ -378,7 +424,7 @@ function refresh() {
   for (const id of ['btn-save', 'btn-saveas', 'btn-print', 'btn-prev', 'btn-next', 'btn-zoomout', 'btn-zoomin', 'btn-rotl', 'btn-rotr', 'btn-find']) $(`#${id}`).disabled = !tab;
   zoomSelect.disabled = !tab;
 }
-for (const ev of ['tab:opened', 'tab:closed', 'tab:activated', 'tab:dirtyChanged', 'page:changed', 'zoom:changed', 'tab:loaded']) bus.on(ev, refresh);
+for (const ev of ['tab:opened', 'tab:closed', 'tab:activated', 'tab:reordered', 'tab:dirtyChanged', 'page:changed', 'zoom:changed', 'tab:loaded']) bus.on(ev, refresh);
 bus.on('state:changed', ({ key }) => { if (key === 'sidebarOpen') document.body.classList.toggle('sidebar-closed', !state.sidebarOpen); });
 
 // ---------------------------------------------------------------- theme
@@ -431,7 +477,7 @@ M('Help', { id: 'keys', label: 'Keyboard shortcuts', action: showShortcuts });
 M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => showDialog({ title: 'About ASH PDF Studio', className: 'about-dlg', body: h('div', {}, h('img.brand-logo.lt.about-logo', { src: 'assets/brand/ash-logo-horizontal.svg', alt: 'ASH Technical & Project Management Services' }), h('img.brand-logo.rev.about-logo', { src: 'assets/brand/ash-logo-horizontal-reversed.svg', alt: '' }), h('p', {}, `Version ${await api.version()}. Free and open source (MIT). Uses pdf.js (Apache-2.0) and pdf-lib (MIT).`), h('p.about-tm', {}, 'The ASH logo and icon are trademarks of ASH Technical & Project Management Services and are not covered by the MIT licence.')) }) });
 
 function showShortcuts() {
-  const keys = [['Ctrl+O', 'Open'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'],
+  const keys = [['Ctrl+O', 'Open'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'], ['Ctrl+Shift+PageUp / PageDown', 'Move tab left / right'],
     ['Ctrl+F', 'Find'], ['Ctrl+,', 'Preferences'], ['Ctrl+= / Ctrl+-', 'Zoom in / out'], ['Ctrl+0 / Ctrl+1', 'Fit page / Actual size'], ['Home / End', 'First / last page'], ['Page Up / Page Down', 'Previous / next page']];
   showDialog({ title: 'Keyboard shortcuts', body: h('table.props', {}, keys.map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', {}, v)))) });
 }
@@ -452,6 +498,10 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && e.key === ',') return run(() => openPrefs());
   if ((ctrl && k === 'b' && !e.shiftKey && !e.altKey && !isTyping(e.target)) || e.key === 'F4') return run(() => { state.sidebarOpen = !state.sidebarOpen; });
   if (readMode.onKey(e, isTyping(e.target))) return e.preventDefault();
+  if (ctrl && e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) return run(() => {
+    const i = state.tabs.indexOf(tab);
+    if (tab) moveTab(tab, Math.max(0, Math.min(state.tabs.length - 1, i + (e.key === 'PageUp' ? -1 : 1))));
+  });
   if (ctrl && e.key === 'Tab') return run(() => {
     if (state.tabs.length < 2) return;
     const i = state.tabs.indexOf(tab);

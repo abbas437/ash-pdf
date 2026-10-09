@@ -5,7 +5,7 @@
 //       With "Include images" (default on), the page's images (pdf.js paintImageXObject / paintInlineImageXObject, pixels
 //       from page.objs) float over the sheet near the text rows they sit between (table-extract.js placeImages);
 //       PNG when an image has transparency, else JPEG.
-//   Export to image (PNG/JPEG)…   pages ("All" or a range like 1-3,7; default the current page) at 72/150/300
+//   Export to image (PNG/JPEG)…   pages (empty or "All", "current", or a range like 1-3,7; default the current page) at 72/150/300
 //       dpi; with "Include annotations", unsaved overlay objects are burnt in with the print path's
 //       flattenedCopy (viewextras.js). One page is saved with api.saveFile; several pages go one at a time into a
 //       folder the user picks in main (api.imageExportBegin/Write/End, rules in src/core/imgexport.js).
@@ -181,14 +181,14 @@ export async function imageDialog(tab = activeTab()) {
     const q = Number(quality.value), spec = pageNo.value.trim();
     let indices;
     try {
-      indices = !spec || /^all$/i.test(spec) ? [...Array(tab.numPages).keys()] : (await ops()).parseRanges(spec, tab.numPages);
+      indices = !spec || /^all$/i.test(spec) ? [...Array(tab.numPages).keys()] : /^current$/i.test(spec) ? [tab.currentPage] : (await ops()).parseRanges(spec, tab.numPages);
     } catch (err) { error.textContent = `Pages: ${err.message}`; return false; }
     if (indices.length > MAX_FILES) { error.textContent = `Pages: at most ${MAX_FILES} pages can be exported at once`; return false; }
     if (!Number.isInteger(q) || q < 10 || q > 100) { error.textContent = 'JPEG quality must be a whole number from 10 to 100'; return false; }
     chosen = { indices, format: format.value, dpi: Number(dpi.value), quality: q / 100, annotations: annots.value === 'yes' };
     return true;
   };
-  const body = h('div.vx-print-form', {}, field('Pages', pageNo), field('Format', format), field('Resolution', dpi),
+  const body = h('div.vx-print-form', {}, field('Pages', pageNo), h('p.vx-note.xp-img-hint', {}, "Examples: 1-3, 5, 8-10 \u00b7 leave empty for all pages \u00b7 'current' for this page"), field('Format', format), field('Resolution', dpi),
     field('JPEG quality (%)', quality), field('Include annotations', annots), error);
   const res = await showDialog({
     title: 'Export to image', body, className: 'xp-dialog xp-img-dialog', initialFocus: '#xp-img-page',
