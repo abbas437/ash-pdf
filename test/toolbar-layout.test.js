@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_GROUPS, defaultLayout, cleanLayout, placement, setHidden, setGroupShown, moveItem, moveToGroup, moveGroup,
-  setCompact, setAllCompact, compactMode,
+  setCompact, setAllCompact, compactMode, canFold, canHide,
 } from '../renderer/ui/toolbar-layout.js';
 
 test('defaults: every group in order, nothing hidden or compact', () => {
@@ -94,4 +94,54 @@ test('global Compact folds every group except Navigate', () => {
   assert.equal(compactMode(c), 'compact');
   assert.equal(compactMode(setCompact(c, 'edit', false)), 'custom');
   assert.equal(compactMode(setAllCompact(c, false)), 'expanded');
+});
+
+test('cleanLayout ignores prototype keys, huge arrays and wrongly typed fields', () => {
+  const polluted = JSON.parse('{"__proto__":{"polluted":1},"order":{"__proto__":["hand"],"constructor":["text"],"edit":["__proto__","toString"]},"groupOrder":["__proto__","constructor","edit"],"hidden":["__proto__","hand"],"compact":["__proto__","edit"]}');
+  const l = cleanLayout(polluted);
+  assert.equal({}.polluted, undefined);
+  assert.deepEqual(l.groupOrder, ['navigate', 'pages', 'view', 'edit', 'comment', 'sign']);
+  assert.deepEqual(Object.keys(l.order).sort(), [...defaultLayout().groupOrder].sort());
+  assert.deepEqual(l.hidden, ['hand']);
+  assert.deepEqual(l.compact, ['edit']);
+  assert.deepEqual(l.order, defaultLayout().order);
+});
+
+test('cleanLayout copes with a 100k-entry array', () => {
+  const big = Array.from({ length: 100_000 }, (_, i) => (i % 2 ? 'hand' : `x${i}`));
+  const t0 = Date.now();
+  const l = cleanLayout({ groupOrder: big, hidden: big, compact: big, order: { navigate: big } });
+  assert.ok(Date.now() - t0 < 2000);
+  assert.deepEqual(l.hidden, ['hand']);
+  assert.deepEqual(l.groupOrder, defaultLayout().groupOrder);
+  assert.deepEqual(l.order.navigate, ['select', 'hand']);
+});
+
+test('cleanLayout: order and hidden of the wrong type are ignored', () => {
+  for (const bad of [5, 'edit', true, [], [['a']], { navigate: 'hand', edit: { 0: 'text' }, comment: 7 }]) {
+    assert.deepEqual(cleanLayout({ order: bad }).order, defaultLayout().order, JSON.stringify(bad));
+  }
+  for (const bad of [5, 'hand', {}, null, [1, null, {}]]) assert.deepEqual(cleanLayout({ hidden: bad }).hidden, [], JSON.stringify(bad));
+  assert.deepEqual(cleanLayout({ hidden: ['hand', 3, null] }).hidden, ['hand']);
+});
+
+test('groups with a single tool button cannot fold and do not count for the Compact mode', () => {
+  const d = defaultLayout();
+  assert.deepEqual(['navigate', 'pages', 'view', 'edit', 'comment', 'sign'].map((g) => canFold(d, g)), [true, false, false, true, true, false]);
+  const c = setAllCompact(d, true);
+  assert.equal(compactMode(c), 'compact');
+  // Compact ticked on a group that cannot fold is neither on nor off.
+  assert.equal(compactMode(setCompact(setAllCompact(d, false), 'pages', true)), 'expanded');
+  assert.equal(compactMode(setCompact(c, 'pages', false)), 'compact');
+  assert.equal(compactMode(setCompact(c, 'sign', false)), 'compact');
+  // Moving Stamp into Edit leaves Sign with one button; Edit still folds.
+  assert.equal(canFold(moveToGroup(d, 'stamp', 'edit'), 'sign'), false);
+  assert.equal(canFold(moveToGroup(d, 'select', 'sign'), 'sign'), true);
+});
+
+test('ids no group lists cannot be hidden', () => {
+  assert.equal(canHide('hand'), true);
+  assert.equal(canHide('select'), false);
+  assert.equal(canHide('plugin-tool'), false);
+  assert.deepEqual(setHidden(defaultLayout(), 'plugin-tool', true).hidden, []);
 });

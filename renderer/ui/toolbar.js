@@ -188,20 +188,23 @@ function arrange() {
   const all = new Map([...toolsEl.querySelectorAll('[data-tb-item]:not(.tb-cg)')].map((el) => [el.dataset.tbItem, el]));
   const oldCompact = [...toolsEl.querySelectorAll('.tb-cg')];
   for (const s of toolsEl.querySelectorAll(':scope > .tb-sep')) s.remove();
+  let anyShown = false; // separators only go between two groups that show something
   const groupEls = Object.fromEntries([...toolsEl.querySelectorAll(':scope > .tb-tg')].map((g) => [g.dataset.group, g]));
   const extra = [...all.keys()].filter((id) => !Number.isFinite(placement(tbLayout, id)?.index ?? Infinity));
-  for (const [n, g] of tbLayout.groupOrder.entries()) {
+  for (const g of tbLayout.groupOrder) {
     const groupEl = groupEls[g];
-    if (n) toolsEl.insertBefore(sepEl(), moreWrap);
-    toolsEl.insertBefore(groupEl, moreWrap);
     const els = [...tbLayout.order[g], ...(g === 'edit' ? extra : [])].map((id) => all.get(id)).filter(Boolean);
+    const void_ = !els.some((el) => !isHidden(tbLayout, el.dataset.tbItem));
+    if (!void_ && anyShown) toolsEl.insertBefore(sepEl(), moreWrap);
+    if (!void_) anyShown = true;
+    toolsEl.insertBefore(groupEl, moreWrap);
     for (const el of els) {
       el.dataset.grp = g; // keeps the group colour when the item moves into More
       el.toggleAttribute('data-tb-hidden', isHidden(tbLayout, el.dataset.tbItem));
       el.removeAttribute('data-tb-folded');
       groupEl.append(el);
     }
-    groupEl.classList.toggle('tb-tg-void', !els.some((el) => !el.hasAttribute('data-tb-hidden')));
+    groupEl.classList.toggle('tb-tg-void', void_);
     const folded = els.filter((el) => el.dataset.tool && !el.hasAttribute('data-tb-hidden'));
     if (isCompact(tbLayout, g) && folded.length > 1) compactGroup(g, groupEl, folded);
   }
@@ -230,6 +233,7 @@ function compactGroup(g, groupEl, buttons) {
 function showFace(wrap, id) {
   faces[wrap.dataset.grp] = id;
   for (const b of wrap.querySelectorAll('[data-tool]')) b.toggleAttribute('data-tb-folded', b.dataset.tool !== id);
+  scheduleLayout(); // the face's label can be wider than the old one: re-fit the row
 }
 function setFace(id) {
   const wrap = toolsEl?.querySelector(`.tb-cg [data-tool="${id}"]`)?.closest('.tb-cg');

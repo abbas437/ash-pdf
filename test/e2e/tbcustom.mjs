@@ -56,6 +56,7 @@ try {
   await page.click('.tb-btn[data-tool="squiggly"]', { button: 'right' });
   await page.click('.tb-ctx-menu [data-id="hide"]');
   await settle();
+  check(await page.evaluate(() => document.activeElement?.closest?.('.toolbar') && !document.activeElement.closest('[data-tb-hidden]')), 'focus lost after Hide');
   check(!(await vis('.tb-btn[data-tool="squiggly"]')), 'Squiggly still visible in the row');
   check(await page.$('.tb-btn[data-tool="squiggly"][data-tb-hidden]'), 'Squiggly lacks data-tb-hidden');
   if (await page.evaluate(() => !document.querySelector('.tb-more').hidden)) await page.click('.tb-more-btn');
@@ -94,6 +95,44 @@ try {
   check(face.join() === 'draw', `face after Draw: ${face}`);
   await page.click('.tb-btn[data-tool="select"]');
 
+  step = 'compact face with a longer label re-fits the row (labels on)';
+  await page.evaluate(() => document.body.classList.add('tool-labels'));
+  await page.keyboard.press('Escape');
+  const overflowing = () => page.evaluate(() => {
+    const bar = document.querySelector('.toolbar');
+    const right = bar.getBoundingClientRect().right - parseFloat(getComputedStyle(bar).paddingRight || 0) + 0.5;
+    const out = [...bar.querySelectorAll('.tb-tools [data-tb-item], .tb-more, .tb-more-btn')]
+      .filter((e) => !e.closest('.tb-more-panel') && !e.closest('[data-tb-hidden],[data-tb-folded]') && e.getClientRects().length > 0 && e.getBoundingClientRect().right > right);
+    return out.map((e) => e.dataset.tbItem ?? e.className);
+  });
+  const moreShown = () => page.evaluate(() => !document.querySelector('.tb-more').hidden);
+  // A non-link tool is already active, so the body's links-off class does not change on the next switch
+  // (that class change would re-fit the row by itself and hide the missing re-fit on a face change).
+  await page.keyboard.press('h');
+  check((await tool()) === 'highlight', `shortcut H: tool ${await tool()}`);
+  check(await page.$eval('.tb-cg[data-grp="comment"] [data-tool="highlight"]', (b) => !b.hasAttribute('data-tb-folded')), 'Area is not the face');
+  let lo = 500, hi = 1600; // narrowest width at which the row fits without More
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    await page.setViewportSize({ width: mid, height: 800 }); await settle(); await settle();
+    if (await moreShown()) lo = mid; else hi = mid;
+  }
+  await page.setViewportSize({ width: hi, height: 800 }); await settle(); await settle();
+  check(!(await moreShown()) && (await overflowing()).length === 0, `row does not fit at ${hi}px`);
+  // Every tool switch also changes the body's classes, and the toolbar watches those: that re-fits the row by
+  // itself and would hide a missing re-fit on a face change. Freeze them for this one switch.
+  await page.evaluate(() => { for (const m of ['add', 'remove', 'toggle', 'replace']) document.body.classList[m] = () => false; });
+  await page.keyboard.press('u'); // Underline: a longer label than Area
+  await settle(); await settle();
+  check((await tool()) === 'underline', `shortcut U: tool ${await tool()}`);
+  const spill = await overflowing();
+  await page.evaluate(() => { for (const m of ['add', 'remove', 'toggle', 'replace']) delete document.body.classList[m]; });
+  check(spill.length === 0, `after the face grew, items past the bar edge: ${spill}`);
+  check(await moreShown(), 'More not shown after the face grew');
+  await page.click('.tb-btn[data-tool="select"]');
+  await page.evaluate(() => document.body.classList.remove('tool-labels'));
+  await page.setViewportSize({ width: 1600, height: 800 }); await settle(); await settle();
+
   step = 'persists after reload';
   await reloadPage();
   check(!(await vis('.tb-btn[data-tool="squiggly"]')) && await page.$('.tb-btn[data-tool="squiggly"][data-tb-hidden]'), 'Squiggly visible after reload');
@@ -118,6 +157,24 @@ try {
   await menuClick('View', 'tbexpanded');
   check((await page.$$('.tb-cg')).length === 0, 'Expanded left compact groups');
   check(await vis('.tb-btn[data-tool="squiggly"]'), 'Squiggly not visible when Expanded');
+
+  step = 'no leading, trailing or doubled separators';
+  const seps = () => page.evaluate(() => {
+    const kids = [...document.querySelector('.tb-tools').children].filter((e) => !e.classList.contains('tb-more') && e.getClientRects().length > 0);
+    return kids.map((e) => (e.classList.contains('tb-sep') ? 'S' : 'G')).join('');
+  });
+  const okSeps = (t) => t.length && !t.startsWith('S') && !t.endsWith('S') && !t.includes('SS');
+  await menuClick('View', 'tbcustomize');
+  await page.click('[data-key="gup:pages"]'); // Pages first
+  await page.click('[data-key="gdown:navigate"]'); // Pages, View, Navigate ...
+  for (const id of ['pages', 'split', 'stamp', 'sign']) await page.click(`.tbc [data-key="show:${id}"]`);
+  await page.click('.dialog-buttons [data-value="ok"]');
+  await settle(); await settle();
+  const order = await page.$$eval('.tb-tools > .tb-tg', (g) => g.map((e) => e.dataset.group).join());
+  check(order.startsWith('pages,view,navigate'), `group order: ${order}`);
+  const pattern = await seps();
+  check(okSeps(pattern), `separators with empty groups first and last: ${pattern}`);
+  check(pattern.split('G').length - 1 === 3, `visible groups in ${pattern}`);
 
   step = 'page errors';
   check(problems.length === 0, problems.join('\n'));

@@ -7,7 +7,7 @@ import { h } from './dom.js';
 import { showDialog } from './dialogs.js';
 import { getToolbarLayout, setToolbarLayout, toolbarItemOf, toolbarItemInfo } from './toolbar.js';
 import {
-  defaultLayout, cleanLayout, groupLabel, isHidden, isCompact, canHide, setHidden, setGroupShown, moveItem, moveToGroup,
+  defaultLayout, cleanLayout, groupLabel, isHidden, isCompact, canHide, canFold, setHidden, setGroupShown, moveItem, moveToGroup,
   moveGroup, setCompact, setAllCompact, compactMode,
 } from './toolbar-layout.js';
 
@@ -42,7 +42,7 @@ function buildBody(get, set) {
         h('h3.tbc-title', { id: `tbc-g-${g}` }, name),
         mini('↑', `Move group ${name} left`, `gup:${g}`, gi === 0, () => moveGroup(get(), g, -1)),
         mini('↓', `Move group ${name} right`, `gdown:${g}`, gi === L.groupOrder.length - 1, () => moveGroup(get(), g, 1)),
-        h('label.tbc-compact', {}, h('input', { type: 'checkbox', checked: isCompact(L, g), dataset: { key: `compact:${g}` }, onchange: (e) => set(setCompact(get(), g, e.target.checked), `compact:${g}`) }), h('span', {}, 'Compact')),
+        h('label.tbc-compact', { title: canFold(L, g) ? '' : 'This group has only one button' }, h('input', { type: 'checkbox', checked: isCompact(L, g) && canFold(L, g), disabled: !canFold(L, g), title: canFold(L, g) ? '' : 'This group has only one button', dataset: { key: `compact:${g}` }, onchange: (e) => set(setCompact(get(), g, e.target.checked), `compact:${g}`) }), h('span', {}, 'Compact')),
         mini('All', `Show all ${name} tools`, `all:${g}`, !ids.length, () => setGroupShown(get(), g, true)),
         mini('None', `Hide all ${name} tools`, `none:${g}`, !ids.length, () => setGroupShown(get(), g, false)));
       const rows = ids.map((id, i) => h('li.tbc-row', { dataset: { id } },
@@ -92,8 +92,12 @@ function closeContext(refocus) {
   el.remove();
   document.removeEventListener('mousedown', onDocDown, true);
   document.removeEventListener('keydown', onKey, true);
+  window.removeEventListener('blur', onAway);
+  window.removeEventListener('resize', onAway);
+  document.removeEventListener('scroll', onAway, true);
   if (refocus && origin?.isConnected) origin.focus();
 }
+function onAway() { closeContext(); }
 function onDocDown(e) { if (ctx && !ctx.el.contains(e.target)) closeContext(); }
 function onKey(e) {
   if (!ctx) return;
@@ -107,6 +111,16 @@ function onKey(e) {
   e.stopPropagation();
 }
 
+// Hide an item; keyboard focus moves to the next visible toolbar button (else the previous) instead of dropping to body.
+function hideFocused(anchor, id) {
+  const shown = (b) => b.isConnected && !b.disabled && !b.closest('[data-tb-hidden],[data-tb-folded]') && b.getClientRects().length > 0;
+  const all = [...document.querySelectorAll('.toolbar button')].filter(shown);
+  const i = anchor ? all.indexOf(anchor) : -1;
+  apply(setHidden(getToolbarLayout(), id, true));
+  if (i < 0) return;
+  [...all.slice(i + 1), ...all.slice(0, i).reverse()].find((b) => shown(b) && (b.focus(), document.activeElement === b));
+}
+
 function openContext(e) {
   const tools = e.target.closest('.tb-tools');
   if (!tools) return;
@@ -114,9 +128,9 @@ function openContext(e) {
   closeContext();
   const id = toolbarItemOf(e.target);
   const name = id ? toolbarItemInfo()[id]?.label ?? id : null;
-  const item = (key, text, action, disabled = false) => h('button.menu-item', { type: 'button', role: 'menuitem', disabled, dataset: { id: key }, onclick: () => { closeContext(true); action(); } }, h('span', {}, text), h('kbd', {}, ''));
+  const item = (key, text, action, disabled = false) => h('button.menu-item', { type: 'button', role: 'menuitem', tabindex: '-1', disabled, dataset: { id: key }, onclick: () => { closeContext(true); action(); } }, h('span', {}, text), h('kbd', {}, ''));
   const el = h('div.ctx-menu.tb-ctx-menu', { role: 'menu', 'aria-label': 'Toolbar' },
-    name && item('hide', `Hide ${name}`, () => apply(setHidden(getToolbarLayout(), id, true)), !canHide(id)),
+    name && item('hide', `Hide ${name}`, () => hideFocused(e.target.closest('button'), id), !canHide(id)),
     item('customize', 'Customize toolbar…', () => openCustomize()));
   document.body.append(el);
   let x = e.clientX, y = e.clientY;
@@ -127,6 +141,9 @@ function openContext(e) {
   ctx = { el, origin: document.activeElement };
   document.addEventListener('mousedown', onDocDown, true);
   document.addEventListener('keydown', onKey, true);
+  window.addEventListener('blur', onAway);
+  window.addEventListener('resize', onAway);
+  document.addEventListener('scroll', onAway, true);
   el.querySelector('button:not(:disabled)')?.focus();
 }
 

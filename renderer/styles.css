@@ -700,7 +700,7 @@ body.reading-mode { cursor: default; }
 
 /* ---------------------------------------------------------------- customize toolbar (ui/toolbar-custom.js) */
 .tb-tools [data-tb-hidden], .tb-tools [data-tb-folded] { display: none !important; }
-.tb-tg.tb-tg-void, .tb-sep:has(+ .tb-tg.tb-tg-void) { display: none; }
+.tb-tg.tb-tg-void { display: none; }
 /* Compact group: the last used tool and a narrow caret listing the group's tools. */
 .tb-cg { display: flex; align-items: center; gap: 0; }
 .toolbar .tb-cg .tb-btn.tb-cg-caret, .tool-labels .toolbar .tb-cg .tb-btn.tb-cg-caret { display: flex; width: 14px; min-width: 14px; padding: 0; justify-content: center; align-self: stretch; }

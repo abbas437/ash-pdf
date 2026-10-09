@@ -92,7 +92,12 @@ export function placement(layout, id) {
 
 export const isHidden = (layout, id) => layout.hidden.includes(id);
 export const isCompact = (layout, group) => layout.compact.includes(group);
-export const canHide = (id) => !ALWAYS_SHOWN.includes(id);
+/** Hideable: not Select, and listed in a group (an id added at run time has no entry to hide). */
+export const canHide = (id) => !ALWAYS_SHOWN.includes(id) && KNOWN.has(id);
+/** Items that are menus, not tool buttons: they never fold into a compact group. */
+const MENU_ITEMS = Object.freeze(['pages', 'split', 'sign']);
+/** True when a group holds at least two tool buttons, so Compact can fold it (hidden ones still count). */
+export const canFold = (layout, group) => (layout.order[group] ?? []).filter((id) => !MENU_ITEMS.includes(id)).length > 1;
 
 export function setHidden(layout, id, hidden) {
   const l = copy(layout);
@@ -155,7 +160,8 @@ export function setAllCompact(layout, on) {
 
 /** 'expanded' | 'compact' | 'custom' for the View menu's check marks. */
 export function compactMode(layout) {
-  if (!layout.compact.length) return 'expanded';
-  const want = GROUP_KEYS.filter((g) => g !== NEVER_AUTO_COMPACT);
-  return want.every((g) => layout.compact.includes(g)) && !layout.compact.includes(NEVER_AUTO_COMPACT) ? 'compact' : 'custom';
+  const folded = layout.compact.filter((g) => canFold(layout, g)); // a group that cannot fold is neither on nor off
+  if (!folded.length) return 'expanded';
+  const want = GROUP_KEYS.filter((g) => g !== NEVER_AUTO_COMPACT && canFold(layout, g));
+  return want.every((g) => folded.includes(g)) && !folded.includes(NEVER_AUTO_COMPACT) ? 'compact' : 'custom';
 }
