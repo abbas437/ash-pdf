@@ -184,6 +184,9 @@ test('inkMargins: pixel box to margins in points, padded 2 mm and kept on the pa
   const only = inkMargins(null, 600, 800, size, [{ x: 10, y: 20, w: 30, h: 40 }]);
   for (const [k, v] of Object.entries({ left: 10 - pad, top: 20 - pad, right: 260 - pad, bottom: 340 - pad })) assert.ok(Math.abs(only[k] - v) < 1e-9, `${k}: ${only[k]}`);
   assert.equal(inkMargins(null, 600, 800, size, []), null);
+  // An object entirely off the page is not content (alone it leaves the page as it is).
+  assert.equal(inkMargins(null, 600, 800, size, [{ x: 310, y: 20, w: 30, h: 40 }, { x: 10, y: -50, w: 30, h: 40 }]), null);
+  assert.deepEqual(inkMargins({ x0: 100, y0: 100, x1: 300, y1: 500 }, 600, 800, size, [{ x: 400, y: 500, w: 10, h: 10 }]), mg);
   // Content touching the edges: no negative margins.
   assert.deepEqual(inkMargins({ x0: 0, y0: 1, x1: 600, y1: 800 }, 600, 800, { width: 300, height: 400 }), { top: 0, right: 0, bottom: 0, left: 0 });
 });

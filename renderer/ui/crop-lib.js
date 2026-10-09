@@ -174,11 +174,12 @@ export function overlayBoxes(tab, i, objectBox) {
  * Margins (points) that trim a page of `size` (points, as displayed) to the ink box `box` of its
  * rendering `pxWidth` x `pxHeight` pixels joined with `extra` boxes ({x, y, w, h}, points: the
  * page's own overlay objects), padded by `pad` points and kept on the page; null when there is
- * neither ink nor an extra box.
+ * neither ink nor an extra box on the page.
  */
 export function inkMargins(box, pxWidth, pxHeight, size, extra = [], pad = PAD_MM * MM) {
   const sx = size.width / pxWidth, sy = size.height / pxHeight;
-  const rs = extra.map((b) => ({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h }));
+  const rs = extra.map((b) => ({ x0: b.x, y0: b.y, x1: b.x + b.w, y1: b.y + b.h }))
+    .filter((b) => b.x1 > 0 && b.y1 > 0 && b.x0 < size.width && b.y0 < size.height); // an object off the page shows nothing
   if (box) rs.push({ x0: box.x0 * sx, y0: box.y0 * sy, x1: box.x1 * sx, y1: box.y1 * sy });
   if (!rs.length) return null;
   const r = {
