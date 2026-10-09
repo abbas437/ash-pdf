@@ -33,6 +33,6 @@ export function cleanWindowState(v, accept) {
 function cleanSplit(s, kept) {
   if (!isPlainObject(s) || !SPLIT_DIRS.includes(s.dir) || typeof s.ratio !== 'number' || !Number.isFinite(s.ratio)
     || (s.focus !== 0 && s.focus !== 1) || !Array.isArray(s.files) || s.files.length !== 2
-    || !s.files.every((p) => isPathString(p) && kept.has(pathKey(p)))) return null;
-  return { dir: s.dir, ratio: clampRatio(s.ratio), files: s.files.map((p) => kept.get(pathKey(p))), focus: s.focus };
+    || ![0, 1].every((i) => isPathString(s.files[i]) && kept.has(pathKey(s.files[i])))) return null; // by index: holes are invalid
+  return { dir: s.dir, ratio: clampRatio(s.ratio), files: [kept.get(pathKey(s.files[0])), kept.get(pathKey(s.files[1]))], focus: s.focus };
 }

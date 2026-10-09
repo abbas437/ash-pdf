@@ -33,7 +33,7 @@ test('an invalid split is dropped and the files kept', () => {
     { ...ok, ratio: NaN }, { ...ok, ratio: Infinity }, { ...ok, ratio: '0.4' }, { ...ok, ratio: undefined },
     { ...ok, focus: 2 }, { ...ok, focus: '1' }, { ...ok, focus: -1 }, { ...ok, focus: undefined },
     { ...ok, files: [A] }, { ...ok, files: [A, B, A] }, { ...ok, files: 'a' }, { ...ok, files: [A, C] },
-    { ...ok, files: [A, 'relative.pdf'] }, { ...ok, files: [A, 42] },
+    { ...ok, files: [A, 'relative.pdf'] }, { ...ok, files: [A, 42] }, { ...ok, files: [, A] }, // eslint-disable-line no-sparse-arrays
   ];
   for (const split of bad) assert.deepEqual(cleanWindowState(base(split), all), { files, active: B }, JSON.stringify(split));
 });
@@ -48,4 +48,9 @@ test('files: duplicates, bad pages and bad paths are cleaned as before', () => {
   assert.deepEqual(r, { files: [{ path: A, page: 1 }, { path: B, page: 4 }], active: null });
   assert.equal(cleanWindowState({ files: 'x' }, all), null);
   assert.equal(cleanWindowState(null, all), null);
+});
+
+test('split paths are stored in the spelling of the kept file', () => {
+  const r = cleanWindowState(base({ dir: 'v', ratio: 0.4, files: ['/docs/./a.pdf', '/docs/x/../b.pdf'], focus: 0 }), all);
+  assert.deepEqual(r.split.files, [A, B]);
 });
