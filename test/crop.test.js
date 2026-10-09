@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PDFDocument, degrees } from 'pdf-lib';
 import * as ops from '../src/core/pdfOps.js';
 import { pdfToVisible } from '../src/core/internal.js';
-import { MM, unitFactor, marginsToRect, rectToMargins, clampRect, rectFromPoints, dragRect, pickPages, sizeLabel } from '../renderer/ui/crop-lib.js';
+import { MM, unitFactor, marginsToRect, rectToMargins, clampRect, rectFromPoints, dragRect, pickPages, sizeLabel, cropBoxFor, sizesDiffer } from '../renderer/ui/crop-lib.js';
 
 // Page 600 x 800 (MediaBox [0 0 600 800]); the box drawn on the displayed page is 10..110 across
 // and 20..220 down. Expected CropBox [x, y, w, h] in user space for each /Rotate.
@@ -96,4 +96,35 @@ test('pickPages: range "1-3,5", odd, even, current, selected, all', () => {
   assert.deepEqual(pickPages('current', { n: 6, current: 3 }, pr), [3]);
   assert.deepEqual(pickPages('selected', { n: 6, selected: [4, 1] }, pr), [1, 4]);
   assert.deepEqual(pickPages('all', { n: 3 }, pr), [0, 1, 2]);
+});
+
+// Mixed A3 / A4 pages (portrait, points): typed margins trim each page from its own edges; a drawn
+// box keeps its place and is clamped to each page.
+const A3 = { width: 841.89, height: 1190.55 }, A4 = { width: 595.28, height: 841.89 };
+test('cropBoxFor: typed margins trim each page from its own edges', () => {
+  const t = 10 * MM;
+  for (const s of [A3, A4]) {
+    assert.deepEqual(cropBoxFor(s, { margins: { top: t, right: t, bottom: t, left: t } }), { x0: t, y0: t, x1: s.width - t, y1: s.height - t });
+  }
+  assert.equal(cropBoxFor(A4, { margins: { left: 300, right: 300 } }), null, 'margins wider than the page');
+});
+test('cropBoxFor: a drawn box is placed at the same position and clamped to smaller pages', () => {
+  const r = { x0: 100, y0: 50, x1: 700, y1: 1000 };
+  assert.deepEqual(cropBoxFor(A3, { rect: r }), r);
+  assert.deepEqual(cropBoxFor(A4, { rect: r }), { x0: 100, y0: 50, x1: A4.width, y1: A4.height });
+  assert.equal(cropBoxFor(A4, { rect: { x0: 600, y0: 0, x1: 700, y1: 100 } }), null);
+});
+test('sizesDiffer', () => {
+  assert.equal(sizesDiffer([A4, { ...A4 }]), false);
+  assert.equal(sizesDiffer([A4, A3]), true);
+});
+test('cropPages on a mixed A3 / A4 document: each page keeps its own trimmed box', async () => {
+  const doc = await PDFDocument.create();
+  doc.addPage([A3.width, A3.height]); doc.addPage([A4.width, A4.height]);
+  const t = 10 * MM;
+  const info = await ops.getInfo(await ops.cropPages(await doc.save(), [0, 1], { top: t, right: t, bottom: t, left: t }));
+  for (const [k, s] of [[0, A3], [1, A4]]) {
+    const [w, hh] = [info.pages[k].width, info.pages[k].height];
+    assert.ok(Math.abs(w - (s.width - 2 * t)) < 0.01 && Math.abs(hh - (s.height - 2 * t)) < 0.01, `page ${k + 1}: ${w} x ${hh}`);
+  }
 });

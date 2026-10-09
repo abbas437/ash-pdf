@@ -498,7 +498,7 @@ document.addEventListener('keydown', (e) => {
   if (ctrl && e.key === ',') return run(() => openPrefs());
   if ((ctrl && k === 'b' && !e.shiftKey && !e.altKey && !isTyping(e.target)) || e.key === 'F4') return run(() => { state.sidebarOpen = !state.sidebarOpen; });
   if (readMode.onKey(e, isTyping(e.target))) return e.preventDefault();
-  if (ctrl && e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown')) return run(() => {
+  if (ctrl && e.shiftKey && (e.key === 'PageUp' || e.key === 'PageDown') && !isTyping(e.target)) return run(() => {
     const i = state.tabs.indexOf(tab);
     if (tab) moveTab(tab, Math.max(0, Math.min(state.tabs.length - 1, i + (e.key === 'PageUp' ? -1 : 1))));
   });

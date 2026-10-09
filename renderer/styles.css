@@ -310,12 +310,16 @@ body.forms-highlight .form-unsupported { background-color: rgba(120, 120, 120, .
 .pt-margins .input { width: 100%; box-sizing: border-box; }
 .pt-crop-range { display: flex; align-items: center; gap: 8px; } .pt-crop-range .input { flex: 1; min-width: 0; }
 .pt-crop-draw-row { display: flex; align-items: center; gap: 8px; }
+/* Drawing a crop box: the dialog stays modal for the pointer; only the dialog, the page being drawn on
+   (.crop-draw) and any dialog opened on top take mouse input. */
+body.crop-drawing > :not(.dialog-backdrop) { pointer-events: none; }
+body.crop-drawing .crop-draw { pointer-events: auto; }
 .dialog-backdrop.crop-drawing { background: transparent; pointer-events: none; place-items: end; padding: 16px; }
 .dialog-backdrop.crop-drawing .dialog { pointer-events: auto; }
 /* compact while drawing so the corner dialog hides as little of the page as possible */
 .dialog-backdrop.crop-drawing .pt-dialog { min-width: 0; width: 340px; }
 .dialog-backdrop.crop-drawing .pt-dialog p.pt-hint, .dialog-backdrop.crop-drawing .pt-dialog .pt-fieldset { display: none; }
-.crop-draw { position: absolute; inset: 0; z-index: 6; cursor: crosshair; touch-action: none; }
+.crop-draw { position: absolute; inset: 0; z-index: 6; cursor: crosshair; touch-action: none; outline: none; }
 .crop-dim { fill: rgba(0, 0, 0, .45); }
 .crop-box { fill: transparent; stroke: #1a73e8; stroke-width: 1.5; stroke-dasharray: 4 3; cursor: move; vector-effect: non-scaling-stroke; }
 .crop-handle { fill: #fff; stroke: #1a73e8; vector-effect: non-scaling-stroke; }

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 // End-to-end test of Crop pages (renderer/ui/pagetools.js cropDialog + crop-draw.js) in Chromium via
 // playwright-core with the browser shim: Pages "2-3,5" with a box drawn on the page, a rotated page,
-// handle resize, Esc/Enter, Undo. Prints "CROP OK".
+// handle resize, Esc/Enter, Undo; while drawing the rest of the app ignores the mouse, Enter on
+// Cancel cancels, a page-count change cancels the dialog; typed margins on mixed A3/A4 pages trim
+// each page from its own edges. Prints "CROP OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -95,6 +97,7 @@ try {
   const w = d1.rect.x1 - d1.rect.x0, hgt = d1.rect.y1 - d1.rect.y0;
   check((await page.textContent('.crop-readout')).trim() === `${w.toFixed(1)} × ${hgt.toFixed(1)} pt`, `readout "${await page.textContent('.crop-readout')}" for ${w} × ${hgt}`);
   near([Number(await page.inputValue('#pt-crop-top')), Number(await page.inputValue('#pt-crop-left'))], [d1.rect.y0, d1.rect.x0], 'margin fields follow the box', 0.01);
+  check(await page.isVisible('#pt-crop-note'), 'no "Pages differ in size" note for a drawn box on pages 2-3,5 (page 3 is rotated)');
   await mark();
   await page.keyboard.press('Enter');
   await undoLen(1);
@@ -142,6 +145,61 @@ try {
   await mark();
   await ev('await pt.undo(tab);');
   await undoLen(0);
+
+  step = 'while drawing, clicks on the menu bar and the tab close button do nothing';
+  await ev('v.scrollToPage(tab, 1); tab.currentPage = 1; app.thumbs.setSelection([]); pt.cropDialog(tab, { draw: true });');
+  await page.waitForSelector('.crop-draw[data-page-index="1"]');
+  await drawBox(1, [0.2, 0.2], [0.6, 0.6]);
+  const clickOn = async (sel) => { const b = await page.locator(sel).first().boundingBox(); await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2); };
+  await clickOn('.menubar .menu-btn');
+  await clickOn('.tab-close');
+  await page.waitForTimeout(300);
+  check(await page.locator('.menubar .menu:not([hidden])').count() === 0, 'a click on the menu bar opened a menu while drawing');
+  check(await ev('return app.state.tabs.length;') === 1, 'a click on the tab close button closed the tab while drawing');
+  check(await page.locator('.dialog').count() === 1 && await page.locator('.crop-draw').count() === 1, 'the crop dialog or drawing ended');
+
+  step = 'Enter with the focus on Cancel cancels';
+  await page.focus('.dialog button[data-value="cancel"]');
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.querySelector('.dialog'), null, { timeout: 5_000 });
+  await page.waitForTimeout(300);
+  check(await ev('return tab.bytesUndo?.length ?? 0;') === 0 && await page.locator('.crop-draw').count() === 0, 'Enter on Cancel applied the crop');
+
+  step = 'a page-count change while the dialog is open cancels it';
+  await ev('v.scrollToPage(tab, 1); tab.currentPage = 1; pt.cropDialog(tab, { draw: true });');
+  await page.waitForSelector('.crop-draw[data-page-index="1"]');
+  await drawBox(1, [0.2, 0.2], [0.6, 0.6]);
+  await mark();
+  await ev('pt.insertBlank(tab, 0);');
+  await page.waitForFunction(() => !document.querySelector('.dialog'), null, { timeout: 10_000 });
+  await undoLen(1);
+  check(await ev('return tab.numPages;') === 7, 'the blank page was not inserted');
+  check((await page.locator('.toast').allTextContents()).some((t) => t.includes('Crop cancelled')), 'no "Crop cancelled" message');
+  for (const [i, p] of (await boxes()).entries()) { const b = p.getCropBox(), m = p.getMediaBox(); near([b.x, b.y, b.width, b.height], [m.x, m.y, m.width, m.height], `page ${i + 1} cropped after the dialog was cancelled`); }
+  check(await page.locator('.crop-draw').count() === 0 && !(await ev('return document.body.classList.contains("crop-drawing");')), 'drawing still on after the cancel');
+  await mark();
+  await ev('await pt.undo(tab);');
+  await undoLen(0);
+
+  step = 'typed 10 mm margins on mixed A3 / A4 pages';
+  const mixed = await PDFDocument.create();
+  mixed.addPage([841.89, 1190.55]); mixed.addPage([595.28, 841.89]);
+  const chooser2 = page.waitForEvent('filechooser');
+  await page.click('#btn-open');
+  await (await chooser2).setFiles({ name: 'mixed.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await mixed.save()) });
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.length === 2 && s.tabs.find((t) => t.id === s.activeId)?.numPages === 2; }, null, { timeout: 10_000 });
+  await ev('tab.currentPage = 1; app.thumbs.setSelection([]); pt.cropDialog(tab);');
+  await page.waitForSelector('#pt-crop-top');
+  for (const k of ['top', 'right', 'bottom', 'left']) await page.fill(`#pt-crop-${k}`, '10');
+  await page.click('.pt-radio label:text-is("All pages (2)")');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.find((t) => t.id === s.activeId).bytesUndo?.length === 1 && !document.querySelector('.dialog'); }, null, { timeout: 10_000 });
+  const t10 = 10 * 72 / 25.4;
+  const mp = await boxes();
+  for (const [i, [w, hh]] of [[841.89, 1190.55], [595.28, 841.89]].entries()) {
+    const b = mp[i].getCropBox();
+    near([b.x, b.y, b.width, b.height], [t10, t10, w - 2 * t10, hh - 2 * t10], `mixed page ${i + 1} not trimmed 10 mm from its own edges`, 0.01);
+  }
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {

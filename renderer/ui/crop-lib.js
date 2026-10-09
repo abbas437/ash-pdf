@@ -22,6 +22,21 @@ export function clampRect({ x0, y0, x1, y1 }, { width, height }) {
   return r.x1 - r.x0 < MIN_SIZE || r.y1 - r.y0 < MIN_SIZE ? null : r;
 }
 
+/**
+ * Box a page of `size` keeps: a drawn `rect` is placed at the same position and clamped to the page;
+ * typed `margins` are trimmed from the page's own edges. null when less than MIN_SIZE is left.
+ */
+export function cropBoxFor(size, { rect = null, margins = null }) {
+  if (rect) return clampRect(rect, size);
+  const r = marginsToRect(margins, size);
+  return r.x1 - r.x0 < MIN_SIZE || r.y1 - r.y0 < MIN_SIZE ? null : r;
+}
+
+/** True when the pages' sizes ({width, height}) are not all the same (to 0.5 pt). */
+export function sizesDiffer(sizes) {
+  return sizes.some((s) => Math.abs(s.width - sizes[0].width) > 0.5 || Math.abs(s.height - sizes[0].height) > 0.5);
+}
+
 /** Box from two corner points, clamped to the page (not to MIN_SIZE). */
 export function rectFromPoints(a, b, { width, height }) {
   const cx = (v) => Math.max(0, Math.min(width, v)), cy = (v) => Math.max(0, Math.min(height, v));
