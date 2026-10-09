@@ -19,6 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerOfficeIpc } from './office.js'; // office conversions
 import { ImageExportJobs, planImageExport } from '../src/core/imgexport.js'; // multi-page image export rules
+import { cleanWindowState, isPathString, isPlainObject, pathKey } from './sessionState.js'; // last-session validation
 
 const APP_NAME = 'ASH PDF Studio';
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // app.asar root when packaged
@@ -73,7 +74,6 @@ function saveSettings() {
 }
 
 // --- File capabilities ----------------------------------------------------------------------
-const pathKey = (p) => (process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p));
 const grantedPaths = new Set();
 const grant = (p) => grantedPaths.add(pathKey(p));
 const isGranted = (p) => typeof p === 'string' && p.length > 0 && p.length < 4096 && isAbsolute(p) && grantedPaths.has(pathKey(p));
@@ -194,10 +194,9 @@ app.on('open-file', (event, p) => {
 const sessionFile = () => join(app.getPath('userData'), 'session.json');
 const recentFile = () => join(app.getPath('userData'), 'recent.json');
 const RECENT_MAX = 15;
-const SESSION_MAX_FILES = 200; // per window
 const STARTUP_MODES = new Set(['ask', 'restore', 'new']);
 const startupMode = () => (STARTUP_MODES.has(settings.renderer?.['startup.mode']) ? settings.renderer['startup.mode'] : 'ask');
-const windowSessions = new Map(); // BrowserWindow -> { files: [{ path, page }], active: path | null }
+const windowSessions = new Map(); // BrowserWindow -> { files: [{ path, page }], active: path | null, split? } (sessionState.js)
 const closedForQuit = new Map(); // windows closed by the quit (or the last window): saved with the session
 let quitting = false;
 let savedSession = []; // the previous run's windows, same shape as windowSessions' values
@@ -217,23 +216,7 @@ function writeJson(file, value) {
     console.error('save failed', file, err);
   }
 }
-const isPathString = (p) => typeof p === 'string' && p.length > 0 && p.length < 4096 && isAbsolute(p);
 const isFile = (p) => stat(p).then((s) => s.isFile(), () => false);
-
-// One window's state, keeping only files whose path passes `accept` (no duplicates, page 1-based).
-function cleanWindowState(v, accept) {
-  if (!isPlainObject(v) || !Array.isArray(v.files)) return null;
-  const files = [];
-  const seen = new Set();
-  for (const f of v.files.slice(0, SESSION_MAX_FILES)) {
-    const p = isPlainObject(f) ? f.path : null;
-    if (!isPathString(p) || !accept(p) || seen.has(pathKey(p))) continue;
-    seen.add(pathKey(p));
-    files.push({ path: p, page: Number.isInteger(f.page) && f.page >= 1 && f.page <= 1e6 ? f.page : 1 });
-  }
-  const active = isPathString(v.active) && seen.has(pathKey(v.active)) ? v.active : null;
-  return { files, active };
-}
 
 function loadSessionAndRecent() {
   const s = readJson(sessionFile());
@@ -273,7 +256,13 @@ async function restoreSession() {
     }
     if (files.length) windows.push({ ...w, files });
   }
-  const meta = (w) => new Map(w.files.map((f) => [pathKey(f.path), { page: f.page, active: !!w.active && pathKey(w.active) === pathKey(f.path) }]));
+  // Per file: its page and whether it was the active tab; the split rides on its first pane's file and
+  // is reopened by the renderer only if both its files open.
+  const meta = (w) => new Map(w.files.map((f) => [pathKey(f.path), {
+    page: f.page,
+    active: !!w.active && pathKey(w.active) === pathKey(f.path),
+    ...(w.split && pathKey(w.split.files[0]) === pathKey(f.path) && { split: w.split }),
+  }]));
   const [first, ...rest] = windows;
   for (const w of rest) {
     w.files.forEach((f) => grant(f.path));
@@ -429,7 +418,6 @@ function handle(channel, fn) {
     return ipcCaller.run(BrowserWindow.fromWebContents(event.sender), () => fn(...args));
   });
 }
-const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 function cleanFilters(filters) {
   if (filters === undefined) return [{ name: 'PDF document', extensions: ['pdf'] }];
   if (!Array.isArray(filters) || filters.length > 20) throw new TypeError('filters must be an array');
@@ -656,7 +644,7 @@ function registerIpc() {
   handle('app:sessionUpdate', (v) => {
     const win = callerWindow();
     const next = cleanWindowState(v, isGranted);
-    if (!next) throw new TypeError('sessionUpdate: { files: [{ path, page }], active } expected');
+    if (!next) throw new TypeError('sessionUpdate: { files: [{ path, page }], active, split? } expected');
     const before = new Set((windowSessions.get(win)?.files ?? []).map((f) => pathKey(f.path)));
     windowSessions.set(win, next);
     addRecent(next.files.map((f) => f.path).filter((p) => !before.has(pathKey(p))));

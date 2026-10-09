@@ -1,7 +1,9 @@
 // Last session and recent files (Electron only). Main owns both lists: this module reports the open
-// tabs that have a granted path, offers the saved session on the start screen and lists recent files.
+// tabs that have a granted path (and the split view, by path), offers the saved session on the start
+// screen and lists recent files.
 import { h } from './dom.js';
 import { showDialog, showError, toast } from './dialogs.js';
+import { splitView } from './splitview.js';
 
 const fileLabel = (path) => {
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
@@ -12,17 +14,24 @@ export function initSession({ state, bus, viewer, activate, welcomeCard, openFil
   const api = window.api;
   const electron = !!api.isElectron;
 
-  // Opens described files ({name, path, bytes, page?, active?}) as tabs: the page and the active tab
-  // come from a restored session.
+  // Opens described files ({name, path, bytes, page?, active?, split?}) as tabs: the page, the active
+  // tab and the split view ({dir, ratio, files: [pathA, pathB], focus}) come from a restored session.
+  // The split reopens only if both its files opened.
   async function openFiles(files) {
     let toActivate = null;
+    let split = null;
+    const opened = new Map(); // path -> tab
     for (const f of files ?? []) {
       const tab = await openFile(f);
       if (!tab) continue;
+      if (f.path) opened.set(f.path, tab);
+      if (f.split) split = f.split;
       if (Number.isInteger(f.page) && f.page > 1) viewer.scrollToPage(tab, Math.min(f.page, tab.numPages) - 1);
       if (f.active) toActivate = tab;
     }
     if (toActivate) activate(toActivate.id);
+    const ids = split?.files.map((p) => opened.get(p)?.id);
+    if (ids?.every(Boolean)) splitView.open(ids, split.dir, { ratio: split.ratio, focus: split.focus });
   }
 
   let timer = 0;
@@ -30,10 +39,13 @@ export function initSession({ state, bus, viewer, activate, welcomeCard, openFil
     clearTimeout(timer);
     const files = state.tabs.filter((t) => t.path).map((t) => ({ path: t.path, page: (t.currentPage ?? 0) + 1 }));
     const active = state.tabs.find((t) => t.id === state.activeId)?.path ?? null;
-    api.sessionUpdate({ files, active }).catch(() => {});
+    const sv = splitView.state;
+    const splitFiles = sv?.ids.map((id) => state.tabs.find((t) => t.id === id)?.path);
+    const split = splitFiles?.every(Boolean) ? { dir: sv.dir, ratio: sv.ratio, files: splitFiles, focus: sv.focus } : null;
+    api.sessionUpdate(split ? { files, active, split } : { files, active }).catch(() => {});
   }
   if (electron) {
-    for (const ev of ['tab:opened', 'tab:closed', 'tab:activated', 'tab:reordered', 'tab:dirtyChanged']) bus.on(ev, send);
+    for (const ev of ['tab:opened', 'tab:closed', 'tab:activated', 'tab:reordered', 'tab:dirtyChanged', 'split:changed']) bus.on(ev, send);
     bus.on('page:changed', () => { clearTimeout(timer); timer = setTimeout(send, 400); });
   }
 

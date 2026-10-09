@@ -3,6 +3,12 @@
 // are equal: the focused pane is the one the tab strip and the tools act on. `recent` lists tab ids,
 // most recently active first.
 
+/** Orientations ('v': side by side, 'h': stacked) and the range the divider can be dragged to. */
+export const SPLIT_DIRS = ['v', 'h'];
+export const SPLIT_RATIO_MIN = 0.15;
+export const SPLIT_RATIO_MAX = 0.85;
+export const clampRatio = (r) => Math.min(SPLIT_RATIO_MAX, Math.max(SPLIT_RATIO_MIN, r));
+
 /** Most recently active first, then the rest in strip order; only open ids, without `except`. */
 const byRecency = (openIds, recent, except) =>
   [...recent.filter((id) => openIds.includes(id)), ...openIds.filter((id) => !recent.includes(id))].filter((id) => id !== except);

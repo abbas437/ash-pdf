@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Real Electron app, fresh portable data dir: last-session restore, missing files, start-up modes, recent
-// files, and main ignoring a session entry whose path was never granted. Launched like electron.mjs.
+// Real Electron app, fresh portable data dir: last-session restore (with the split view), missing files,
+// start-up modes, recent files, and main ignoring a session entry whose path was never granted.
+// Launched like electron.mjs.
 import { existsSync, readFileSync } from 'node:fs';
 import { mkdtemp, rm, unlink, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -84,6 +85,43 @@ try {
   expect('session without the ungranted path', JSON.stringify(sessionPaths()), JSON.stringify(sessionPaths()) === JSON.stringify([a, b]));
   expect('recent without the ungranted path', '', !readJson('recent.json').includes(never));
 
+  step = 'run 2b: a split view (stacked, dragged divider, second pane focused) is recorded';
+  win = await launch();
+  await win.click('[data-session="reopen"]', { timeout: 10000 });
+  await waitTabs(win, ['a.pdf', 'b.pdf']);
+  await win.click('.menu-btn:has-text("View")');
+  await win.click('.menu-item[data-id="split-h"]');
+  await win.waitForFunction(() => document.querySelector('.viewer-host.split.split-h'));
+  const box = await win.locator('.split-divider').boundingBox();
+  const hostBox = await win.locator('.viewer-host').boundingBox();
+  await win.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await win.mouse.down();
+  await win.mouse.move(box.x + box.width / 2, hostBox.y + hostBox.height * 0.3, { steps: 5 });
+  await win.mouse.up();
+  await win.click('.viewer-scroll[data-pane="b"]');
+  await win.waitForFunction(() => document.querySelector('.split-head[data-pane="b"].focused'));
+  await win.waitForTimeout(800);
+  await quit();
+  const saved = readJson('session.json').windows[0];
+  // The pair is the active document and the previous one (run 2 left no active path: b opened last).
+  expect('saved split', JSON.stringify(saved), saved.split?.dir === 'h' && JSON.stringify(saved.split.files) === JSON.stringify([b, a])
+    && saved.split.focus === 1 && saved.active === a && saved.split.ratio > 0.2 && saved.split.ratio < 0.4);
+
+  step = 'run 2b: reopening the session restores the split';
+  win = await launch();
+  await win.click('[data-session="reopen"]', { timeout: 10000 });
+  await waitTabs(win, ['a.pdf', 'b.pdf']);
+  await win.waitForFunction(() => document.querySelector('.viewer-host.split.split-h .split-head[data-pane="b"].focused'), null, { timeout: 10000 });
+  const sp = await win.evaluate(() => {
+    const s = window.ashStudio.state, q = (sel) => document.querySelector(sel);
+    const pick = (k) => q(`.split-head[data-pane="${k}"] select`).selectedOptions[0].textContent;
+    const ha = q('.viewer-scroll[data-pane="a"]').getBoundingClientRect().height, hb = q('.viewer-scroll[data-pane="b"]').getBoundingClientRect().height;
+    return { a: pick('a'), b: pick('b'), active: s.tabs.find((t) => t.id === s.activeId).name, ratio: ha / (ha + hb) };
+  });
+  expect('restored split', JSON.stringify(sp), sp.a === 'b.pdf' && sp.b === 'a.pdf' && sp.active === 'a.pdf'
+    && Math.abs(sp.ratio - saved.split.ratio) < 0.02);
+  await quit();
+
   step = 'run 3: a deleted file is listed as unavailable, the other opens';
   await unlink(b);
   win = await launch();
@@ -94,6 +132,7 @@ try {
   expect('missing list', JSON.stringify(listed), JSON.stringify(listed) === '["b.pdf"]');
   await missing.locator('.dialog-buttons button').click();
   await waitTabs(win, ['a.pdf']);
+  expect('no split with a split file missing', '', !(await win.locator('.viewer-host.split').count()));
 
   step = 'run 3: recent files lists both, the deleted one as Not found';
   await win.click('.menu-btn:has-text("File")');
