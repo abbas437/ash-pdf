@@ -319,12 +319,24 @@ export async function cropPagesToRect(bytes, indices, rect) {
  * Sets /CropBox; MediaBox is unchanged.
  */
 export async function cropPages(bytes, indices, { left = 0, top = 0, right = 0, bottom = 0 } = {}) {
-  for (const [k, v] of Object.entries({ left, top, right, bottom })) {
-    if (!Number.isFinite(v) || v < 0) throw new RangeError(`Crop margin ${k} must be a non-negative number`);
+  return cropPagesEach(bytes, indices.map((index) => ({ index, margins: { left, top, right, bottom } })));
+}
+
+/**
+ * Crop each page by its own margins: items [{index, margins: {left, top, right, bottom}}], margins
+ * in points on the page as displayed (after /Rotate), as cropPages. Sets /CropBox; MediaBox is unchanged.
+ */
+export async function cropPagesEach(bytes, items) {
+  for (const { margins } of items) {
+    for (const k of ['left', 'top', 'right', 'bottom']) {
+      const v = margins?.[k] ?? 0;
+      if (!Number.isFinite(v) || v < 0) throw new RangeError(`Crop margin ${k} must be a non-negative number`);
+    }
   }
   const doc = await loadPdf(bytes);
-  assertPageIndices(indices, doc.getPageCount());
-  for (const i of new Set(indices)) {
+  assertPageIndices(items.map((it) => it.index), doc.getPageCount());
+  const byPage = new Map(items.map((it) => [it.index, it.margins])); // a page listed twice is cropped once
+  for (const [i, { left = 0, top = 0, right = 0, bottom = 0 }] of byPage) {
     const page = doc.getPage(i);
     const g = pageGeometry(page);
     const r = { x0: left, y0: top, x1: g.width - right, y1: g.height - bottom };

@@ -81,3 +81,55 @@ export function sizeLabel({ x0, y0, x1, y1 }, unit) {
   const f = unitFactor(unit);
   return `${((x1 - x0) / f).toFixed(1)} × ${((y1 - y0) / f).toFixed(1)} ${unit}`;
 }
+
+// ---- Remove white margins: content box of a rendered page.
+export const WHITE = 245; // a pixel is ink when any channel is below this
+export const PAD_MM = 2;
+
+/**
+ * Bounding box {x0, y0, x1, y1} (pixels, x1 / y1 exclusive) of the ink in an RGBA bitmap
+ * (`data` of `width` x `height`); null for a blank page. A pixel is ink when any channel is below
+ * `white` (alpha ignored: render on white). Isolated specks are ignored: an ink pixel counts only
+ * when one of its 8 neighbours is ink too.
+ */
+export function inkBox(data, width, height, { white = WHITE } = {}) {
+  const ink = new Uint8Array(width * height);
+  for (let p = 0, q = 0; q < ink.length; p += 4, q++) ink[q] = data[p] < white || data[p + 1] < white || data[p + 2] < white ? 1 : 0;
+  const hasNeighbour = (x, y) => {
+    for (let dy = -1; dy <= 1; dy++) {
+      const yy = y + dy;
+      if (yy < 0 || yy >= height) continue;
+      for (let dx = -1; dx <= 1; dx++) {
+        const xx = x + dx;
+        if ((dx || dy) && xx >= 0 && xx < width && ink[yy * width + xx]) return true;
+      }
+    }
+    return false;
+  };
+  let x0 = width, y0 = height, x1 = -1, y1 = -1;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!ink[y * width + x] || !hasNeighbour(x, y)) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  return x1 < 0 ? null : { x0, y0, x1: x1 + 1, y1: y1 + 1 };
+}
+
+/**
+ * Margins (points) that trim a page of `size` (points, as displayed) to the ink box `box` of its
+ * rendering `pxWidth` x `pxHeight` pixels, padded by `pad` points and kept on the page; null when
+ * there is no ink.
+ */
+export function inkMargins(box, pxWidth, pxHeight, size, pad = PAD_MM * MM) {
+  if (!box) return null;
+  const sx = size.width / pxWidth, sy = size.height / pxHeight;
+  const r = {
+    x0: Math.max(0, box.x0 * sx - pad), y0: Math.max(0, box.y0 * sy - pad),
+    x1: Math.min(size.width, box.x1 * sx + pad), y1: Math.min(size.height, box.y1 * sy + pad),
+  };
+  return rectToMargins(r, size);
+}

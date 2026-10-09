@@ -3,7 +3,7 @@
 // playwright-core with the browser shim: Pages "2-3,5" with a box drawn on the page, a rotated page,
 // handle resize, Esc/Enter, Undo; while drawing the rest of the app ignores the mouse, Enter on
 // Cancel cancels, a page-count change cancels the dialog; typed margins on mixed A3/A4 pages trim
-// each page from its own edges. Prints "CROP OK".
+// each page from its own edges; Remove white margins trims each page to its content + 2 mm. Prints "CROP OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -200,6 +200,36 @@ try {
     const b = mp[i].getCropBox();
     near([b.x, b.y, b.width, b.height], [t10, t10, w - 2 * t10, hh - 2 * t10], `mixed page ${i + 1} not trimmed 10 mm from its own edges`, 0.01);
   }
+
+  step = 'Remove white margins: a small centred box on page 1, another box on page 2, each page detected separately';
+  const boxed = await PDFDocument.create();
+  const BOXES = [[256, 346, 100, 100], [100, 500, 200, 150]]; // [x, y, w, h] in user space
+  for (const [x, y, bw, bh] of BOXES) boxed.addPage([612, 792]).drawRectangle({ x, y, width: bw, height: bh });
+  const chooser3 = page.waitForEvent('filechooser');
+  await page.click('#btn-open');
+  await (await chooser3).setFiles({ name: 'boxed.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await boxed.save()) });
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.length === 3 && s.tabs.find((t) => t.id === s.activeId)?.numPages === 2 && s.tabs.find((t) => t.id === s.activeId).view; }, null, { timeout: 10_000 });
+  await ev('tab.currentPage = 0; app.thumbs.setSelection([]); pt.cropDialog(tab);');
+  await page.waitForSelector('#pt-crop-trim');
+  check(!(await page.isVisible('#pt-crop-each')), '"Detect each page separately" shown before detecting');
+  await page.click('#pt-crop-trim');
+  await page.waitForSelector('#pt-crop-each', { state: 'visible' });
+  check(await page.isChecked('#pt-crop-each'), '"Detect each page separately" not on by default');
+  const p2 = 2 * 72 / 25.4;
+  const fields = [];
+  for (const k of ['top', 'right', 'bottom', 'left']) fields.push(Number(await page.inputValue(`#pt-crop-${k}`)) * 72 / 25.4);
+  near(fields, [792 - 446 - p2, 612 - 356 - p2, 346 - p2, 256 - p2], 'margin fields from the detected box', 1);
+  await page.click('.pt-radio label:text-is("All pages (2)")');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.find((t) => t.id === s.activeId).bytesUndo?.length === 1 && !document.querySelector('.dialog'); }, null, { timeout: 10_000 });
+  const bp = await boxes();
+  for (const [i, [x, y, bw, bh]] of BOXES.entries()) {
+    const b = bp[i].getCropBox();
+    near([b.x, b.y, b.width, b.height], [x - p2, y - p2, bw + 2 * p2, bh + 2 * p2], `page ${i + 1} CropBox is not its box + 2 mm`, 1);
+  }
+  await ev('await pt.undo(tab);');
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.find((t) => t.id === s.activeId).bytesUndo?.length === 0; }, null, { timeout: 10_000 });
+  for (const [i, p] of (await boxes()).entries()) { const b = p.getCropBox(); near([b.x, b.y, b.width, b.height], [0, 0, 612, 792], `page ${i + 1} after undo`); }
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {

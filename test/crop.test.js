@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PDFDocument, degrees } from 'pdf-lib';
 import * as ops from '../src/core/pdfOps.js';
 import { pdfToVisible } from '../src/core/internal.js';
-import { MM, unitFactor, marginsToRect, rectToMargins, clampRect, rectFromPoints, dragRect, pickPages, sizeLabel, cropBoxFor, sizesDiffer } from '../renderer/ui/crop-lib.js';
+import { MM, unitFactor, marginsToRect, rectToMargins, clampRect, rectFromPoints, dragRect, pickPages, sizeLabel, cropBoxFor, sizesDiffer, inkBox, inkMargins } from '../renderer/ui/crop-lib.js';
 
 // Page 600 x 800 (MediaBox [0 0 600 800]); the box drawn on the displayed page is 10..110 across
 // and 20..220 down. Expected CropBox [x, y, w, h] in user space for each /Rotate.
@@ -127,4 +127,54 @@ test('cropPages on a mixed A3 / A4 document: each page keeps its own trimmed box
     const [w, hh] = [info.pages[k].width, info.pages[k].height];
     assert.ok(Math.abs(w - (s.width - 2 * t)) < 0.01 && Math.abs(hh - (s.height - 2 * t)) < 0.01, `page ${k + 1}: ${w} x ${hh}`);
   }
+});
+
+// ---- Remove white margins
+/** White RGBA bitmap w x h with black rectangles [x0, y0, x1, y1) painted in. */
+function bitmap(w, h, rects) {
+  const d = new Uint8ClampedArray(w * h * 4).fill(255);
+  for (const [x0, y0, x1, y1] of rects) for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) d.set([0, 0, 0, 255], (y * w + x) * 4);
+  return d;
+}
+
+test('inkBox: the bounding box of the content', () => {
+  assert.deepEqual(inkBox(bitmap(100, 80, [[20, 10, 40, 30], [50, 60, 70, 65]]), 100, 80), { x0: 20, y0: 10, x1: 70, y1: 65 });
+  const grey = bitmap(10, 10, []);
+  for (const k of [44, 45, 54, 55]) grey.set([250, 250, 200, 255], k * 4); // light but one channel < 245
+  assert.deepEqual(inkBox(grey, 10, 10), { x0: 4, y0: 4, x1: 6, y1: 6 });
+});
+
+test('inkBox: isolated specks are ignored; a 1 px line is kept', () => {
+  const specks = [[2, 2, 3, 3], [97, 5, 98, 6], [3, 77, 4, 78], [96, 76, 97, 77]];
+  assert.deepEqual(inkBox(bitmap(100, 80, [[20, 10, 40, 30], ...specks]), 100, 80), { x0: 20, y0: 10, x1: 40, y1: 30 });
+  assert.deepEqual(inkBox(bitmap(100, 80, [[10, 40, 90, 41]]), 100, 80), { x0: 10, y0: 40, x1: 90, y1: 41 });
+});
+
+test('inkBox / inkMargins: an all-white page gives no crop', () => {
+  assert.equal(inkBox(bitmap(50, 50, []), 50, 50), null);
+  assert.equal(inkBox(bitmap(50, 50, [[7, 7, 8, 8]]), 50, 50), null); // a lone speck only
+  assert.equal(inkMargins(null, 50, 50, { width: 600, height: 800 }), null);
+});
+
+test('inkMargins: pixel box to margins in points, padded 2 mm and kept on the page', () => {
+  // Rendering at 2 px per point of a 300 x 400 pt page: box 100..300 x 200..600 px = 50..150 x 100..300 pt.
+  const pad = 2 * MM;
+  const mg = inkMargins({ x0: 100, y0: 200, x1: 300, y1: 600 }, 600, 800, { width: 300, height: 400 });
+  for (const [k, v] of Object.entries({ left: 50 - pad, top: 100 - pad, right: 150 - pad, bottom: 100 - pad })) assert.ok(Math.abs(mg[k] - v) < 1e-9, k);
+  // Content touching the edges: no negative margins.
+  assert.deepEqual(inkMargins({ x0: 0, y0: 1, x1: 600, y1: 800 }, 600, 800, { width: 300, height: 400 }), { top: 0, right: 0, bottom: 0, left: 0 });
+});
+
+test('cropPagesEach: each page trimmed by its own margins, on rotated pages too', async () => {
+  const out = await ops.cropPagesEach(await rotatedDoc(), [
+    { index: 0, margins: { left: 10, top: 20, right: 490, bottom: 580 } },
+    { index: 1, margins: { left: 20, top: 10, right: 0, bottom: 0 } },
+    { index: 3, margins: { left: 10, top: 20, right: 690, bottom: 380 } },
+  ]);
+  const info = await ops.getInfo(out);
+  assert.deepEqual(info.pages[0].cropBox, [10, 580, 110, 780]);
+  assert.deepEqual([info.pages[1].width, info.pages[1].height], [780, 590]);
+  assert.deepEqual(info.pages[2].cropBox, [0, 0, 600, 800]);
+  assert.deepEqual(info.pages[3].cropBox, [380, 690, 580, 790]); // same displayed box as cropPagesToRect(R)
+  await assert.rejects(ops.cropPagesEach(out, [{ index: 2, margins: { left: 300, right: 300 } }]), RangeError);
 });

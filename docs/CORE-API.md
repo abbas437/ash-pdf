@@ -130,6 +130,10 @@ Margins (points, ≥ 0) are measured on the page **as displayed**, relative to t
 visible area; the function maps them to the correct PDF edges for the page's rotation and
 sets `/CropBox` (MediaBox unchanged). `RangeError` if less than 1 pt would remain.
 
+### `cropPagesEach(bytes, [{index, margins: {left, top, right, bottom}}]) → Promise<Uint8Array>`
+As `cropPages`, each page trimmed by its own margins (Crop pages > Remove white margins with
+"Detect each page separately").
+
 ### `getMetadata(bytes, {password}?) → Promise<Metadata>`
 `{title, author, subject, keywords, creator, producer, creationDate, modificationDate}`;
 missing entries are `null`, dates are `Date`.
