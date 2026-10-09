@@ -14,10 +14,13 @@ import { bus } from '../bus.js';
 import { state, getTab } from '../state.js';
 import { h } from './dom.js';
 import { viewer } from './viewer.js';
+import { showDialog } from './dialogs.js';
+import { defaultPair, chooseTab, pickForPane, closeTabIn } from './splitview-lib.js';
 
 let host = null;
 let activate = null;
-let split = null; // {dir: 'v'|'h', ratio, ids: [paneA tab id, paneB tab id], focus: pane index when ids are equal}
+let split = null; // {dir: 'v'|'h', ratio, ids: [paneA tab id, paneB tab id], focus: focused pane index}
+let recent = []; // tab ids, most recently active first (the plain Split pairs the current and the previous one)
 const heads = [];
 let divider = null;
 
@@ -25,7 +28,9 @@ export const splitView = {
   split: splitOn,
   unsplit,
   setPane,
-  get state() { return split && { dir: split.dir, ratio: split.ratio, ids: [...split.ids] }; },
+  open: openSplit,
+  chooseDialog,
+  get state() { return split && { dir: split.dir, ratio: split.ratio, ids: [...split.ids], focus: split.focus }; },
 };
 
 export function initSplitView(app) {
@@ -39,18 +44,26 @@ export function initSplitView(app) {
   M('View', { id: 'unsplit', label: 'Unsplit', action: unsplit, enabled: () => !!split });
   // A tab chosen from the tab strip while split goes into the focused pane.
   bus.on('tab:activated', ({ tab }) => {
+    if (tab) recent = [tab.id, ...recent.filter((id) => id !== tab.id)];
     if (!split || !tab) return;
-    if (!split.ids.includes(tab.id)) split.ids[focusIndex()] = tab.id;
+    Object.assign(split, chooseTab(split, tab.id));
     apply();
   });
-  bus.on('tab:closed', ({ tab }) => { if (split?.ids.includes(tab.id)) unsplit(); });
+  // A closed tab shown in a pane is replaced by another open document (none left: unsplit).
+  bus.on('tab:closed', ({ tab }) => {
+    recent = recent.filter((id) => id !== tab.id);
+    if (!split?.ids.includes(tab.id)) return;
+    const next = closeTabIn(split, tab.id, state.tabs.map((t) => t.id), recent);
+    if (!next) { unsplit(); return; }
+    Object.assign(split, next);
+    apply();
+  });
   bus.on('state:changed', ({ key }) => { if (key === 'tabs' && split) syncPickers(); });
   host.addEventListener('pointerdown', onPaneFocus, true);
   host.addEventListener('focusin', onPaneFocus);
 }
 
 const same = () => split.ids[0] === split.ids[1];
-function focusIndex() { return same() ? split.focus : Math.max(0, split.ids.indexOf(state.activeId)); }
 const PANE = ['a', 'b'];
 /** The scroll containers in panes a and b. */
 function paneEls(tabs) {
@@ -61,26 +74,55 @@ function paneEls(tabs) {
   return els;
 }
 
+/** Split (one document: itself twice; several: the current and the previously active one) or set the orientation. */
 function splitOn(dir) {
   if (!state.tabs.length) return;
+  if (split) {
+    split.dir = dir;
+    apply();
+    bus.emit('split:changed', { split: true, dir });
+  } else openSplit(defaultPair(state.activeId, state.tabs.map((t) => t.id), recent), dir);
+}
+
+/** Show tabs ids[0] (left / top) and ids[1] (right / bottom); the pane of the active tab keeps the focus. */
+function openSplit(ids, dir = split?.dir ?? 'v') {
+  if (!ids?.every(getTab)) return;
+  const focus = ids[0] !== ids[1] && ids[1] === state.activeId ? 1 : 0;
   if (!split) {
-    const a = state.activeId ?? state.tabs[0].id;
-    const i = state.tabs.findIndex((t) => t.id === a);
-    split = { dir, ratio: 0.5, ids: [a, state.tabs[(i + 1) % state.tabs.length].id], focus: 0 };
+    split = { dir, ratio: 0.5, ids: [...ids], focus };
     buildChrome();
-  }
-  split.dir = dir;
+  } else Object.assign(split, { dir, ids: [...ids], focus });
   apply();
+  if (ids[focus] !== state.activeId) activate(ids[focus]);
   bus.emit('split:changed', { split: true, dir });
 }
 
-/** Show tab `id` in pane k (0 = first, 1 = second). The other pane's tab: the same document twice. */
+/** Show tab `id` in pane k (0 = first, 1 = second) and focus that pane. */
 function setPane(k, id) {
   if (!split || !getTab(id)) return;
-  if (split.ids[1 - k] === id && !same()) split.focus = 1 - k; // its view stays in the other pane
-  split.ids[k] = id;
+  Object.assign(split, pickForPane(split, k, id));
   apply();
-  activate(id);
+  activate(split.ids[split.focus]);
+}
+
+/** "Choose documents…": a document for each pane and the orientation. */
+async function chooseDialog() {
+  if (!state.tabs.length) return;
+  const [a, b] = split?.ids ?? defaultPair(state.activeId, state.tabs.map((t) => t.id), recent);
+  const pick = (label, id, name) => h('label.split-choose-row', {}, h('span', {}, label),
+    h('select', { name, 'aria-label': label }, state.tabs.map((t) => h('option', { value: t.id, selected: t.id === id }, t.name))));
+  const dir = split?.dir ?? 'v';
+  const radio = (v, label) => h('label', {}, h('input', { type: 'radio', name: 'split-dir', value: v, checked: v === dir }), ` ${label}`);
+  let form = null;
+  const r = await showDialog({
+    title: 'Split view', className: 'split-choose-dialog',
+    body: () => (form = h('div.split-choose', {}, pick('Left / top pane', a, 'pane-a'), pick('Right / bottom pane', b, 'pane-b'),
+      h('div.split-choose-dir', { role: 'radiogroup', 'aria-label': 'Orientation' }, radio('v', 'Vertical (side by side)'), radio('h', 'Horizontal (top / bottom)')))),
+    buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Split', value: 'ok', primary: true }],
+  });
+  if (r !== 'ok') return;
+  const val = (sel) => form.querySelector(sel).value;
+  openSplit([val('select[name="pane-a"]'), val('select[name="pane-b"]')], form.querySelector('input[name="split-dir"]:checked')?.value ?? 'v');
 }
 
 function buildChrome() {
@@ -145,21 +187,24 @@ function applyTracks() {
 }
 
 function markFocus() {
-  const f = split ? focusIndex() : -1;
+  const f = split ? split.focus : -1;
   heads.forEach((el, k) => el?.classList.toggle('focused', k === f));
   const focused = split ? paneEls(split.ids.map(getTab))[f] : null;
   for (const el of host.querySelectorAll('.viewer-scroll')) el.classList.toggle('pane-focused', el === focused);
 }
 
+// A click (or focus) in a pane or its header focuses that pane; its document becomes the active tab.
 function onPaneFocus(e) {
   if (!split) return;
-  const el = e.target.closest?.('.viewer-scroll');
-  const id = el?.dataset.tabId;
-  if (id && same() && id === split.ids[0]) {
-    const k = PANE.indexOf(el.dataset.pane);
-    if (k >= 0 && k !== split.focus) { viewer.swapViews(getTab(id)); split.focus = k; markFocus(); }
-    if (id !== state.activeId) activate(id);
-  } else if (id && split.ids.includes(id) && id !== state.activeId) activate(id);
+  const el = e.target.closest?.('.viewer-scroll, .split-head');
+  const k = PANE.indexOf(el?.dataset.pane || '-');
+  if (k < 0) return;
+  if (k !== split.focus) {
+    if (same()) viewer.swapViews(getTab(split.ids[0])); // the focused pane holds the tab's own view
+    split.focus = k;
+    markFocus();
+  }
+  if (split.ids[k] !== state.activeId) activate(split.ids[k]);
 }
 
 function startDrag(e) {
