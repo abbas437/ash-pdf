@@ -10,7 +10,7 @@
 import { bus } from '../bus.js';
 import { activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
-import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
+import { showDialog, showError, toast, dialogOpen, progressDialog } from './dialogs.js';
 import { thumbs } from './sidebar.js';
 import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects, setHistoryRouter, objectBox } from './annotations.js';
 import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan } from './pagehistory-lib.js';
@@ -709,13 +709,19 @@ export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   if (gone) { toast(`Crop cancelled: ${gone}.`); return; }
   if (v !== 'ok') return;
   if (perPage) {
+    // Detection renders every page (minutes on a long scan): progress, and Cancel leaves the document as it is.
     const items = [];
+    const prog = progressDialog({ title: 'Remove white margins', text: `Detecting page 1 of ${targets.length}…`, statusId: 'pt-crop-progress', className: 'pt-crop-progress' });
     try {
-      for (const i of targets) {
-        const mg = await detectMargins(tab, i);
+      for (const [k, i] of targets.entries()) {
+        prog.set(`Detecting page ${k + 1} of ${targets.length}…`);
+        const mg = await Promise.race([detectMargins(tab, i), prog.cancelled]);
+        if (prog.isCancelled()) break;
         if (mg && Object.values(mg).some((x) => x >= 0.5)) items.push({ index: i, margins: mg });
       }
-    } catch (e) { showError('Could not detect the white margins', e); return; }
+    } catch (e) { prog.close(); showError('Could not detect the white margins', e); return; }
+    prog.close();
+    if (prog.isCancelled()) { toast('Crop cancelled'); return; }
     if (tab.bytes !== bytes0 || tab.numPages !== n0) { toast('Crop cancelled: the document changed.'); return; }
     if (!items.length) { toast('No white margins to remove.'); return; }
     return runOp(tab, 'Crop pages', async (bytes, n, c) => ({ bytes: await c.cropPagesEach(bytes, items), map: shiftMap(n, n, 0), select: targets.length < n ? targets : null }));

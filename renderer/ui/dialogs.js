@@ -156,6 +156,25 @@ export async function showExternalLink(url) {
   return choice;
 }
 
+/** What progressDialog's `cancelled` resolves with. */
+export const CANCELLED = Symbol('cancelled');
+/**
+ * A Cancel-able progress dialog: set(text) updates its status line (p#statusId); `cancelled`
+ * resolves with CANCELLED when the user cancels (Cancel or Esc) and isCancelled() says so at once;
+ * close() closes it without cancelling.
+ */
+export function progressDialog({ title, text = '', statusId, className } = {}) {
+  const status = h('p', { id: statusId, role: 'status' }, text);
+  let dialogEl = null, done = false, was = false, onCancel;
+  const cancelled = new Promise((r) => { onCancel = r; });
+  showDialog({ title, body: (el) => { dialogEl = el; return status; }, buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }], className })
+    .then(() => { if (!done) { was = true; onCancel(CANCELLED); } });
+  return {
+    cancelled, isCancelled: () => was, set: (t) => { status.textContent = t; },
+    close() { done = true; dialogEl?.querySelector('.dialog-buttons button')?.click(); },
+  };
+}
+
 let toastHost = null;
 /** Brief non-blocking notification. */
 export function toast(msg, { timeout = 2600 } = {}) {

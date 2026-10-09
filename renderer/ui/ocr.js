@@ -7,7 +7,7 @@
 import { bus } from '../bus.js';
 import { activeTab } from '../state.js';
 import { h } from './dom.js';
-import { showDialog, showError, toast } from './dialogs.js';
+import { showDialog, showError, toast, progressDialog as showProgress, CANCELLED } from './dialogs.js';
 import { viewer } from './viewer.js';
 import { runOp } from './pagetools.js';
 import { pref } from './prefs.js';
@@ -72,19 +72,8 @@ function wordsOf(data) {
 }
 
 /** The Cancel-able "Recognizing page i of n…" dialog. */
-function progressDialog() {
-  const status = h('p#ocr-progress', { role: 'status' }, 'Starting text recognition…');
-  let dialogEl = null, done = false, onCancel;
-  const cancelled = new Promise((r) => { onCancel = r; });
-  showDialog({ title: 'Recognize text', body: (el) => { dialogEl = el; return status; },
-    buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }], className: 'ocr-progress' })
-    .then(() => { if (!done) onCancel(CANCEL); });
-  return {
-    cancelled, set: (text) => { status.textContent = text; },
-    close() { done = true; dialogEl?.querySelector('.dialog-buttons button')?.click(); },
-  };
-}
-const CANCEL = Symbol('cancel');
+const progressDialog = () => showProgress({ title: 'Recognize text', text: 'Starting text recognition…', statusId: 'ocr-progress', className: 'ocr-progress' });
+const CANCEL = CANCELLED;
 
 /** Runs OCR on `indices` (0-based) of `tab` as one page operation. Resolves true when a text layer was added. */
 export function recognize(tab, indices, { skipText = true } = {}) {

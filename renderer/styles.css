@@ -681,7 +681,7 @@ body:not(.tool-labels) .toolbar .tb-more-panel .tb-dd-label, body:not(.tool-labe
 .ocr-row { display: flex; align-items: center; gap: 8px; }
 .ocr-row .input { flex: 1; min-width: 0; }
 .ocr-note { margin: 0; color: var(--muted); font-size: 12px; }
-#ocr-progress { min-width: min(320px, 80vw); margin: 0; }
+#ocr-progress, #pt-crop-progress { min-width: min(320px, 80vw); margin: 0; }
 .search-mark-all { margin: 2px 12px 6px; padding: 4px 8px; font-size: 12px; }
 body.textedit-tool .viewer-host .page { cursor: text; }
 

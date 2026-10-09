@@ -4,7 +4,8 @@
 // handle resize, Esc/Enter, Undo; while drawing the rest of the app ignores the mouse, Enter on
 // Cancel cancels, a page-count change cancels the dialog; typed margins on mixed A3/A4 pages trim
 // each page from its own edges; Remove white margins trims each page to its content + 2 mm (overlay objects
-// included), also when the current page is blank. Prints "CROP OK".
+// included), also when the current page is blank; Cancel in its progress dialog leaves the document as it is.
+// Prints "CROP OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
@@ -254,6 +255,27 @@ try {
   near(cb(0), [0, 0, 612, 792], 'blank page 1 was cropped');
   near(cb(1), [100 - p2, 500 - p2, 200 + 2 * p2, 150 + 2 * p2], 'page 2 CropBox is not its box + 2 mm', 1);
   near(cb(2), [100 - p2, 792 - 160 - p2, 50 + 2 * p2, 60 + 2 * p2], 'page 3 CropBox is not its overlay object + 2 mm', 0.5);
+
+  step = 'Remove white margins on many pages: a progress dialog; Cancel leaves the document as it is';
+  const many = await PDFDocument.create();
+  for (let k = 0; k < 80; k++) many.addPage([612, 792]).drawRectangle({ x: 100, y: 500, width: 200, height: 150 });
+  const chooser5 = page.waitForEvent('filechooser');
+  await page.click('#btn-open');
+  await (await chooser5).setFiles({ name: 'many.pdf', mimeType: 'application/pdf', buffer: Buffer.from(await many.save()) });
+  await page.waitForFunction(() => { const s = window.ashStudio.state; return s.tabs.length === 5 && s.tabs.find((t) => t.id === s.activeId)?.numPages === 80 && s.tabs.find((t) => t.id === s.activeId).view; }, null, { timeout: 10_000 });
+  await ev('tab.currentPage = 0; app.thumbs.setSelection([]); pt.cropDialog(tab);');
+  await page.waitForSelector('#pt-crop-trim');
+  await page.click('#pt-crop-trim');
+  await page.waitForSelector('#pt-crop-each', { state: 'visible' });
+  await page.click('.pt-radio label:text-is("All pages (80)")');
+  await page.click('.dialog button[data-value="ok"]');
+  await page.waitForSelector('.pt-crop-progress #pt-crop-progress', { timeout: 10_000 });
+  check(/^Detecting page \d+ of 80…$/.test(await page.textContent('#pt-crop-progress')), `progress text "${await page.textContent('#pt-crop-progress')}"`);
+  await page.click('.pt-crop-progress button[data-value="cancel"]');
+  await page.waitForFunction(() => !document.querySelector('.dialog'), null, { timeout: 10_000 });
+  await page.waitForTimeout(500); // a crop that went ahead anyway would land by now
+  check(await ev('return tab.bytesUndo?.length ?? 0;') === 0, 'Cancel during detection still cropped');
+  for (const [i, p] of (await boxes()).entries()) { const b = p.getCropBox(); near([b.x, b.y, b.width, b.height], [0, 0, 612, 792], `page ${i + 1} after Cancel`); }
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {
