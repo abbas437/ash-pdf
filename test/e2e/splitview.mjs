@@ -219,6 +219,65 @@ try {
   const host = await page.evaluate(() => document.querySelector('.viewer-host').getBoundingClientRect().width);
   near(info.find((t) => !t.hidden).rect.width, host, 1, 'remaining pane fills the viewer');
 
+  // ---- three documents: both panes are equal (owner feedback, beta.9)
+  step = 'three documents: Choose documents… Y | Z';
+  await openFile('third.pdf', smallPdf);
+  const [X, Y, Z] = await page.evaluate(() => window.ashStudio.state.tabs.map((t) => t.id));
+  const splitMenu = async (item) => {
+    if (await page.evaluate(() => !!document.querySelector('#btn-split').closest('.tb-more-panel'))) await page.click('.tb-more-btn');
+    await page.click('#btn-split');
+    await page.click(`#btn-split + .tb-dd-menu .menu-item[data-id="${item}"]`);
+  };
+  const shown = () => page.evaluate(() => ['a', 'b'].map((k) => document.querySelector(`.viewer-scroll[data-pane="${k}"]:not([hidden])`)?.dataset.tabId ?? null));
+  const focusedHead = () => page.evaluate(() => document.querySelector('.split-head.focused')?.dataset.pane ?? null);
+  const activeId = () => page.evaluate(() => window.ashStudio.state.activeId);
+  const stripSelected = () => page.evaluate(() => document.querySelector('.doc-tab[aria-selected="true"]')?.dataset.tabId);
+  await splitMenu('split-choose');
+  await page.selectOption('.split-choose select[name="pane-a"]', Y);
+  await page.selectOption('.split-choose select[name="pane-b"]', Z);
+  await page.click('.dialog-buttons [data-value="ok"]');
+  await settle();
+  check(JSON.stringify(await shown()) === JSON.stringify([Y, Z]), `chosen documents: ${await shown()}`);
+
+  step = 'three documents: focus the left pane, choose tab X in the strip';
+  await page.click('.viewer-scroll[data-pane="a"]', { position: { x: 20, y: 200 } });
+  await page.waitForFunction((id) => window.ashStudio.state.activeId === id, Y);
+  check((await focusedHead()) === 'a' && (await stripSelected()) === Y, `left pane focused, strip on Y: ${await focusedHead()} / ${await stripSelected()}`);
+  await page.click(`.doc-tab[data-tab-id="${X}"] .tab-name`);
+  await settle();
+  check(JSON.stringify(await shown()) === JSON.stringify([X, Z]), `tab X goes into the focused left pane, right still Z: ${await shown()}`);
+  check((await focusedHead()) === 'a' && (await activeId()) === X, `left pane still focused on X: ${await focusedHead()} / ${await activeId()}`);
+
+  step = 'three documents: focus the right pane, pick Y in its header';
+  await page.click('.viewer-scroll[data-pane="b"]', { position: { x: 20, y: 200 } });
+  await page.waitForFunction((id) => window.ashStudio.state.activeId === id, Z);
+  check((await focusedHead()) === 'b' && (await stripSelected()) === Z, `right pane focused, strip on Z: ${await focusedHead()} / ${await stripSelected()}`);
+  await page.selectOption('.split-head[data-pane="b"] select', Y);
+  await settle();
+  check(JSON.stringify(await shown()) === JSON.stringify([X, Y]), `right pane shows Y: ${await shown()}`);
+  check((await focusedHead()) === 'b' && (await activeId()) === Y, `right pane focused on Y: ${await focusedHead()} / ${await activeId()}`);
+  await page.click(`.doc-tab[data-tab-id="${Z}"] .tab-name`);
+  await settle();
+  check(JSON.stringify(await shown()) === JSON.stringify([X, Z]), `a strip choice with the right pane focused goes there: ${await shown()}`);
+
+  step = 'three documents: Split this document';
+  await splitMenu('split-same');
+  await settle();
+  check(await page.evaluate((id) => [...document.querySelectorAll('.viewer-scroll[data-pane]:not([hidden])')].length === 2
+    && window.ashStudio.state.activeId === id && [...document.querySelectorAll('.split-head select')].every((s) => s.value === id), Z), 'both panes show the current document');
+
+  step = 'three documents: side by side with Y, close Y';
+  await splitMenu(`split-with-${Y}`);
+  await settle();
+  check(JSON.stringify(await shown()) === JSON.stringify([Z, Y]), `side by side with Y: ${await shown()}`);
+  await page.click(`.doc-tab[data-tab-id="${Y}"] .tab-close`);
+  await page.waitForFunction((id) => !window.ashStudio.state.tabs.some((t) => t.id === id), Y);
+  await settle();
+  check(JSON.stringify(await shown()) === JSON.stringify([Z, X]), `closed Y replaced by X: ${await shown()}`);
+  await splitMenu('unsplit');
+  await settle();
+  check(!(await page.$('.viewer-host.split')), 'Close split');
+
   step = 'sidebar toggle';
   await page.keyboard.press('Control+b');
   check(await page.evaluate(() => document.body.classList.contains('sidebar-closed') && getComputedStyle(document.querySelector('.sidebar')).display === 'none'), 'Ctrl+B hides the sidebar');

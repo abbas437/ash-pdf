@@ -34,11 +34,24 @@ export function initToolbarMenus(app) {
 
   const split = dropdownButton({
     id: 'btn-split', icon: 'split', label: 'Split', title: 'Split view',
-    items: () => [
-      { id: 'split-v', label: 'Split vertically', enabled: () => state.tabs.length > 0, action: () => splitView.split('v') },
-      { id: 'split-h', label: 'Split horizontally', enabled: () => state.tabs.length > 0, action: () => splitView.split('h') },
-      { id: 'unsplit', label: 'Unsplit', enabled: () => !!splitView.state, action: () => splitView.unsplit() },
-    ],
+    items: () => {
+      const s = splitView.state;
+      const any = () => state.tabs.length > 0;
+      const others = state.tabs.filter((t) => t.id !== state.activeId);
+      return [
+        // Plain Split: one document splits itself; several pair the current and the previously active one.
+        !s && { id: 'split-v', label: 'Split', enabled: any, action: () => splitView.split('v') },
+        { id: 'split-same', label: 'Split this document', enabled: () => !!activeTab(), action: () => splitView.open([state.activeId, state.activeId]) },
+        // "Side by side with": the other open documents, listed under a heading.
+        { id: 'split-with', label: 'Side by side with \u25B8', enabled: () => false },
+        ...others.map((t) => ({ id: `split-with-${t.id}`, label: `\u2003${t.name}`, action: () => splitView.open([state.activeId, t.id]) })),
+        { id: 'split-choose', label: 'Choose documents\u2026', enabled: any, action: () => splitView.chooseDialog() },
+        { separator: true },
+        s ? { id: 'split-orient', label: s.dir === 'v' ? 'Switch to horizontal (top / bottom)' : 'Switch to vertical (side by side)', action: () => splitView.split(s.dir === 'v' ? 'h' : 'v') }
+          : { id: 'split-h', label: 'Split horizontally', enabled: any, action: () => splitView.split('h') },
+        { id: 'unsplit', label: 'Close split', enabled: () => !!splitView.state, action: () => splitView.unsplit() },
+      ].filter(Boolean);
+    },
   });
   split.button.setAttribute('aria-pressed', 'false');
   bus.on('split:changed', ({ split: on }) => split.button.setAttribute('aria-pressed', String(on)));
