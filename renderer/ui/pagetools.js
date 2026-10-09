@@ -14,7 +14,7 @@ import { showDialog, showError, toast, dialogOpen } from './dialogs.js';
 import { thumbs } from './sidebar.js';
 import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects, setHistoryRouter, objectBox } from './annotations.js';
 import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan } from './pagehistory-lib.js';
-import { unitFactor, rectToMargins, marginsToRect, pickPages, cropBoxFor, sizesDiffer, inkBox, inkMargins } from './crop-lib.js';
+import { unitFactor, rectToMargins, marginsToRect, pickPages, cropBoxFor, sizesDiffer, inkBox, inkMargins, overlayBoxes } from './crop-lib.js';
 import { startCropDraw } from './crop-draw.js';
 
 const core = () => import('../../src/core/pdfOps.js');
@@ -577,8 +577,7 @@ async function detectMargins(tab, i) {
   await page.render({ canvas: c, viewport: vp, background: '#ffffff', annotationMode: app.viewer.pdfjs.AnnotationMode.ENABLE, ...app.viewer.optionalContent(tab) }).promise;
   const box = inkBox(ctx.getImageData(0, 0, c.width, c.height).data, c.width, c.height);
   c.width = c.height = 0;
-  const objs = (tab.objects ?? []).filter((o) => o.page === i && o.type !== 'whiteout').map(objectBox).filter(Boolean);
-  return inkMargins(box, vp.width, vp.height, app.viewer.pageSize(tab, i), objs);
+  return inkMargins(box, vp.width, vp.height, app.viewer.pageSize(tab, i), overlayBoxes(tab, i, objectBox));
 }
 export async function cropDialog(tab = activeTab(), { draw = false } = {}) {
   if (!editable(tab)) return;

@@ -143,6 +143,21 @@ export function inkBox(data, width, height, { white = WHITE, speck = SPECK_PX, g
 }
 
 /**
+ * Boxes {x, y, w, h} (page points as displayed) of what the app draws over page `i` itself, not in
+ * the page's content: its overlay objects (tab.objects; `objectBox` is annotations.objectBox),
+ * except whiteout, which only hides.
+ */
+export function overlayBoxes(tab, i, objectBox) {
+  const out = [];
+  for (const o of tab.objects ?? []) {
+    if (o.page !== i || o.type === 'whiteout') continue;
+    const b = objectBox(o);
+    if (b) out.push(b);
+  }
+  return out;
+}
+
+/**
  * Margins (points) that trim a page of `size` (points, as displayed) to the ink box `box` of its
  * rendering `pxWidth` x `pxHeight` pixels joined with `extra` boxes ({x, y, w, h}, points: the
  * page's own overlay objects), padded by `pad` points and kept on the page; null when there is

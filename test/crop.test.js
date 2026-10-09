@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { PDFDocument, degrees } from 'pdf-lib';
 import * as ops from '../src/core/pdfOps.js';
 import { pdfToVisible } from '../src/core/internal.js';
-import { MM, unitFactor, marginsToRect, rectToMargins, clampRect, rectFromPoints, dragRect, pickPages, sizeLabel, cropBoxFor, sizesDiffer, inkBox, inkMargins } from '../renderer/ui/crop-lib.js';
+import { MM, unitFactor, marginsToRect, rectToMargins, clampRect, rectFromPoints, dragRect, pickPages, sizeLabel, cropBoxFor, sizesDiffer, inkBox, inkMargins, overlayBoxes } from '../renderer/ui/crop-lib.js';
 
 // Page 600 x 800 (MediaBox [0 0 600 800]); the box drawn on the displayed page is 10..110 across
 // and 20..220 down. Expected CropBox [x, y, w, h] in user space for each /Rotate.
@@ -186,6 +186,20 @@ test('inkMargins: pixel box to margins in points, padded 2 mm and kept on the pa
   assert.equal(inkMargins(null, 600, 800, size, []), null);
   // Content touching the edges: no negative margins.
   assert.deepEqual(inkMargins({ x0: 0, y0: 1, x1: 600, y1: 800 }, 600, 800, { width: 300, height: 400 }), { top: 0, right: 0, bottom: 0, left: 0 });
+});
+
+// objectBox stand-in: every test object is a box (as stamps, images, rects are).
+const boxOf = (o) => (o.type === 'unknown' ? null : { x: o.x, y: o.y, w: o.w, h: o.h });
+
+test('overlayBoxes: the page\'s own overlay objects, except whiteout and unknown types', () => {
+  const tab = { objects: [
+    { type: 'rect', page: 1, x: 10, y: 20, w: 30, h: 40 },
+    { type: 'rect', page: 0, x: 1, y: 2, w: 3, h: 4 },
+    { type: 'whiteout', page: 1, x: 0, y: 0, w: 600, h: 800 },
+    { type: 'unknown', page: 1, x: 0, y: 0, w: 5, h: 5 },
+  ] };
+  assert.deepEqual(overlayBoxes(tab, 1, boxOf), [{ x: 10, y: 20, w: 30, h: 40 }]);
+  assert.deepEqual(overlayBoxes({}, 0, boxOf), []);
 });
 
 test('cropPagesEach: each page trimmed by its own margins, on rotated pages too', async () => {
