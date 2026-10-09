@@ -165,6 +165,18 @@ test('inkBox: an anti-aliased dust dot (a few grey pixels) is ignored; dots of a
   assert.deepEqual(inkBox(bitmap(100, 80, [[30, 20, 60, 30], [62, 28, 64, 30]]), 100, 80), { x0: 30, y0: 20, x1: 64, y1: 30 });
 });
 
+test('inkBox: a spaced dotted fill-in line away from the text is content; two specks are still dust', () => {
+  // Body at y 100-200, and a ". . . ." line at y 250: 2 x 2 px dots every 8 px.
+  const dots = Array.from({ length: 10 }, (_, k) => [20 + 8 * k, 250, 22 + 8 * k, 252]);
+  assert.deepEqual(inkBox(bitmap(200, 300, [[20, 100, 180, 200], ...dots]), 200, 300), { x0: 20, y0: 100, x1: 180, y1: 252 });
+  // Three dots whose nearest pixels are 11 px apart (~3 mm) chain up; 12 px apart they are three lone specks.
+  const three = (step) => [0, 1, 2].map((k) => [20 + step * k, 270, 22 + step * k, 272]);
+  assert.deepEqual(inkBox(bitmap(200, 300, [[20, 100, 180, 200], ...three(12)]), 200, 300), { x0: 20, y0: 100, x1: 180, y1: 272 });
+  assert.deepEqual(inkBox(bitmap(200, 300, [[20, 100, 180, 200], ...three(13)]), 200, 300), { x0: 20, y0: 100, x1: 180, y1: 200 });
+  // A pair of dust specks close together is still dust.
+  assert.deepEqual(inkBox(bitmap(200, 300, [[20, 100, 180, 200], [150, 280, 152, 282], [156, 281, 157, 282]]), 200, 300), { x0: 20, y0: 100, x1: 180, y1: 200 });
+});
+
 test('inkBox / inkMargins: an all-white page gives no crop', () => {
   assert.equal(inkBox(bitmap(50, 50, []), 50, 50), null);
   assert.equal(inkBox(bitmap(50, 50, [[7, 7, 8, 8]]), 50, 50), null); // a lone speck only

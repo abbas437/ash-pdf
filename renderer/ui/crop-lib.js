@@ -87,16 +87,20 @@ export const WHITE = 245; // a pixel is ink when any channel is below this
 export const PAD_MM = 2;
 
 export const SPECK_PX = 3;  // a speck spans at most 3 x 3 px (~0.8 mm at 96 dpi): a 0.2-0.5 mm dot, anti-aliased
-export const SPECK_GAP_PX = 4; // ...with no other ink within 4 px (~1 mm): dots of a dotted line are kept
+export const SPECK_GAP_PX = 4; // ...with no other (non-speck) ink within 4 px (~1 mm): a full stop after a word is kept
+export const SPECK_REACH_PX = 11; // specks within 11 px (~3 mm) of each other chain up...
+export const SPECK_CHAIN = 3;     // ...and a chain of 3 or more is content: a dotted fill-in line
 
 /**
  * Bounding box {x0, y0, x1, y1} (pixels, x1 / y1 exclusive) of the ink in an RGBA bitmap
  * (`data` of `width` x `height`); null for a blank page. A pixel is ink when any channel is below
- * `white` (alpha ignored: render on white). Specks are ignored: a connected (8-neighbour) group of
- * ink pixels no more than `speck` px across either way, with no other ink within `gap` px of it.
- * Thin content is kept: a hairline is long, a text line is many glyphs close together.
+ * `white` (alpha ignored: render on white). A speck is a connected (8-neighbour) group of ink pixels
+ * no more than `speck` px across either way; specks within `reach` px of each other form a chain.
+ * Dust is ignored: a speck in a chain of fewer than `chain` specks with no non-speck ink within `gap` px.
+ * Thin content is kept: a hairline is long, a text line is many glyphs close together, a dotted line
+ * is a chain of dots.
  */
-export function inkBox(data, width, height, { white = WHITE, speck = SPECK_PX, gap = SPECK_GAP_PX } = {}) {
+export function inkBox(data, width, height, { white = WHITE, speck = SPECK_PX, gap = SPECK_GAP_PX, reach = SPECK_REACH_PX, chain = SPECK_CHAIN } = {}) {
   const n = width * height;
   const label = new Int32Array(n); // 0 = paper, -1 = ink not yet labelled, k > 0 = group k
   for (let p = 0, q = 0; q < n; p += 4, q++) if (data[p] < white || data[p + 1] < white || data[p + 2] < white) label[q] = -1;
@@ -122,18 +126,10 @@ export function inkBox(data, width, height, { white = WHITE, speck = SPECK_PX, g
     }
     boxes.push(b);
   }
-  const isolated = (k, [x0, y0, x1, y1]) => {
-    for (let y = Math.max(0, y0 - gap); y <= Math.min(height - 1, y1 + gap); y++) {
-      for (let x = Math.max(0, x0 - gap); x <= Math.min(width - 1, x1 + gap); x++) {
-        const l = label[y * width + x];
-        if (l && l !== k) return false;
-      }
-    }
-    return true;
-  };
+  const dust = speckDust(boxes, label, width, height, { speck, gap, reach, chain });
   let x0 = width, y0 = height, x1 = -1, y1 = -1;
   boxes.forEach((b, j) => {
-    if (b[2] - b[0] < speck && b[3] - b[1] < speck && isolated(j + 1, b)) return;
+    if (dust[j + 1]) return;
     if (b[0] < x0) x0 = b[0];
     if (b[1] < y0) y0 = b[1];
     if (b[2] > x1) x1 = b[2];
@@ -168,6 +164,48 @@ export function overlayBoxes(tab, i, objectBox) {
   }
   for (const ws of tab.forms?.widgets?.values() ?? []) for (const w of ws) if (w.pageIndex === i) out.push(w.rect);
   return out;
+}
+
+/**
+ * Flags (by group label) of the specks of `boxes` that are dust (see inkBox). Specks are bucketed by
+ * their top-left corner in cells of `reach + speck` px, so a speck's chain partners are in the 3 x 3
+ * cells around it: the cost grows with the number of specks, not with the page.
+ */
+function speckDust(boxes, label, width, height, { speck, gap, reach, chain }) {
+  const dust = new Uint8Array(boxes.length + 1);
+  const isSpeck = new Uint8Array(boxes.length + 1);
+  const specks = [];
+  boxes.forEach((b, j) => { if (b[2] - b[0] < speck && b[3] - b[1] < speck) { isSpeck[j + 1] = 1; specks.push(j); } });
+  if (!specks.length) return dust;
+  const cell = reach + speck, gw = Math.ceil(width / cell), gh = Math.ceil(height / cell);
+  const head = new Int32Array(gw * gh).fill(-1), next = new Int32Array(specks.length);
+  const parent = Int32Array.from(specks, (_, m) => m);
+  const find = (m) => { while (parent[m] !== m) m = parent[m] = parent[parent[m]]; return m; };
+  specks.forEach((j, m) => {
+    const a = boxes[j], cx = Math.floor(a[0] / cell), cy = Math.floor(a[1] / cell);
+    for (let gy = Math.max(0, cy - 1); gy <= Math.min(gh - 1, cy + 1); gy++) {
+      for (let gx = Math.max(0, cx - 1); gx <= Math.min(gw - 1, cx + 1); gx++) {
+        for (let o = head[gy * gw + gx]; o >= 0; o = next[o]) {
+          const b = boxes[specks[o]];
+          if (Math.max(b[0] - a[2], a[0] - b[2], b[1] - a[3], a[1] - b[3]) <= reach) parent[find(m)] = find(o);
+        }
+      }
+    }
+    next[m] = head[cy * gw + cx]; head[cy * gw + cx] = m;
+  });
+  const size = new Int32Array(specks.length);
+  specks.forEach((_, m) => { size[find(m)]++; });
+  const nearInk = (k, [x0, y0, x1, y1]) => {
+    for (let y = Math.max(0, y0 - gap); y <= Math.min(height - 1, y1 + gap); y++) {
+      for (let x = Math.max(0, x0 - gap); x <= Math.min(width - 1, x1 + gap); x++) {
+        const l = label[y * width + x];
+        if (l > 0 && l !== k && !isSpeck[l]) return true;
+      }
+    }
+    return false;
+  };
+  specks.forEach((j, m) => { if (size[find(m)] < chain && !nearInk(j + 1, boxes[j])) dust[j + 1] = 1; });
+  return dust;
 }
 
 /**
