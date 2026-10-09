@@ -228,6 +228,47 @@ try {
   check(!over.length, `${over.length} annotation(s) over the applied block in the saved file`);
   check(await ink(saved, 0, inner) > 0.9, 'applied signature not in the saved page content');
 
+  step = 'apply after reopen';
+  // A block saved as annotations, the file reopened: the reopened signature still offers Apply.
+  await ev('an.select(tab, []);'); await frames();
+  await openSign();
+  await page.click('.sign-menu .sign-block');
+  await page.waitForSelector(`${top} .sign-block-name`);
+  await page.fill(`${top} .sign-block-name`, 'Reopen Test');
+  await page.selectOption(`${top} .sign-block-sig`, 'sigA');
+  await page.click(`${top} .dialog-buttons button:text-is("Place block")`);
+  await placeAt(1, 200, 300);
+  const rb = (await objs()).filter((o) => o.page === 1 && o.group);
+  check(rb.length === 3, `reopen block: ${rb.length} objects`);
+  check(await ev('return await app.saveTab(tab, true);'), 'saveTab (reopen block) returned false');
+  const keep = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  await ev('await app.openBytes({ name: "reopened.pdf", bytes: new Uint8Array(arg) });', Array.from(keep));
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t?.name === 'reopened.pdf'; }, null, { timeout: 10_000 });
+  const re = (await objs()).filter((o) => o.page === 1 && o.type === 'image' && o.sig && o.group);
+  check(re.length === 1 && re[0].sig === 'sigA' && re[0].group, `reopened signature lost sig/group ${JSON.stringify(re.map((o) => [o.sig, o.group]))}`);
+  check((await objs()).filter((o) => o.group === re[0].group).length === 3, 'reopened block lost its members');
+  await ev('an.select(tab, [arg]); app.setTool?.("select");', re[0].id); await frames();
+  await openSign();
+  check(!(await page.$eval('.sign-menu .sign-apply', (b) => b.disabled)), 'Apply signature disabled on a reopened signature');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.opt-sign-apply');
+  await page.click('.opt-sign-apply');
+  await page.waitForSelector(`${top} .sign-apply-noask`);
+  await page.click(`${top} .dialog-buttons button:text-is("Apply")`);
+  await page.waitForFunction((g) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return !t.objects.some((o) => o.group === g); }, re[0].group, { timeout: 10_000 });
+  const rin = [re[0].x + 4, re[0].y + 4, re[0].x + re[0].w - 4, re[0].y + re[0].h - 4];
+  check(await ink(await tabBytes(), 1, rin) > 0.9, 'reopened signature not applied to the page content');
+  check(await ev('return await app.saveTab(tab, true);'), 'saveTab after reopen-apply returned false');
+  const after = Uint8Array.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
+  const rdoc = await PDFDocument.load(after);
+  const RH = rdoc.getPage(1).getHeight();
+  const rover = (rdoc.getPage(1).node.Annots()?.asArray() ?? []).map((r) => rdoc.context.lookup(r)).filter((a) => {
+    const [x0, y0, x1, y1] = a.get(PDFName.of('Rect')).asArray().map((n) => n.asNumber());
+    return x0 < re[0].x + re[0].w && x1 > re[0].x && RH - y1 < re[0].y + re[0].h && RH - y0 > re[0].y;
+  });
+  check(!rover.length, `${rover.length} annotation(s) left over the applied reopened signature`);
+  check(await ink(after, 1, rin) > 0.9, 'applied reopened signature not in the saved page content');
+
   step = 'screenshots';
   for (const theme of ['light', 'dark']) {
     await page.evaluate((t) => window.ashStudio.setTheme(t, false), theme);
