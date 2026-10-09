@@ -269,6 +269,70 @@ try {
   check(!rover.length, `${rover.length} annotation(s) left over the applied reopened signature`);
   check(await ink(after, 1, rin) > 0.9, 'applied reopened signature not in the saved page content');
 
+  step = 'apply: mixed selection';
+  // A signature and an unrelated rectangle elsewhere selected together: only the signature is applied.
+  await ev('v.setZoom(tab, 1); an.select(tab, []);'); await frames();
+  const has = (id) => ev('return tab.objects.some((o) => o.id === arg);', id);
+  // The newly placed signature (page 3 already holds a copy from Place on pages).
+  const placeNew = async (i, x, y) => {
+    const before = new Set((await sigs()).map((o) => o.id));
+    await openSign(); await page.click('.sign-pick[data-id="sigA"]');
+    await placeAt(i, x, y);
+    const fresh = (await sigs()).filter((o) => !before.has(o.id));
+    check(fresh.length === 1 && fresh[0].page === i, `placed ${fresh.length} new signature(s)`);
+    return fresh[0];
+  };
+  const ms = await placeNew(2, 200, 150);
+  const rect = await ev('return an.add(tab, { type: "rect", page: 2, x: 600, y: 400, w: 120, h: 80, stroke: "#000000", strokeWidth: 2, fill: "#203080" }).id;');
+  await ev('an.select(tab, arg); app.setTool?.("select");', [ms.id, rect]); await frames();
+  await page.waitForSelector('.opt-sign-apply');
+  await page.click('.opt-sign-apply');
+  await page.waitForSelector('.sign-apply-wrap .sign-apply-noask');
+  check(!(await page.$('.sign-apply-wrap .sign-apply-under')), 'unrelated rectangle listed as lying under the signature');
+  await page.click('.sign-apply-wrap .dialog-buttons button:text-is("Apply")');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return !t.objects.some((o) => o.id === id); }, ms.id, { timeout: 10_000 });
+  check(await has(rect), 'the selected rectangle elsewhere was applied with the signature');
+  check(await ink(await tabBytes(), 2, [610, 410, 710, 470]) < 0.05, 'the selected rectangle elsewhere is in the page content');
+  check(await ink(await tabBytes(), 2, [ms.x + 4, ms.y + 4, ms.x + ms.w - 4, ms.y + ms.h - 4]) > 0.9, 'mixed selection: signature not applied');
+
+  step = 'apply: whiteout under the signature';
+  // Whiteout placed, signature on top of it: Apply burns both (whiteout first), the page view shows the ink.
+  // Dark pixels of the page view (canvas + overlay, what the user sees) in page rect [x0, y0, x1, y1].
+  const viewInk = async (i, [x0, y0, x1, y1]) => {
+    await ev('v.scrollToPage(tab, arg);', i); await frames();
+    let f = 0;
+    for (let k = 0; k < 25 && f <= 0.9; k++) {
+      if (k) await page.waitForTimeout(200);
+      const [cx0, cy0] = await toClient(i, x0, y0), [cx1, cy1] = await toClient(i, x1, y1);
+      const png = await page.screenshot({ clip: { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 } });
+      const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
+      let n = 0; for (let q = 0; q < data.length; q += info.channels) if (data[q] < 120 && data[q + 1] < 120) n++;
+      f = n / (data.length / info.channels);
+    }
+    return f;
+  };
+  await ev('an.select(tab, []);'); await frames();
+  const wo = await ev('return an.add(tab, { type: "whiteout", page: 2, x: 80, y: 240, w: 300, h: 130, color: "#ffffff" }).id;');
+  const ws = await placeNew(2, 230, 300);
+  const wIn = [ws.x + 4, ws.y + 4, ws.x + ws.w - 4, ws.y + ws.h - 4];
+  check(ws.x < 380 && ws.x + ws.w > 80 && ws.y < 370 && ws.y + ws.h > 240, 'signature does not overlap the whiteout');
+  await ev('an.select(tab, [arg]); app.setTool?.("select");', ws.id); await frames();
+  await page.waitForSelector('.opt-sign-apply');
+  await page.click('.opt-sign-apply');
+  await page.waitForSelector('.sign-apply-wrap .sign-apply-noask');
+  check(!(await page.$('.sign-apply-wrap .sign-apply-under')), 'whiteout listed as lying under the signature');
+  await page.click('.sign-apply-wrap .dialog-buttons button:text-is("Apply")');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return !t.objects.some((o) => o.id === id); }, ws.id, { timeout: 10_000 });
+  check(!(await has(wo)), 'the whiteout under the signature is still an object (it would cover the applied signature)');
+  check(await ink(await tabBytes(), 2, wIn) > 0.9, 'signature over the whiteout not in the page content');
+  const seen = await viewInk(2, wIn);
+  check(seen > 0.9, `page view does not show the applied signature (dark ${seen.toFixed(2)})`);
+  await key('Control+z');
+  await page.waitForFunction((ids) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return ids.every((id) => t.objects.some((o) => o.id === id)); }, [wo, ws.id], { timeout: 10_000 });
+  check(await ink(await tabBytes(), 2, wIn) < 0.05, 'undo left the signature in the page content');
+  const ord = await ev('return tab.objects.map((o) => o.id);');
+  check(ord.indexOf(wo) < ord.indexOf(ws.id), 'undo changed the z-order of whiteout and signature');
+
   step = 'screenshots';
   for (const theme of ['light', 'dark']) {
     await page.evaluate((t) => window.ashStudio.setTheme(t, false), theme);
