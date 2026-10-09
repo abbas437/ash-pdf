@@ -13,6 +13,7 @@ import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
 import { initSplitView } from './ui/splitview.js';
 import { initToolbarMenus } from './ui/toolbar-menus.js';
+import { initToolbarCustomize } from './ui/toolbar-custom.js';
 import { initSearch, search } from './ui/search.js';
 import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
@@ -573,6 +574,7 @@ initTextEdit(); // Edit text tool (D): original document text, line by line
 initSplitView({ host: viewerHost, activate, registerMenuItem });
 initToolbarMenus(app); // Pages and Split dropdowns
 const prefsReady = initPrefs({ registerMenuItem, setTheme, toolbar });
+const toolbarReady = initToolbarCustomize({ registerMenuItem }); // View > Customize toolbar, stored layout
 
 (async () => {
   try {
@@ -580,6 +582,7 @@ const prefsReady = initPrefs({ registerMenuItem, setTheme, toolbar });
   } catch { await setTheme('light', false); }
   try { const w = await api.settingsGet('ui.sidebarWidth'); if (w) setSidebarWidth(w); } catch { /* keep the default width */ }
   await prefsReady.catch(() => {});
+  await toolbarReady.catch(() => {});
   refresh();
   // Return nothing: contextBridge would copy the resolved tab object graph back to the preload (renderer OOM).
   api.onOpenFile((file) => { openFileObject(file); });

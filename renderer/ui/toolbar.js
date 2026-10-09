@@ -3,6 +3,7 @@ import { bus } from '../bus.js';
 import { state } from '../state.js';
 import { h, fitPopover } from './dom.js';
 import { icon } from './icons.js';
+import { DEFAULT_GROUPS, defaultLayout, cleanLayout, placement, isHidden, isCompact, groupLabel } from './toolbar-layout.js';
 
 const tools = new Map(); // id -> tool definition
 let toolsEl = null;
@@ -11,17 +12,11 @@ let optionsEl = null;
 let barEl = null;
 let moreWrap = null, morePanel = null, moreBtn = null;
 
-// Tool groups, left to right; ids not listed here go to Edit. Items keep this order in every group.
-// Pages and View (Split) come early so they are the last to overflow into More.
-const GROUPS = [
-  ['navigate', 'Navigate', ['select', 'hand']],
-  ['pages', 'Pages', ['pages']],
-  ['view', 'View', ['split']],
-  ['edit', 'Edit', ['text', 'textedit', 'image', 'image-edit', 'whiteout', 'redact', 'forms']],
-  ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes']],
-  ['sign', 'Stamp and sign', ['stamp', 'sign']],
-];
-const groupOf = (id) => GROUPS.find((g) => g[2].includes(id)) ?? GROUPS.find((g) => g[0] === 'edit');
+// Tool groups and their default order: toolbar-layout.js. The user's layout (View > Customize toolbar)
+// orders the groups and their items, hides items and folds groups into one compact dropdown.
+let tbLayout = defaultLayout();
+const faces = {};       // compact group -> id of its last used tool (the button face)
+const compactDD = {};   // compact group -> its dropdownButton (made once: it listens on document)
 
 /** Icon button: btn('open', 'Open (Ctrl+O)', onClick, {id}) */
 export function btn(iconName, label, onClick, props = {}) {
@@ -37,10 +32,7 @@ export function buildToolbar(container, groups, optionsContainer) {
     container.append(h('div.tb-group', {}, g));
   }
   toolsEl = h('div.tb-tools', { role: 'group', 'aria-label': 'Tools' });
-  for (const [n, [key, label]] of GROUPS.entries()) {
-    if (n) toolsEl.append(h('span.tb-sep', { role: 'separator', 'aria-orientation': 'vertical' }));
-    toolsEl.append(h('div.tb-group.tb-tg', { role: 'group', 'aria-label': label, dataset: { group: key, grp: key } }));
-  }
+  for (const [key, label] of DEFAULT_GROUPS) toolsEl.append(h('div.tb-group.tb-tg', { role: 'group', 'aria-label': label, dataset: { group: key, grp: key } }));
   moreBtn = h('button.tb-btn.tb-more-btn', { type: 'button', title: 'More', 'aria-label': 'More tools', 'aria-haspopup': 'true', 'aria-expanded': 'false', html: '<span class="tb-more-glyph" aria-hidden="true">\u00bb</span>' });
   morePanel = h('div.tb-more-panel', { role: 'group', 'aria-label': 'More tools', hidden: true });
   moreWrap = h('div.tb-more', { hidden: true }, moreBtn, morePanel);
@@ -50,6 +42,7 @@ export function buildToolbar(container, groups, optionsContainer) {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !morePanel.hidden) { showMore(false); moreBtn.focus(); } });
   window.addEventListener('resize', () => { if (!morePanel.hidden) showMore(false); });
   toolsEl.append(moreWrap);
+  arrange();
   container.append(h('span.tb-sep', { role: 'separator' }), toolsEl);
   barEl = container;
   watchOverflow(container);
@@ -113,6 +106,7 @@ export function setTool(id) {
   state.tool = id;
   next.onActivate?.();
   for (const b of barEl?.querySelectorAll('[data-tool]') ?? []) b.setAttribute('aria-pressed', String(b.dataset.tool === id));
+  setFace(id);
   renderOptions();
   syncMorePressed();
   bus.emit('tool:changed', { tool: id, previous: prev?.id ?? null });
@@ -150,17 +144,101 @@ function renderOptions() {
 
 // ---------------------------------------------------------------- groups, dropdowns, overflow
 
-/** Put a toolbar item (button or wrapper) for `key` into its tool group, in the group's order. */
+/** Put a toolbar item (button or wrapper) for `key` into its tool group, in the layout's order. */
 export function addToolbarItem(key, el) {
-  const [gkey, , order] = groupOf(key);
-  const group = toolsEl.querySelector(`[data-group="${gkey}"]`);
   el.dataset.tbItem = key;
-  el.dataset.grp = gkey; // keeps the group colour when the item moves into More
-  const rank = (k) => { const i = order.indexOf(k); return i < 0 ? order.length : i; };
-  const after = [...group.children].find((c) => rank(c.dataset.tbItem) > rank(key));
-  group.insertBefore(el, after ?? null);
-  scheduleLayout();
+  toolsEl.querySelector(`[data-group="${placement(tbLayout, key)?.group ?? 'edit'}"]`).append(el);
+  arrange();
   return el;
+}
+
+/** The toolbar layout in use (see toolbar-layout.js). */
+export const getToolbarLayout = () => tbLayout;
+
+/** Apply a layout (cleaned first): group order, item order and group, hidden items, compact groups. */
+export function setToolbarLayout(layout) {
+  tbLayout = cleanLayout(layout);
+  arrange();
+}
+
+/** The item ([data-tb-item]) for a node in the tool row: a tool inside a compact group counts as itself. */
+export function toolbarItemOf(node) {
+  const el = node?.closest?.('[data-tool], [data-tb-item]');
+  if (!el || !toolsEl?.contains(el)) return null;
+  const item = el.closest('[data-tb-item]:not(.tb-cg)');
+  return item ? item.dataset.tbItem : el.dataset.tool ?? null;
+}
+
+/** Name and icon markup of each item on the tool row (shown or not): {id: {label, icon}}. */
+export function toolbarItemInfo() {
+  const out = {};
+  for (const el of toolsEl?.querySelectorAll('[data-tb-item]:not(.tb-cg)') ?? []) {
+    const id = el.dataset.tbItem;
+    const b = el.matches('button') ? el : el.querySelector('button');
+    out[id] = { label: tools.get(id)?.label ?? b?.dataset.label ?? b?.getAttribute('aria-label') ?? id, icon: b?.querySelector('svg.icon')?.outerHTML ?? '' };
+  }
+  return out;
+}
+
+const sepEl = () => h('span.tb-sep', { role: 'separator', 'aria-orientation': 'vertical' });
+
+// Lay the tool row out from tbLayout. Items keep their elements (and listeners); only their place changes.
+function arrange() {
+  if (!toolsEl) return;
+  restoreMore();
+  const all = new Map([...toolsEl.querySelectorAll('[data-tb-item]:not(.tb-cg)')].map((el) => [el.dataset.tbItem, el]));
+  const oldCompact = [...toolsEl.querySelectorAll('.tb-cg')];
+  for (const s of toolsEl.querySelectorAll(':scope > .tb-sep')) s.remove();
+  let anyShown = false; // separators only go between two groups that show something
+  const groupEls = Object.fromEntries([...toolsEl.querySelectorAll(':scope > .tb-tg')].map((g) => [g.dataset.group, g]));
+  const extra = [...all.keys()].filter((id) => !Number.isFinite(placement(tbLayout, id)?.index ?? Infinity));
+  for (const g of tbLayout.groupOrder) {
+    const groupEl = groupEls[g];
+    const els = [...tbLayout.order[g], ...(g === 'edit' ? extra : [])].map((id) => all.get(id)).filter(Boolean);
+    const void_ = !els.some((el) => !isHidden(tbLayout, el.dataset.tbItem));
+    if (!void_ && anyShown) toolsEl.insertBefore(sepEl(), moreWrap);
+    if (!void_) anyShown = true;
+    toolsEl.insertBefore(groupEl, moreWrap);
+    for (const el of els) {
+      el.dataset.grp = g; // keeps the group colour when the item moves into More
+      el.toggleAttribute('data-tb-hidden', isHidden(tbLayout, el.dataset.tbItem));
+      el.removeAttribute('data-tb-folded');
+      groupEl.append(el);
+    }
+    groupEl.classList.toggle('tb-tg-void', void_);
+    const folded = els.filter((el) => el.dataset.tool && !el.hasAttribute('data-tb-hidden'));
+    if (isCompact(tbLayout, g) && folded.length > 1) compactGroup(g, groupEl, folded);
+  }
+  for (const c of oldCompact) c.remove();
+  scheduleLayout();
+}
+
+// A compact group: its tool buttons sit in one wrapper; only the face (the last used tool) shows, and the
+// caret lists the group's tools. Items that are not tools (e.g. the Sign menu) stay as they are.
+function compactGroup(g, groupEl, buttons) {
+  compactDD[g] ??= dropdownButton({
+    id: `tb-cg-${g}`, icon: 'chevron', label: groupLabel(g), title: `${groupLabel(g)} tools`,
+    items: () => [...(toolsEl.querySelector(`.tb-cg[data-grp="${g}"]`)?.querySelectorAll('[data-tool]') ?? [])].map((b) => {
+      const def = tools.get(b.dataset.tool);
+      return { id: b.dataset.tool, label: def?.label ?? b.dataset.tool, shortcut: def?.shortcut, action: () => setTool(b.dataset.tool) };
+    }),
+  });
+  compactDD[g].button.classList.add('tb-cg-caret');
+  const wrap = h('div.tb-cg', { role: 'group', 'aria-label': groupLabel(g), dataset: { tbItem: `cg:${g}`, grp: g } });
+  groupEl.insertBefore(wrap, buttons[0]);
+  wrap.append(...buttons, compactDD[g].wrap);
+  compactDD[g].wrap.dataset.grp = g;
+  const ids = buttons.map((b) => b.dataset.tool);
+  showFace(wrap, ids.includes(state.tool) ? state.tool : ids.includes(faces[g]) ? faces[g] : ids[0]);
+}
+function showFace(wrap, id) {
+  faces[wrap.dataset.grp] = id;
+  for (const b of wrap.querySelectorAll('[data-tool]')) b.toggleAttribute('data-tb-folded', b.dataset.tool !== id);
+  scheduleLayout(); // the face's label can be wider than the old one: re-fit the row
+}
+function setFace(id) {
+  const wrap = toolsEl?.querySelector(`.tb-cg [data-tool="${id}"]`)?.closest('.tb-cg');
+  if (wrap) showFace(wrap, id);
 }
 
 const CARET = '<svg class="icon tb-dd-caret" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true" focusable="false"><path d="M2 3.5l3 3 3-3"/></svg>';
@@ -233,16 +311,19 @@ function scheduleLayout() {
   layoutQueued = true;
   requestAnimationFrame(() => { layoutQueued = false; layout(); });
 }
-const items = () => [...barEl.querySelectorAll('.tb-group > *')].filter((el) => !el.classList.contains('tb-group') && !el.classList.contains('tb-sep') && !moreWrap.contains(el));
+const items = () => [...barEl.querySelectorAll('.tb-group > *')].filter((el) => !el.classList.contains('tb-group') && !el.classList.contains('tb-sep') && !el.hasAttribute('data-tb-hidden') && !moreWrap.contains(el));
 function fits() {
   const r = barEl.getBoundingClientRect();
   const right = r.right - parseFloat(getComputedStyle(barEl).paddingRight || 0) + 0.5;
   return [...barEl.children].every((c) => c.getBoundingClientRect().right <= right);
 }
 let observer = null;
+function restoreMore() {
+  for (const el of [...morePanel.children]) { const m = el.__tbMarker; if (m) { m.replaceWith(el); delete el.__tbMarker; } }
+}
 function layout() {
   observer?.disconnect();
-  for (const el of [...morePanel.children]) { const m = el.__tbMarker; if (m) { m.replaceWith(el); delete el.__tbMarker; } }
+  restoreMore();
   moreWrap.hidden = true;
   if (!fits()) {
     moreWrap.hidden = false;
