@@ -33,7 +33,7 @@ export function initSession({ state, bus, viewer, activate, welcomeCard, openFil
     api.sessionUpdate({ files, active }).catch(() => {});
   }
   if (electron) {
-    for (const ev of ['tab:opened', 'tab:closed', 'tab:activated', 'tab:dirtyChanged']) bus.on(ev, send);
+    for (const ev of ['tab:opened', 'tab:closed', 'tab:activated', 'tab:reordered', 'tab:dirtyChanged']) bus.on(ev, send);
     bus.on('page:changed', () => { clearTimeout(timer); timer = setTimeout(send, 400); });
   }
 
