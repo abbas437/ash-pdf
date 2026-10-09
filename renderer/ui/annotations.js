@@ -49,7 +49,7 @@ import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
 import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from './pagehistory-lib.js';
-import { objectsSummary, unionBox, pasteDelta, clampDelta } from './clipboard-lib.js';
+import { objectsSummary, unionBox, pasteDelta, clampDelta, pageBox } from './clipboard-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -554,6 +554,8 @@ export const selectHandlers = {
   },
   onPointerUp(e, { tab }) { if (gesture?.tab === tab) endGesture(true); },
 };
+/** Box that must stay on the page: the bbox turned by the object's rotation (stamps, images). */
+const clampBox = (o) => pageBox(types.get(o.type).bbox(o), o.rotation);
 /**
  * Select-tool move: the pointer over ANOTHER page takes a one-page selection there (grab offset
  * kept, size in points unchanged); otherwise each object stays on its own page. Either way the
@@ -569,7 +571,7 @@ function dragMove(tab, e) {
   const byPage = new Map();
   for (const o0 of movable) { const k = target ?? o0.page; if (!byPage.has(k)) byPage.set(k, []); byPage.get(k).push(o0); }
   for (const [page, list] of byPage) {
-    const box = unionBox(list.map((o0) => types.get(o0.type).bbox(o0)));
+    const box = unionBox(list.map(clampBox));
     const d = clampDelta(box, p.x - g.start.x, p.y - g.start.y, viewer.pageSize(tab, page));
     for (const o0 of list) {
       const o = getObject(tab, o0.id);
@@ -726,7 +728,7 @@ function onKey(e) {
     const objs = sel.map((id) => getObject(tab, id)).filter((o) => !types.get(o.type).fixed), patches = new Map();
     for (const page of new Set(objs.map((o) => o.page))) { // stop at the page edge (each page's objects as one box)
       const list = objs.filter((o) => o.page === page);
-      const d = clampDelta(unionBox(list.map((o) => types.get(o.type).bbox(o))), dir[0], dir[1], viewer.pageSize(tab, page));
+      const d = clampDelta(unionBox(list.map(clampBox)), dir[0], dir[1], viewer.pageSize(tab, page));
       if (d.dx || d.dy) for (const o of list) patches.set(o.id, types.get(o.type).move(o, d.dx, d.dy));
     }
     if (!patches.size) return;

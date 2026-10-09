@@ -63,20 +63,27 @@ export function formatBytes(n) {
 }
 
 /**
- * Keep an open popover (toolbar dropdown) inside the window: capped to the window width
- * and to the height left below its top (then it scrolls); when it runs past the right edge it is
- * right-aligned to its `anchor` button, then shifted to stay `margin` px from either edge. Call after
- * un-hiding and filling it; the CSS placement stays the base, only a `translate` is added.
+ * Keep an open popover (toolbar dropdown) fully inside the window, `margin` px from every edge: capped
+ * to the window width and height (then it scrolls); when it does not fit below its top it opens above
+ * its `anchor` button if it fits there, else it is moved up to the top margin; when it runs past the
+ * right edge it is right-aligned to the anchor, then shifted to stay inside. Call after un-hiding and
+ * filling it; the CSS placement stays the base, only a `translate` is added. Callers close the popover
+ * on window resize rather than re-fitting it.
  */
 export function fitPopover(el, anchor, margin = 8) {
   el.style.translate = '';
   el.style.maxWidth = `${Math.max(0, innerWidth - 2 * margin)}px`;
-  let r = el.getBoundingClientRect();
-  el.style.maxHeight = `${Math.max(80, innerHeight - margin - r.top)}px`;
-  el.style.overflowY = 'auto';
-  r = el.getBoundingClientRect();
-  let dx = 0;
+  const cap = Math.max(0, innerHeight - 2 * margin);
+  el.style.maxHeight = `${cap}px`;
+  el.style.overflowY = el.scrollHeight > cap ? 'auto' : ''; // not always: a scroller would clip a submenu hanging out of it
+  const r = el.getBoundingClientRect();
+  let dx = 0, dy = 0;
   if (r.right > innerWidth - margin) dx = (anchor ? Math.min(anchor.getBoundingClientRect().right, innerWidth - margin) : innerWidth - margin) - r.right;
   dx = Math.max(dx, margin - r.left);
-  if (dx) el.style.translate = `${Math.round(dx)}px 0`;
+  if (r.bottom > innerHeight - margin) {
+    const top = anchor?.getBoundingClientRect().top;
+    dy = top != null && top - r.height >= margin ? top - r.bottom : innerHeight - margin - r.bottom;
+    dy = Math.max(dy, margin - r.top);
+  } else if (r.top < margin) dy = margin - r.top;
+  if (dx || dy) el.style.translate = `${Math.round(dx)}px ${Math.round(dy)}px`;
 }

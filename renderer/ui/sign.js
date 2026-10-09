@@ -228,6 +228,7 @@ export function initSign(app) {
     if (e.key === 'ArrowDown') { e.preventDefault(); openMenu(true); }
     else if (e.key === 'Escape' && !menuEl.hidden) { e.preventDefault(); e.stopPropagation(); closeMenu(true); }
   });
+  window.addEventListener('resize', () => closeMenu());
   menuEl = h('div.sign-menu', { role: 'menu', 'aria-label': 'Sign', hidden: true });
   menuEl.addEventListener('keydown', onMenuKey);
   addToolbarItem('sign', h('div.sign-wrap', {}, btnEl, menuEl));

@@ -48,6 +48,7 @@ export function buildToolbar(container, groups, optionsContainer) {
   morePanel.addEventListener('click', (e) => { const b = e.target.closest('button'); if (b?.classList.contains('tb-btn') && !b.hasAttribute('aria-haspopup')) showMore(false); });
   document.addEventListener('pointerdown', (e) => { if (!morePanel.hidden && !moreWrap.contains(e.target)) showMore(false); }, true);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !morePanel.hidden) { showMore(false); moreBtn.focus(); } });
+  window.addEventListener('resize', () => { if (!morePanel.hidden) showMore(false); });
   toolsEl.append(moreWrap);
   container.append(h('span.tb-sep', { role: 'separator' }), toolsEl);
   barEl = container;
@@ -208,6 +209,7 @@ export function dropdownButton({ id, icon: ic, label, title = label, items }) {
     e.preventDefault();
     e.stopPropagation();
   });
+  window.addEventListener('resize', () => close());
   wrap.addEventListener('focusout', (e) => { if (!wrap.contains(e.relatedTarget)) close(); });
   document.addEventListener('pointerdown', (e) => { if (!menu.hidden && !wrap.contains(e.target)) close(); }, true);
   return { wrap, button, close };
@@ -216,6 +218,7 @@ export function dropdownButton({ id, icon: ic, label, title = label, items }) {
 function showMore(on) {
   if (!morePanel) return;
   morePanel.hidden = !on;
+  if (on) fitPopover(morePanel, moreBtn);
   moreBtn.setAttribute('aria-expanded', String(on));
 }
 function syncMorePressed() {

@@ -2,6 +2,7 @@
 // The app keeps its own object clipboard; the system clipboard gets a text/plain summary. Paste
 // uses the objects only while the system clipboard still holds exactly that summary, so anything
 // copied elsewhere afterwards (text in another app) wins.
+import { rotatedBox } from './crop-lib.js';
 
 /** text/plain stand-in for copied objects: their texts, else a count. */
 export function objectsSummary(objs) {
@@ -25,6 +26,9 @@ export function unionBox(boxes) {
   const x1 = Math.max(...boxes.map((b) => b.x + b.w)), y1 = Math.max(...boxes.map((b) => b.y + b.h));
   return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
+
+/** The box an object must keep on its page: its bbox {x,y,w,h}, turned about its centre by `rotation` degrees (stamps, images). */
+export function pageBox(bbox, rotation) { return rotation ? rotatedBox(bbox, rotation) : bbox; }
 
 /**
  * Move (dx, dy) for objects whose union box is `box`, reduced so the moved box stays inside a page
