@@ -392,7 +392,7 @@ body.img-armed .viewer-host .page { cursor: copy; }
 .sign-wrap { position: relative; }
 .tb-btn.sign-btn { display: flex; gap: 4px; width: auto; padding: 0 5px; }
 .sign-btn[aria-expanded="true"] { background: var(--hover); border-color: var(--line); }
-.sign-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 50; width: 300px; padding: 4px; background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
+.sign-menu { position: absolute; top: calc(100% + 4px); left: 0; z-index: 50; width: 300px; box-sizing: border-box; padding: 4px; background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.18); }
 .sign-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 8px; border: 0; border-radius: 5px; background: none; color: var(--text); text-align: left; }
 .sign-item:hover:not(:disabled), .sign-item:focus-visible { background: var(--hover); }
 .sign-item:disabled { opacity: .6; }
@@ -402,7 +402,9 @@ body.img-armed .viewer-host .page { cursor: copy; }
 .sign-text { display: flex; flex-direction: column; min-width: 0; }
 .sign-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .sign-meta { font-size: 11.5px; color: var(--muted); }
-.sign-empty, .sign-note { margin: 6px 8px; font-size: 12px; line-height: 1.4; color: var(--muted); }
+.sign-empty, .sign-note { margin: 6px 8px; font-size: 12px; line-height: 1.4; color: var(--muted); overflow-wrap: anywhere; }
+.sign-item > span { min-width: 0; }
+.tb-more-panel .sign-menu { top: 0; left: auto; right: calc(100% + 8px); }
 .sign-note { padding-top: 6px; border-top: 1px solid var(--line); }
 .sign-radios { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
 .sign-radio { display: flex; align-items: center; gap: 6px; }
@@ -637,6 +639,8 @@ body:not(.tool-labels) .toolbar .tb-more-panel .tb-dd-label, body:not(.tool-labe
 .tb-dd-menu { top: calc(100% + 4px); min-width: 200px; color: var(--text); }
 .tb-dd-menu[hidden] { display: none; }
 .tb-dd-menu .menu-item kbd:empty { display: none; }
+.tb-dd-menu { box-sizing: border-box; }
+.tb-dd-menu .menu-item > span { white-space: normal; overflow-wrap: anywhere; }
 /* With tool labels on: icon and caret over a small label, like the other labelled buttons. */
 .tool-labels .toolbar .tb-btn.tb-dd-btn { display: grid; grid-template-columns: auto auto; grid-template-areas: "i c" "l l"; justify-content: center; align-items: center; column-gap: 1px; row-gap: 0; height: auto; min-width: 30px; padding: 2px 2px 1px; }
 .tool-labels .toolbar .tb-dd-btn > .icon:first-child { grid-area: i; }

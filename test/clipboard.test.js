@@ -1,7 +1,7 @@
 // Clipboard helpers (renderer/ui/clipboard-lib.js): summary text, clipboard-match rule, paste placement.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { objectsSummary, clipboardMatches, unionBox, pasteDelta, pastedImageSize } from '../renderer/ui/clipboard-lib.js';
+import { objectsSummary, clipboardMatches, unionBox, pasteDelta, pastedImageSize, clampDelta } from '../renderer/ui/clipboard-lib.js';
 
 test('objectsSummary: texts of text objects, else a count', () => {
   assert.equal(objectsSummary([{ type: 'text', text: ' Hi ' }, { type: 'rect' }, { type: 'callout', text: 'There' }]), 'Hi\nThere');
@@ -48,4 +48,16 @@ test('isCountSummary: only the count-only object summary', async () => {
   assert.equal(isCountSummary(objectsSummary([{}, {}])), true);
   assert.equal(isCountSummary('Hello paste'), false);
   assert.equal(isCountSummary('3 objects (somewhere else)'), false);
+});
+
+test('clampDelta: keeps the moved box inside the page; larger than the page -> top-left', () => {
+  const page = { width: 600, height: 800 }, box = { x: 100, y: 100, w: 200, h: 50 };
+  assert.deepEqual(clampDelta(box, 10, -20, page), { dx: 10, dy: -20 });      // inside: unchanged
+  assert.deepEqual(clampDelta(box, 500, 0, page), { dx: 300, dy: 0 });       // right edge
+  assert.deepEqual(clampDelta(box, -150, -150, page), { dx: -100, dy: -100 }); // top-left corner
+  assert.deepEqual(clampDelta(box, 0, 900, page), { dx: 0, dy: 650 });        // bottom edge
+  // Landscape (rotated) page: its own visible size bounds the move.
+  assert.deepEqual(clampDelta(box, 0, 700, { width: 800, height: 600 }), { dx: 0, dy: 450 });
+  // Wider than the page: x = 0 whatever the move.
+  assert.deepEqual(clampDelta({ x: 50, y: 10, w: 900, h: 20 }, 30, 0, page), { dx: -50, dy: 0 });
 });

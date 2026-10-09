@@ -49,7 +49,7 @@ import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
 import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from './pagehistory-lib.js';
-import { objectsSummary, unionBox, pasteDelta } from './clipboard-lib.js';
+import { objectsSummary, unionBox, pasteDelta, clampDelta } from './clipboard-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -536,7 +536,7 @@ export const selectHandlers = {
     e.preventDefault();
     capture(e);
     document.body.classList.add('ann-gesture');
-    gesture = { tab, page: hit.pageIndex, mode, handle: hd?.handle, start: p, orig: new Map(objs.map((o) => [o.id, clone(o)])), moved: false };
+    gesture = { tab, page: hit.pageIndex, mode, handle: hd?.handle, start: p, orig: new Map(objs.map((o) => [o.id, clone(o)])), moved: false, drawn: new Set([hit.pageIndex, ...objs.map((o) => o.page)]) };
   },
   onPointerMove(e, { tab }) {
     if (!gesture || gesture.tab !== tab) { hover(e, tab); return; }
@@ -545,15 +545,40 @@ export const selectHandlers = {
     if (!gesture.moved && Math.hypot(dx, dy) * scaleOf(tab) < 2) return;
     gesture.moved = true;
     window.getSelection?.()?.removeAllRanges();
+    if (gesture.mode === 'move') { dragMove(tab, e); return; }
     for (const [id, o0] of gesture.orig) {
       const o = getObject(tab, id), def = types.get(o0.type);
-      if (!o || !def || (def.fixed && gesture.mode === 'move')) continue;
-      Object.assign(o, gesture.mode === 'move' ? def.move(o0, dx, dy) : def.resize(o0, gesture.handle, dx, dy));
+      if (o && def) Object.assign(o, def.resize(o0, gesture.handle, dx, dy));
     }
     renderAll(tab, [gesture.page]);
   },
   onPointerUp(e, { tab }) { if (gesture?.tab === tab) endGesture(true); },
 };
+/**
+ * Select-tool move: the pointer over ANOTHER page takes a one-page selection there (grab offset
+ * kept, size in points unchanged); otherwise each object stays on its own page. Either way the
+ * objects of each page are kept inside it (moved as one box), so nothing slides behind a page.
+ */
+function dragMove(tab, e) {
+  const g = gesture, movable = [...g.orig.values()].filter((o0) => !types.get(o0.type)?.fixed);
+  const hit = viewer.clientToPage(tab, e.clientX, e.clientY);
+  const onePage = new Set([...g.orig.values()].map((o0) => o0.page)).size === 1 && movable.length === g.orig.size;
+  const target = onePage && hit?.inside && hit.pageIndex !== g.page ? hit.pageIndex : null;
+  // Pointer delta in the target page's points (same grab offset), else in the gesture page's.
+  const p = target == null ? toPage(tab, g.page, e.clientX, e.clientY) : { x: hit.x, y: hit.y };
+  const byPage = new Map();
+  for (const o0 of movable) { const k = target ?? o0.page; if (!byPage.has(k)) byPage.set(k, []); byPage.get(k).push(o0); }
+  for (const [page, list] of byPage) {
+    const box = unionBox(list.map((o0) => types.get(o0.type).bbox(o0)));
+    const d = clampDelta(box, p.x - g.start.x, p.y - g.start.y, viewer.pageSize(tab, page));
+    for (const o0 of list) {
+      const o = getObject(tab, o0.id);
+      if (o) Object.assign(o, types.get(o0.type).move(o0, d.dx, d.dy), { page });
+    }
+    g.drawn.add(page);
+  }
+  renderAll(tab, [...g.drawn]);
+}
 function endGesture(commitIt) {
   const g = gesture;
   gesture = null;
@@ -698,7 +723,12 @@ function onKey(e) {
   const step = e.shiftKey ? 10 : 1;
   const dir = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] }[e.key];
   if (dir) return run(() => {
-    const patches = new Map(sel.map((id) => getObject(tab, id)).filter((o) => !types.get(o.type).fixed).map((o) => [o.id, types.get(o.type).move(o, dir[0], dir[1])]));
+    const objs = sel.map((id) => getObject(tab, id)).filter((o) => !types.get(o.type).fixed), patches = new Map();
+    for (const page of new Set(objs.map((o) => o.page))) { // stop at the page edge (each page's objects as one box)
+      const list = objs.filter((o) => o.page === page);
+      const d = clampDelta(unionBox(list.map((o) => types.get(o.type).bbox(o))), dir[0], dir[1], viewer.pageSize(tab, page));
+      if (d.dx || d.dy) for (const o of list) patches.set(o.id, types.get(o.type).move(o, d.dx, d.dy));
+    }
     if (!patches.size) return;
     updateMany(tab, patches, { coalesce: `nudge:${sel.join(',')}` });
   });

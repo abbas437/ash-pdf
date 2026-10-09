@@ -1,7 +1,7 @@
 // Main toolbar, tool registry and the contextual tool-options bar.
 import { bus } from '../bus.js';
 import { state } from '../state.js';
-import { h } from './dom.js';
+import { h, fitPopover } from './dom.js';
 import { icon } from './icons.js';
 
 const tools = new Map(); // id -> tool definition
@@ -187,6 +187,7 @@ export function dropdownButton({ id, icon: ic, label, title = label, items }) {
       : h('button.menu-item', { type: 'button', role: 'menuitem', tabindex: '-1', dataset: { id: it.id }, disabled: it.enabled ? !it.enabled() : false, onclick: () => { close(); showMore(false); it.action(); } },
         h('span', {}, it.label), h('kbd', {}, it.shortcut ?? '')))));
     menu.hidden = false;
+    fitPopover(menu, button);
     button.setAttribute('aria-expanded', 'true');
     if (focus) menu.querySelector('button:not([disabled])')?.focus();
   };

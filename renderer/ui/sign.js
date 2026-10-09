@@ -9,7 +9,7 @@
 //                    `group` (selected, moved and deleted together), one undo step.
 // These are visual signatures (images), not digital certificates; the UI says so.
 import { activeTab } from '../state.js';
-import { h } from './dom.js';
+import { h, fitPopover } from './dom.js';
 import { showDialog, toast } from './dialogs.js';
 import { getTool, setTool, addToolbarItem } from './toolbar.js';
 import { viewer } from './viewer.js';
@@ -89,6 +89,7 @@ async function openMenu(focusFirst = false) {
     h('p.sign-note', {}, NOTE));
   menuEl.replaceChildren(...rows);
   menuEl.hidden = false;
+  fitPopover(menuEl, btnEl);
   btnEl.setAttribute('aria-expanded', 'true');
   document.addEventListener('mousedown', onOutside, true);
   if (focusFirst) menuEl.querySelector('button:not([disabled])')?.focus();

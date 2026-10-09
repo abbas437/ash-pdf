@@ -61,3 +61,22 @@ export function formatBytes(n) {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
+
+/**
+ * Keep an open popover (toolbar dropdown) inside the window: capped to the window width
+ * and to the height left below its top (then it scrolls); when it runs past the right edge it is
+ * right-aligned to its `anchor` button, then shifted to stay `margin` px from either edge. Call after
+ * un-hiding and filling it; the CSS placement stays the base, only a `translate` is added.
+ */
+export function fitPopover(el, anchor, margin = 8) {
+  el.style.translate = '';
+  el.style.maxWidth = `${Math.max(0, innerWidth - 2 * margin)}px`;
+  let r = el.getBoundingClientRect();
+  el.style.maxHeight = `${Math.max(80, innerHeight - margin - r.top)}px`;
+  el.style.overflowY = 'auto';
+  r = el.getBoundingClientRect();
+  let dx = 0;
+  if (r.right > innerWidth - margin) dx = (anchor ? Math.min(anchor.getBoundingClientRect().right, innerWidth - margin) : innerWidth - margin) - r.right;
+  dx = Math.max(dx, margin - r.left);
+  if (dx) el.style.translate = `${Math.round(dx)}px 0`;
+}

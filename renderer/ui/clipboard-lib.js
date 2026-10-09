@@ -27,6 +27,15 @@ export function unionBox(boxes) {
 }
 
 /**
+ * Move (dx, dy) for objects whose union box is `box`, reduced so the moved box stays inside a page
+ * {width, height}; a box larger than the page is aligned to its top-left corner.
+ */
+export function clampDelta(box, dx, dy, pageSize) {
+  const clamp = (v, hi) => Math.min(Math.max(v, 0), Math.max(0, hi));
+  return { dx: clamp(box.x + dx, pageSize.width - box.w) - box.x, dy: clamp(box.y + dy, pageSize.height - box.h) - box.y };
+}
+
+/**
  * Move for pasted objects whose union box is `box` (on page `fromPage`): centred on `target`
  * {page, x, y}, kept inside the target page {width, height}; when that would land exactly on the
  * originals (same page, under 1 pt away) it is shifted by `offset` so the copy stays visible.
