@@ -7,6 +7,7 @@
 //   Custom image stamps (library kind 'stamp', meta.kind 'image', PNG in bytes) are placed through armImage.
 //   Signatures are placed through ui/sign.js (Sign button), which arms the image tool via armImage.
 //   apStamp: another app's stamp (seal, initials) shown as its own appearance; edited like an image.
+import { apMatte } from './matte.js';
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
@@ -141,23 +142,48 @@ async function rasterAp(ap) {
     const v1 = page.getViewport({ scale: 1 });
     const scale = Math.min(3 * (window.devicePixelRatio || 1), AP_MAX_PX / Math.max(v1.width, v1.height, 1));
     const vp = page.getViewport({ scale });
+    // Rendered once on white and once on black; the difference gives each pixel's coverage (alpha) and colour.
+    // (pdf.js on a transparent canvas paints soft-masked images inside transparency groups, e.g. Acrobat's
+    // image stamps, as opaque black where the mask is clear.)
+    const w = Math.max(1, Math.ceil(vp.width)), h = Math.max(1, Math.ceil(vp.height));
+    const shot = async (bg) => {
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      await page.render({ canvas: cv, viewport: vp, background: bg }).promise;
+      return cv.getContext('2d').getImageData(0, 0, w, h);
+    };
+    const onWhite = await shot('#ffffff'), onBlack = await shot('#000000');
     const c = document.createElement('canvas');
-    c.width = Math.max(1, Math.ceil(vp.width));
-    c.height = Math.max(1, Math.ceil(vp.height));
-    await page.render({ canvas: c, viewport: vp, background: 'rgba(0,0,0,0)' }).promise;
+    c.width = w; c.height = h;
+    c.getContext('2d').putImageData(new ImageData(apMatte(onWhite.data, onBlack.data), w, h), 0, 0);
     const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
     return blob ? URL.createObjectURL(blob) : null;
   } finally { task.destroy(); }
 }
+// Stamps repeated on many pages (a seal on every page) carry equal appearance bytes: one raster per content,
+// made one at a time so a document with hundreds of stamps does not start hundreds of pdf.js loads at once.
+const apByContent = new Map(); // content key -> {url}
+let apQueue = Promise.resolve();
+function apKey(ap) {
+  let h = 2166136261;
+  for (let i = 0; i < ap.length; i++) h = Math.imul(h ^ ap[i], 16777619);
+  return `${ap.length}:${h >>> 0}`;
+}
 function apUrlOf(o) {
   let e = apImages.get(o.ap);
   if (!e) {
-    e = { url: null };
+    const key = apKey(o.ap);
+    e = apByContent.get(key);
+    if (!e) {
+      e = { url: null };
+      apByContent.set(key, e);
+      const ap = o.ap;
+      apQueue = apQueue.then(() => rasterAp(ap)).then((url) => {
+        e.url = url;
+        for (const t of state.tabs) if (t.objects?.some((x) => x.type === 'apStamp' && apImages.get(x.ap) === e)) annotations.render(t);
+      }, (err) => console.warn('Stamp appearance could not be drawn', err));
+    }
     apImages.set(o.ap, e);
-    rasterAp(o.ap).then((url) => {
-      e.url = url;
-      for (const t of state.tabs) if (t.objects?.some((x) => x.ap === o.ap)) annotations.render(t);
-    }, (err) => console.warn('Stamp appearance could not be drawn', err));
   }
   return e.url;
 }
