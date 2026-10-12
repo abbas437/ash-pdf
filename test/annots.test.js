@@ -492,3 +492,19 @@ test('written Highlight appearances fill under an ExtGState with /BM /Multiply (
     assert.ok(modes.includes('/Multiply'), `${a.get(PDFName.of('NM'))}: ExtGState blend modes ${modes}`);
   }
 });
+
+// /CA carries an annotation's opacity; the appearance itself is drawn opaque, so viewers apply it once
+test('writeAnnotations: opacity is in /CA only, not also inside the appearance', async () => {
+  const { PDFDocument: D, PDFName: Nm } = await import('pdf-lib');
+  const base = await D.create(); base.addPage([300, 300]);
+  const bytes = await base.save();
+  const out = await writeAnnotations(bytes, { add: [{ id: 'h1', page: 0, type: 'highlight', x: 20, y: 20, w: 100, h: 20, color: '#ffff00', opacity: 0.4 }] });
+  const doc = await D.load(out);
+  const annot = doc.getPage(0).node.Annots().asArray().map((r) => doc.context.lookup(r))[0];
+  assert.equal(annot.lookup(Nm.of('CA')).asNumber(), 0.4);
+  const ap = annot.lookup(Nm.of('AP')).lookup(Nm.of('N'));
+  const gs = ap.dict.lookup(Nm.of('Resources'))?.lookup(Nm.of('ExtGState'));
+  const cas = [];
+  if (gs) for (const [, v] of gs.dict ?? gs.entries()) { const d = doc.context.lookup(v); for (const k of ['ca', 'CA']) { const n = d.lookup?.(Nm.of(k)); if (n) cas.push(n.asNumber()); } }
+  assert.ok(cas.every((c) => c === 1), `appearance opacities ${JSON.stringify(cas)}`);
+});

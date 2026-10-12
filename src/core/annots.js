@@ -201,7 +201,8 @@ async function buildAppearances(doc, items) {
   const flat = [];
   items.forEach(({ o, bbox }, i) => {
     tmp.addPage([Math.max(bbox.w, 1), Math.max(bbox.h, 1)]);
-    const so = shift(o, -bbox.x, -bbox.y);
+    // drawn opaque: the annotation's /CA applies the opacity once (baking it in too made other viewers apply it twice)
+    const so = { ...shift(o, -bbox.x, -bbox.y), opacity: 1, apOpaque: true };
     flat.push(...toFlattenObjects(so, i));
   });
   let bytes = await tmp.save();

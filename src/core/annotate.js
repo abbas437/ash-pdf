@@ -434,7 +434,7 @@ class PagePainter {
           fill: parseColor(o.color, '#ffff00') || rgb(1, 1, 0),
           stroke: null,
           strokeWidth: 0,
-          opacity: Math.min(opacityOf(o.opacity, 0.4), 0.5),
+          opacity: o.apOpaque ? 1 : Math.min(opacityOf(o.opacity, 0.4), 0.5),
           blendMode: BlendMode.Multiply,
         });
         break;
