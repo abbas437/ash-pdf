@@ -65,6 +65,9 @@ const status = {
 const statusbar = h('footer.statusbar', { role: 'status', 'aria-live': 'polite' }, status.page, status.zoom, status.dirty, status.name, status.badge);
 const workArea = h('div.work', {}, viewerHost);
 viewerHost.append(welcome);
+// Opened with files (double-click, Open with): no start screen until they have loaded, or failed to.
+const launching = new URLSearchParams(location.search).has('launch');
+if (launching) welcome.hidden = true;
 root.append(h('header.titlebar', {}, menubar, tabstrip), toolbar, optionsBar, banner, workArea, statusbar);
 viewer.mount(viewerHost);
 initSidebar(workArea);
@@ -591,6 +594,7 @@ const toolbarReady = initToolbarCustomize({ registerMenuItem }); // View > Custo
   } catch (err) {
     showError('Could not open the start-up file', err);
   }
+  if (launching && !state.tabs.length) welcome.hidden = false;
   await session.start();
   document.body.dataset.ready = 'true';
 })();

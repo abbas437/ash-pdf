@@ -63,6 +63,11 @@ try {
   const win = await app.firstWindow();
   win.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
   win.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
+  step = 'no start screen flash when launched with a file';
+  await win.waitForSelector('.welcome', { state: 'attached', timeout: 30000 });
+  if (!/[?&]launch=1/.test(win.url())) throw new Error(`window not told it opens with files: ${win.url()}`);
+  const flashed = await win.evaluate(() => { const w = document.querySelector('.welcome'); return !w.hidden && !window.ashStudio?.state.tabs.length; });
+  if (flashed) throw new Error('the start screen is visible while the launch file loads');
   step = 'opens the PDF given on the command line';
   await win.waitForFunction(() => window.ashStudio?.state.tabs.some((t) => t.name === 'sample.pdf' && t.view), null, { timeout: 30000 });
   step = 'page 1 renders';

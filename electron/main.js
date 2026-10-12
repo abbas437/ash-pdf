@@ -26,6 +26,9 @@ const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // app.asa
 const SCHEME = 'app';
 const HOST = 'pdfstudio';
 const START_URL = `${SCHEME}://${HOST}/renderer/index.html`;
+// the same page told it opens with files (no start screen flash); the only other URL the app's own page may have
+const LAUNCH_URL = `${START_URL}?launch=1`;
+const isStartUrl = (u) => u === START_URL || u === LAUNCH_URL;
 const SERVED_DIRS = ['renderer', 'src'].map((d) => join(APP_ROOT, d) + sep);
 const isDev = process.argv.includes('--dev');
 const MAX_FILE_BYTES = 1024 * 1024 * 1024; // 1 GiB: refuse to slurp anything larger into the renderer
@@ -327,7 +330,7 @@ function createAppWindow(files = []) {
 
   const wc = win.webContents;
   wc.setWindowOpenHandler(() => ({ action: 'deny' }));
-  wc.on('will-navigate', (event, url) => { if (url !== START_URL) event.preventDefault(); });
+  wc.on('will-navigate', (event, url) => { if (!isStartUrl(url)) event.preventDefault(); });
   wc.on('will-redirect', (event) => event.preventDefault());
   wc.on('will-attach-webview', (event) => event.preventDefault());
   wc.on('did-start-loading', () => { state.ready = false; });
@@ -367,7 +370,8 @@ function createAppWindow(files = []) {
     if (last && (quitting || appWindows.size === 0)) closedForQuit.set(win, last);
     if (mainWindow === win) mainWindow = [...appWindows.keys()].at(-1) ?? null;
   });
-  win.loadURL(START_URL);
+  // ?launch: the window opens with files, so the page keeps its start screen hidden instead of flashing it
+  win.loadURL(state.pending.length ? LAUNCH_URL : START_URL);
   return win;
 }
 
@@ -407,7 +411,7 @@ async function serveAppFile(request) {
 // Every handler first checks the sender is our own top-level page.
 function fromApp(event) {
   const win = BrowserWindow.fromWebContents(event.sender);
-  return !!win && appWindows.has(win) && event.sender === win.webContents && event.senderFrame?.url === START_URL;
+  return !!win && appWindows.has(win) && event.sender === win.webContents && isStartUrl(event.senderFrame?.url);
 }
 // The window whose page made the current handle() call (survives awaits), for dialog parents etc.
 const ipcCaller = new AsyncLocalStorage();
@@ -974,7 +978,7 @@ app.on('web-contents-created', (_event, contents) => {
     ]).popup({ window: BrowserWindow.fromWebContents(contents) ?? undefined });
   });
   contents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  contents.on('will-navigate', (event, url) => { if (url !== START_URL) event.preventDefault(); });
+  contents.on('will-navigate', (event, url) => { if (!isStartUrl(url)) event.preventDefault(); });
 });
 
 app.whenReady().then(() => {
