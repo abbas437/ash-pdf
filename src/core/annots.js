@@ -19,7 +19,7 @@ const num = (v, d) => (Number.isFinite(v) ? v : d);
 
 const SUBTYPE = {
   rect: 'Square', cloud: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine',
-  text: 'FreeText', callout: 'FreeText', stamp: 'Stamp', image: 'Stamp', highlight: 'Highlight',
+  text: 'FreeText', callout: 'FreeText', stamp: 'Stamp', image: 'Stamp', apStamp: 'Stamp', highlight: 'Highlight',
   note: 'Text', underline: 'Underline', strikeout: 'StrikeOut', squiggly: 'Squiggly', textHighlight: 'Highlight',
   redactMark: 'Redact', // a mark only (§12.5.6.23): the content goes when the app applies redaction
 };
@@ -56,6 +56,18 @@ function pdfRectToVis(g, r) {
   });
   const [x1, y1, x2, y2] = bboxOf(pts);
   return { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+}
+
+/** m1 after m2 (PDF matrices [a b c d e f]). */
+function compose(m1, m2) {
+  const [a1, b1, c1, d1, e1, f1] = m1;
+  const [a2, b2, c2, d2, e2, f2] = m2;
+  return [a1 * a2 + c1 * b2, b1 * a2 + d1 * b2, a1 * c2 + c1 * d2, b1 * c2 + d1 * d2, a1 * e2 + c1 * f2 + e1, b1 * e2 + d1 * f2 + f1];
+}
+
+function invert([a, b, c, d, e, f]) {
+  const det = a * d - b * c;
+  return [d / det, -b / det, -c / det, a / det, (c * f - d * e) / det, (b * e - a * f) / det];
 }
 
 const visPt = (g, X, Y) => {
@@ -148,6 +160,7 @@ function layout(o) {
       return { bbox: rotatedBox(o) };
     case 'note':
       return { bbox: { x: o.x, y: o.y, w: num(o.w, 20), h: num(o.h, 20) } };
+    case 'apStamp':
     case 'redactMark':
       return { bbox: { x: o.x, y: o.y, w: o.w, h: o.h } };
     default: // text markups
@@ -374,6 +387,9 @@ function typeEntries(o, g, lay) {
       if (o.type !== 'highlight' && o.type !== 'textHighlight') width = num(o.strokeWidth, 1);
       break;
     }
+    case 'apStamp':
+      e.Name = N(String(o.name || 'Stamp'));
+      break;
     case 'redactMark': // /IC = the fill the applied area gets (none: left blank)
       strokeColor = parseColor(REDACT_STROKE, null);
       width = 1;
@@ -412,6 +428,8 @@ function validate(o, pageCount) {
     if (!Number.isFinite(o.x) || !Number.isFinite(o.y)) throw new TypeError(`note object ${o.id} needs numeric x and y`);
   } else if (o.type === 'image' && !(o.bytes instanceof Uint8Array)) {
     throw new TypeError(`image object ${o.id} needs bytes`);
+  } else if (o.type === 'apStamp' && !(o.ap instanceof Uint8Array)) {
+    throw new TypeError(`apStamp object ${o.id} needs ap (its appearance as a one-page PDF)`);
   }
   const need = o.type === 'line' || o.type === 'arrow' ? ['x1', 'y1', 'x2', 'y2'] : ['ink', 'polyline', 'note'].includes(o.type) || o.quads ? [] : ['x', 'y', 'w', 'h'];
   for (const k of need) if (!Number.isFinite(o[k])) throw new TypeError(`${o.type} object ${o.id} needs numeric ${k}`);
@@ -648,7 +666,16 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     j.lay = layout(j.o);
     j.bbox = j.lay.bbox;
   }
-  const aps = await buildAppearances(doc, jobs);
+  // Another app's stamp keeps its own annotation and appearance when it stays on its page (move and
+  // resize only change /Rect: §12.5.5 scales /BBox onto it); otherwise its appearance PDF becomes the form.
+  for (const j of jobs) {
+    if (j.o.type !== 'apStamp') continue;
+    const en = j.t?.en;
+    j.keep = !!(en && en.page === j.o.page && j.o.apRotate === j.g.rotation && normalAppearance(doc, en.dict));
+    if (!j.keep) j.form = await apStampForm(doc, j.o, j.g);
+  }
+  const built = await buildAppearances(doc, jobs.filter((j) => j.o.type !== 'apStamp'));
+  const aps = jobs.map((j) => (j.o.type === 'apStamp' ? j.form : built.shift()));
   let emptyAp = null;
   const emptyForm = () => (emptyAp ??= doc.context.register(doc.context.formXObject([], { BBox: [0, 0, 1, 1] })));
 
@@ -670,7 +697,13 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     if (contents !== undefined && contents !== null) dict.Contents = text(contents);
     if (Object.keys(extra).length) dict[EXTRA_KEY] = text(JSON.stringify(extra));
     if (o.type === 'image') dict[IMAGE_KEY] = doc.context.register(doc.context.stream(o.bytes, { Mime: PDFString.of(o.mime || 'image/png') }));
-    const annot = doc.context.obj(dict);
+    let annot;
+    if (j.keep) { // the original dictionary (appearance, /Name, private keys) with the new place and our fields
+      annot = j.t.en.dict.clone(doc.context);
+      annot.delete(N('Popup')); // dropped with the deps
+      if (contents === undefined || contents === null) annot.delete(N('Contents'));
+      for (const k of ['Rect', 'P', 'NM', 'T', 'M', 'CA', 'Contents']) if (dict[k] !== undefined) annot.set(N(k), doc.context.obj(dict[k]));
+    } else annot = doc.context.obj(dict);
     let ref;
     const en = j.t?.en;
     if (en && en.page === o.page && en.ref) {
@@ -774,6 +807,40 @@ function appearanceMatrix(stream, rect) {
   const sx = (R[2] - R[0]) / (x2 - x1);
   const sy = (R[3] - R[1]) / (y2 - y1);
   return [sx, 0, 0, sy, R[0] - x1 * sx, R[1] - y1 * sy];
+}
+
+/**
+ * The normal appearance of a stamp from another app as a one-page PDF drawing it upright (as seen on
+ * the page), page size = its visible box. Returns null without a usable appearance.
+ */
+async function appearancePdf(doc, dict, g) {
+  const ap = normalAppearance(doc, dict);
+  const rect = readNums(dict, 'Rect');
+  const A = ap && rect && appearanceMatrix(ap.stream, rect);
+  if (!A) return null;
+  const R = [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])];
+  const b = pdfRectToVis(g, R);
+  if (!(b.w > 0 && b.h > 0)) return null;
+  const M = compose([1, 0, 0, 1, -b.x, -(g.height - b.y - b.h)], compose(invert(visibleUpMatrix(g)), A));
+  const out = await PDFDocument.create({ updateMetadata: false });
+  const page = out.addPage([b.w, b.h]);
+  const form = out.context.register(PDFObjectCopier.for(doc.context, out.context).copy(ap.stream));
+  const name = page.node.newXObject('ASHAp', form);
+  page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...M.map(r4)), drawObject(name), popGraphicsState());
+  return out.save({ useObjectStreams: false });
+}
+
+/** Form XObject in `doc` from an apStamp's appearance PDF, /Matrix = the page rotation (§12.5.5 maps it onto /Rect upright). */
+async function apStampForm(doc, o, g) {
+  const src = await PDFDocument.load(o.ap);
+  const pg = src.getPage(0);
+  const { width, height } = pg.getSize();
+  const { Contents, Resources } = pg.node.normalizedEntries();
+  const [a, b, c, d] = visibleUpMatrix(g);
+  return doc.context.register(doc.context.flateStream(Contents ? decodeContents(Contents) : new Uint8Array(), {
+    Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: [0, 0, r4(width), r4(height)], Matrix: [a, b, c, d, 0, 0],
+    Resources: Resources ? PDFObjectCopier.for(src.context, doc.context).copy(Resources) : doc.context.obj({}),
+  }));
 }
 
 /**
@@ -953,7 +1020,10 @@ function toObject(doc, en, g) {
         Object.assign(o, { x: b.x + b.w / 2 - extra.w / 2, y: b.y + b.h / 2 - extra.h / 2, w: extra.w, h: extra.h, rotation: rot });
       } else Object.assign(o, b);
       const img = dict.lookup(N(IMAGE_KEY));
-      if (extra.kind === 'image' && img instanceof PDFRawStream) {
+      if (extra.text === undefined && extra.kind !== 'image' && normalAppearance(doc, dict)) {
+        // Another app's stamp (seal, initials image, ...): shown and kept as its own appearance.
+        Object.assign(o, b, { type: 'apStamp', name: nameOf(dict.lookup(N('Name'))) || 'Stamp', apRotate: g.rotation });
+      } else if (extra.kind === 'image' && img instanceof PDFRawStream) {
         o.type = 'image';
         o.bytes = img.contents.slice();
         const mime = img.dict.lookup(N('Mime'));
@@ -1031,6 +1101,10 @@ export async function readAnnotations(pdfBytes) {
       try {
         const g = pageGeometry(pages[en.page]);
         const o = toObject(doc, en, g);
+        if (o.type === 'apStamp') {
+          o.ap = await appearancePdf(doc, en.dict, g);
+          if (!o.ap) throw new Error('unusable appearance');
+        }
         objects.push(o);
         byEntry.set(en, o);
       } catch (e) {
