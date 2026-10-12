@@ -452,6 +452,11 @@ class PagePainter {
         });
         break;
       }
+      case 'apStamp': { // another app's stamp: its appearance (a one-page PDF, upright) scaled to the box
+        requireBox(o);
+        this.page.drawPage(this.images(o), { x: o.x, y: this.uy(o.y + o.h), width: o.w, height: o.h, opacity: opacityOf(o.opacity) });
+        break;
+      }
       case 'callout': {
         requireBox(o);
         const stroke = parseColor(o.stroke, '#ff0000');
@@ -533,7 +538,7 @@ class PagePainter {
 
 /** Every overlay object type flattenObjects (and so writeAnnotations' appearances) can draw. */
 export const KNOWN_TYPES = new Set(['text', 'rect', 'ellipse', 'cloud', 'line', 'arrow', 'polyline', 'ink', 'highlight', 'whiteout', 'image', 'callout', 'stamp',
-  'note', ...TEXT_MARKUPS]);
+  'apStamp', 'note', ...TEXT_MARKUPS]);
 
 /**
  * Burn overlay objects into the page content. Objects are drawn in array
@@ -562,6 +567,7 @@ export async function flattenObjects(pdfBytes, objects, { skipUnknown = false } 
   const fonts = new Map();
   const embedded = new Map(); // image bytes -> PDFImage, embedded once per document
   for (const o of objects) {
+    if (o.type === 'apStamp' && o.ap instanceof Uint8Array && !embedded.has(o.ap)) embedded.set(o.ap, (await doc.embedPdf(o.ap, [0]))[0]);
     if (o.type !== 'image') continue;
     if (!(o.bytes instanceof Uint8Array) && !(o.bytes instanceof ArrayBuffer)) {
       throw new TypeError(`image object ${o.id ?? ''} needs bytes`);
@@ -578,7 +584,7 @@ export async function flattenObjects(pdfBytes, objects, { skipUnknown = false } 
     }
     embedded.set(o.bytes, img);
   }
-  const images = (o) => embedded.get(o.bytes);
+  const images = (o) => embedded.get(o.type === 'apStamp' ? o.ap : o.bytes);
   const byPage = new Map();
   for (const o of objects) {
     if (!byPage.has(o.page)) byPage.set(o.page, []);

@@ -6,6 +6,8 @@
 //   Image (I): pick a PNG/JPEG (type from the file signature), click a page to place it.
 //   Custom image stamps (library kind 'stamp', meta.kind 'image', PNG in bytes) are placed through armImage.
 //   Signatures are placed through ui/sign.js (Sign button), which arms the image tool via armImage.
+//   apStamp: another app's stamp (seal, initials) shown as its own appearance; edited like an image.
+import { apMatte } from './matte.js';
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
@@ -122,6 +124,77 @@ const imageType = {
     return { x: handle.includes('w') ? fx - w : fx, y: handle.includes('n') ? fy - hh : fy, w, h: hh };
   },
   style: (o, s, keys) => (keys.includes('opacity') ? { opacity: s.opacity } : {}),
+};
+
+/**
+ * Another app's stamp (core type apStamp: seal, initials, ...): its appearance `o.ap`, a one-page PDF
+ * drawing it upright at its imported size, rendered once with pdf.js into an image (cached per `ap`
+ * bytes; copies share it). Until that is ready the box draws nothing; then the tabs showing it redraw.
+ * Selecting, moving, resizing (aspect kept, Shift free) and opacity are the image type's.
+ */
+const apImages = new WeakMap(); // ap bytes -> {url: string|null}
+const AP_MAX_PX = 2048;
+async function rasterAp(ap) {
+  const task = viewer.pdfjs.getDocument({ data: ap.slice() });
+  try {
+    const doc = await task.promise;
+    const page = await doc.getPage(1);
+    const v1 = page.getViewport({ scale: 1 });
+    const scale = Math.min(3 * (window.devicePixelRatio || 1), AP_MAX_PX / Math.max(v1.width, v1.height, 1));
+    const vp = page.getViewport({ scale });
+    // Rendered once on white and once on black; the difference gives each pixel's coverage (alpha) and colour.
+    // (pdf.js on a transparent canvas paints soft-masked images inside transparency groups, e.g. Acrobat's
+    // image stamps, as opaque black where the mask is clear.)
+    const w = Math.max(1, Math.ceil(vp.width)), h = Math.max(1, Math.ceil(vp.height));
+    const shot = async (bg) => {
+      const cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      await page.render({ canvas: cv, viewport: vp, background: bg }).promise;
+      return cv.getContext('2d').getImageData(0, 0, w, h);
+    };
+    const onWhite = await shot('#ffffff'), onBlack = await shot('#000000');
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').putImageData(new ImageData(apMatte(onWhite.data, onBlack.data), w, h), 0, 0);
+    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+    return blob ? URL.createObjectURL(blob) : null;
+  } finally { task.destroy(); }
+}
+// Stamps repeated on many pages (a seal on every page) carry equal appearance bytes: one raster per content,
+// made one at a time so a document with hundreds of stamps does not start hundreds of pdf.js loads at once.
+const apByContent = new Map(); // content key -> {url}
+let apQueue = Promise.resolve();
+function apKey(ap) {
+  let h = 2166136261;
+  for (let i = 0; i < ap.length; i++) h = Math.imul(h ^ ap[i], 16777619);
+  return `${ap.length}:${h >>> 0}`;
+}
+function apUrlOf(o) {
+  let e = apImages.get(o.ap);
+  if (!e) {
+    const key = apKey(o.ap);
+    e = apByContent.get(key);
+    if (!e) {
+      e = { url: null };
+      apByContent.set(key, e);
+      const ap = o.ap;
+      apQueue = apQueue.then(() => rasterAp(ap)).then((url) => {
+        e.url = url;
+        for (const t of state.tabs) if (t.objects?.some((x) => x.type === 'apStamp' && apImages.get(x.ap) === e)) annotations.render(t);
+      }, (err) => console.warn('Stamp appearance could not be drawn', err));
+    }
+    apImages.set(o.ap, e);
+  }
+  return e.url;
+}
+const apStampType = {
+  ...imageType,
+  render(o, parent) {
+    const g = svgEl('g', { class: 'ann-apstamp', transform: rotAttr(o), opacity: Number.isFinite(o.opacity) ? o.opacity : null }, parent);
+    const url = o.ap instanceof Uint8Array ? apUrlOf(o) : null;
+    if (url) svgEl('image', { href: url, x: o.x, y: o.y, width: o.w, height: o.h, preserveAspectRatio: 'none' }, g);
+    return g;
+  },
 };
 
 // ---------------------------------------------------------------- stamp tool
@@ -449,6 +522,7 @@ export function initStampTools(a) {
   app = a;
   annotations.registerObjectType('stamp', stampType);
   annotations.registerObjectType('image', imageType);
+  annotations.registerObjectType('apStamp', apStampType);
   const c = stampCreator();
   bus.on('prefs:changed', ({ prefs }) => { opt.shape = stampShape(prefs['stamps.shape']); bus.emit('stamp:changed', { id: opt.stamp.id }); });
   Promise.all([window.api.settingsGet(LAST_KEY).catch(() => null), window.api.settingsGet(DYN_KEY).catch(() => null), loadCustom(), window.api.settingsGet(SHAPE_KEY).catch(() => null)]).then(([last, dyn, , shape]) => {
