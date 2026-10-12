@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, PDFName, PDFDict } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFDict, rgb } from 'pdf-lib';
 import { flattenObjects, measureText, sanitizeText, KNOWN_TYPES } from '../src/core/annotate.js';
 import { getInfo } from '../src/core/pdfOps.js';
 import { makePdf, makeGeometryFixture, visibleText, renderPage, pageContent, makeImage, near, isColor } from './helpers.js';
@@ -209,6 +209,13 @@ async function registeredObjectTypes() {
   return types;
 }
 
+/** An apStamp's appearance: a one-page PDF (60 x 30 pt) filled blue. */
+const apPdf = await (async () => {
+  const d = await PDFDocument.create();
+  d.addPage([60, 30]).drawRectangle({ x: 0, y: 0, width: 60, height: 30, color: rgb(0, 0, 1) });
+  return d.save();
+})();
+
 describe('flattenObjects draws every overlay type the app creates', () => {
   const img = makeImage('png');
   const quad = (y) => [[300, y, 400, y, 300, y + 14, 400, y + 14]];
@@ -226,6 +233,7 @@ describe('flattenObjects draws every overlay type the app creates', () => {
     image: { x: 40, y: 250, w: 40, h: 20, bytes: img, mime: 'image/png' },
     callout: { x: 40, y: 290, w: 120, h: 30, tx: 200, ty: 330, text: 'Callout' },
     stamp: { x: 40, y: 340, w: 120, h: 40, text: 'APPROVED', subtext: 'by A. Reviewer', color: '#c00000' },
+    apStamp: { x: 200, y: 340, w: 60, h: 30, ap: apPdf, name: 'Seal' },
     note: { x: 300, y: 40, color: '#ffd400', note: 'Sticky' },
     underline: { quads: quad(100), color: '#00a000', strokeWidth: 4 },
     strikeout: { quads: quad(130), color: '#e00000', strokeWidth: 4 },
@@ -248,6 +256,7 @@ describe('flattenObjects draws every overlay type the app creates', () => {
     assert.ok(isColor(r.sample(310, 46.5), [255, 212, 0], 60), 'note icon painted');
     assert.ok(isColor(r.sample(350, 112), [0, 160, 0], 70), 'underline painted');
     assert.ok(isColor(r.sample(350, 137), [224, 0, 0], 70), 'strikeout painted');
+    assert.ok(isColor(r.sample(230, 355), BLUE, 60), 'apStamp appearance painted');
   });
 
   test('unknown type: throws by default, skipped with a warning when skipUnknown', async () => {

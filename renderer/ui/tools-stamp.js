@@ -6,6 +6,7 @@
 //   Image (I): pick a PNG/JPEG (type from the file signature), click a page to place it.
 //   Custom image stamps (library kind 'stamp', meta.kind 'image', PNG in bytes) are placed through armImage.
 //   Signatures are placed through ui/sign.js (Sign button), which arms the image tool via armImage.
+//   apStamp: another app's stamp (seal, initials) shown as its own appearance; edited like an image.
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
 import { h, isTyping } from './dom.js';
@@ -122,6 +123,52 @@ const imageType = {
     return { x: handle.includes('w') ? fx - w : fx, y: handle.includes('n') ? fy - hh : fy, w, h: hh };
   },
   style: (o, s, keys) => (keys.includes('opacity') ? { opacity: s.opacity } : {}),
+};
+
+/**
+ * Another app's stamp (core type apStamp: seal, initials, ...): its appearance `o.ap`, a one-page PDF
+ * drawing it upright at its imported size, rendered once with pdf.js into an image (cached per `ap`
+ * bytes; copies share it). Until that is ready the box draws nothing; then the tabs showing it redraw.
+ * Selecting, moving, resizing (aspect kept, Shift free) and opacity are the image type's.
+ */
+const apImages = new WeakMap(); // ap bytes -> {url: string|null}
+const AP_MAX_PX = 2048;
+async function rasterAp(ap) {
+  const task = viewer.pdfjs.getDocument({ data: ap.slice() });
+  try {
+    const doc = await task.promise;
+    const page = await doc.getPage(1);
+    const v1 = page.getViewport({ scale: 1 });
+    const scale = Math.min(3 * (window.devicePixelRatio || 1), AP_MAX_PX / Math.max(v1.width, v1.height, 1));
+    const vp = page.getViewport({ scale });
+    const c = document.createElement('canvas');
+    c.width = Math.max(1, Math.ceil(vp.width));
+    c.height = Math.max(1, Math.ceil(vp.height));
+    await page.render({ canvas: c, viewport: vp, background: 'rgba(0,0,0,0)' }).promise;
+    const blob = await new Promise((res) => c.toBlob(res, 'image/png'));
+    return blob ? URL.createObjectURL(blob) : null;
+  } finally { task.destroy(); }
+}
+function apUrlOf(o) {
+  let e = apImages.get(o.ap);
+  if (!e) {
+    e = { url: null };
+    apImages.set(o.ap, e);
+    rasterAp(o.ap).then((url) => {
+      e.url = url;
+      for (const t of state.tabs) if (t.objects?.some((x) => x.ap === o.ap)) annotations.render(t);
+    }, (err) => console.warn('Stamp appearance could not be drawn', err));
+  }
+  return e.url;
+}
+const apStampType = {
+  ...imageType,
+  render(o, parent) {
+    const g = svgEl('g', { class: 'ann-apstamp', transform: rotAttr(o), opacity: Number.isFinite(o.opacity) ? o.opacity : null }, parent);
+    const url = o.ap instanceof Uint8Array ? apUrlOf(o) : null;
+    if (url) svgEl('image', { href: url, x: o.x, y: o.y, width: o.w, height: o.h, preserveAspectRatio: 'none' }, g);
+    return g;
+  },
 };
 
 // ---------------------------------------------------------------- stamp tool
@@ -449,6 +496,7 @@ export function initStampTools(a) {
   app = a;
   annotations.registerObjectType('stamp', stampType);
   annotations.registerObjectType('image', imageType);
+  annotations.registerObjectType('apStamp', apStampType);
   const c = stampCreator();
   bus.on('prefs:changed', ({ prefs }) => { opt.shape = stampShape(prefs['stamps.shape']); bus.emit('stamp:changed', { id: opt.stamp.id }); });
   Promise.all([window.api.settingsGet(LAST_KEY).catch(() => null), window.api.settingsGet(DYN_KEY).catch(() => null), loadCustom(), window.api.settingsGet(SHAPE_KEY).catch(() => null)]).then(([last, dyn, , shape]) => {

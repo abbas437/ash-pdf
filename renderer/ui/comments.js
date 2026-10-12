@@ -12,12 +12,12 @@ import { showDialog, showError } from './dialogs.js';
 import { registerSidebarTab, refreshSidebarTab, showSidebarTab } from './sidebar.js';
 import { annotations, getAuthor } from './annotations.js';
 import { markupTools } from './tools-markup.js';
-import { STATUSES, STATUS_LABELS, SORTS, typeLabel, toEntries, filterEntries, searchEntries, sortEntries, groupByPage, distinct, toCsv } from './comments-lib.js';
+import { STATUSES, STATUS_LABELS, SORTS, typeLabel, entryLabel, toEntries, filterEntries, searchEntries, sortEntries, groupByPage, distinct, toCsv } from './comments-lib.js';
 
 const TAB = 'comments';
 const TYPE_ICON = {
   rect: 'shapes', ellipse: 'shapes', line: 'shapes', arrow: 'shapes', ink: 'draw', highlight: 'highlight', textHighlight: 'highlight',
-  text: 'text', underline: 'text', strikeout: 'text', squiggly: 'text', callout: 'callout', stamp: 'stamp', image: 'image', whiteout: 'whiteout', note: 'comment',
+  text: 'text', underline: 'text', strikeout: 'text', squiggly: 'text', callout: 'callout', stamp: 'stamp', apStamp: 'stamp', image: 'image', whiteout: 'whiteout', note: 'comment',
 };
 const filters = { type: '', author: '', status: '', query: '', sort: 'page' };
 let gen = 0;
@@ -77,10 +77,10 @@ function item(tab, e, selected, showPage) {
     onclick: () => focusObject(tab, e.id),
     onkeydown: (ev) => { if (ev.key === 'Enter' && ev.target === el) { ev.preventDefault(); focusObject(tab, e.id); } } },
     h('div.cm-head', {},
-      h('span.cm-icon', { title: typeLabel(e.type), html: icon(TYPE_ICON[e.type] ?? 'info', 16) }),
+      h('span.cm-icon', { title: entryLabel(e), html: icon(TYPE_ICON[e.type] ?? 'info', 16) }),
       h('span.cm-author', { title: e.author || 'Unknown' }, e.author || 'Unknown'),
       e.status !== 'none' ? h(`span.cm-badge.cm-${e.status}`, {}, STATUS_LABELS[e.status]) : null),
-    h('div.cm-type', {}, `${showPage ? `Page ${e.page + 1} · ` : ''}${typeLabel(e.type)} · `, h('span.cm-date', {}, e.date ? new Date(e.date).toLocaleString() : 'Not saved')),
+    h('div.cm-type', {}, `${showPage ? `Page ${e.page + 1} · ` : ''}${entryLabel(e)} · `, h('span.cm-date', {}, e.date ? new Date(e.date).toLocaleString() : 'Not saved')),
     e.text ? h('div.cm-text', {}, e.text) : h('div.cm-text.cm-none', {}, 'No comment'),
     e.replies.length ? h('ul.cm-replies', { 'aria-label': `${e.replies.length} repl${e.replies.length === 1 ? 'y' : 'ies'}` },
       e.replies.map((r) => h('li.cm-reply', {}, h('div.cm-author', {}, r.author || 'Unknown'), r.date ? h('div.cm-date', {}, new Date(r.date).toLocaleString()) : null, h('div.cm-text', {}, r.text)))) : null,

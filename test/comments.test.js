@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { commentText, toEntries, filterEntries, searchEntries, sortEntries, groupByPage, distinct, csvCell, toCsv } from '../renderer/ui/comments-lib.js';
+import { commentText, toEntries, entryLabel, filterEntries, searchEntries, sortEntries, groupByPage, distinct, csvCell, toCsv } from '../renderer/ui/comments-lib.js';
 
 const objs = [
   { id: 'a', type: 'rect', page: 1, note: 'Clash', author: 'Ahmad', modified: '2026-10-01T08:00:00.000Z', status: 'accepted', replies: [{ id: 'r1', author: 'Lee', date: null, text: 'Fixed' }] },
@@ -70,4 +70,12 @@ test('sortEntries: page, date newest first (undated first), author A-Z', () => {
   assert.deepEqual(sortEntries(toEntries([objs[2], objs[0]]), 'date').map((x) => x.id), ['a', 'c']);
   assert.deepEqual(sortEntries(e, 'author').map((x) => x.id), ['a', 'c', 'b', 'd']);
   assert.deepEqual(e.map((x) => x.id), ['a', 'b', 'c', 'd'], 'input left unsorted');
+});
+
+test('another app\'s stamp is labelled with its name unless the name is a generated id', () => {
+  const [named, generated] = toEntries([{ id: 'a', type: 'apStamp', page: 0, name: 'Approved' }, { id: 'b', type: 'apStamp', page: 0, name: '#Dx7Gl2Kq' }]);
+  assert.equal(entryLabel(named), 'Stamp: Approved');
+  assert.equal(entryLabel(generated), 'Stamp');
+  assert.equal(entryLabel({ type: 'rect' }), 'Rectangle');
+  assert.match(toCsv([named]), /\r?\n1,Stamp: Approved,/);
 });

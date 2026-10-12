@@ -3,12 +3,18 @@
 export const TYPE_LABELS = {
   rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line', arrow: 'Arrow', ink: 'Drawing', highlight: 'Highlight',
   text: 'Text box', callout: 'Callout', stamp: 'Stamp', image: 'Image', note: 'Sticky note', underline: 'Underline',
-  strikeout: 'Strikeout', textHighlight: 'Text highlight', whiteout: 'Whiteout', squiggly: 'Squiggly',
+  strikeout: 'Strikeout', textHighlight: 'Text highlight', whiteout: 'Whiteout', squiggly: 'Squiggly', apStamp: 'Stamp',
 };
 export const STATUSES = ['accepted', 'rejected', 'cancelled', 'completed', 'none'];
 export const STATUS_LABELS = { accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled', completed: 'Completed', none: 'None' };
 
 export const typeLabel = (t) => TYPE_LABELS[t] ?? t;
+
+/**
+ * Label of one entry: another app's stamp adds its /Name ("Stamp: Approved"), except names that are
+ * generated ids (Acrobat's custom stamps are "#" + random characters).
+ */
+export const entryLabel = (e) => (e.type === 'apStamp' && e.name && !String(e.name).startsWith('#') ? `Stamp: ${e.name}` : typeLabel(e.type));
 
 /** The text shown for an object: its comment, or the box's own text for text boxes and callouts. */
 export function commentText(o) {
@@ -19,7 +25,7 @@ export function commentText(o) {
 /** One list entry per object; `author` fills objects without one (not saved yet). */
 export function toEntries(objects, author = '') {
   return objects.map((o, order) => ({
-    id: o.id, order, page: o.page, type: o.type, author: o.author || author,
+    id: o.id, order, page: o.page, type: o.type, ...(o.type === 'apStamp' ? { name: o.name } : {}), author: o.author || author,
     date: o.modified || o.created || null, status: o.status || 'none', text: commentText(o),
     replies: (o.replies ?? []).map((r) => ({ ...r })),
   }));
@@ -75,7 +81,7 @@ export function csvCell(v) {
 export function toCsv(entries) {
   const rows = [['page', 'type', 'author', 'date', 'status', 'comment', 'replies']];
   for (const e of entries) {
-    rows.push([e.page + 1, typeLabel(e.type), e.author, e.date ?? '', STATUS_LABELS[e.status] ?? e.status, e.text,
+    rows.push([e.page + 1, entryLabel(e), e.author, e.date ?? '', STATUS_LABELS[e.status] ?? e.status, e.text,
       e.replies.map((r) => `${r.author}: ${r.text}`).join(' | ')]);
   }
   return '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
