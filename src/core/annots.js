@@ -6,7 +6,7 @@ import {
   PDFRawStream, PDFObjectCopier, decodePDFRawStream, rgb,
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
-import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError } from './internal.js';
+import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError, ContentMap, bytesKey } from './internal.js';
 import { flattenObjects, measureText, standardFontName, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
 import { trailerSize } from './incremental.js';
@@ -624,6 +624,7 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
   for (const o of [...add, ...update]) validate(o, pages.length);
   const stamp = now === undefined ? new Date() : new Date(now);
   let sc = scan(doc);
+  const apForms = apStampForms(doc, sc); // before removals: a removed stamp's appearance can still be drawn by ref
   const find = (o) => {
     const ref = o?.source?.ref;
     const en = (ref && sc.markups.find((m) => m.ref && refKey(m.ref) === ref)) || sc.markups.find((m) => m.id === (typeof o === 'string' ? o : o.id));
@@ -666,13 +667,14 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     j.lay = layout(j.o);
     j.bbox = j.lay.bbox;
   }
-  // Another app's stamp keeps its own annotation and appearance when it stays on its page (move and
-  // resize only change /Rect: §12.5.5 scales /BBox onto it); otherwise its appearance PDF becomes the form.
+  // Another app's stamp keeps its own annotation and appearance while the page it is on is turned as when it
+  // was read (move, resize, a move to a page turned the same: only /Rect and /P change, §12.5.5 scales /BBox
+  // onto /Rect); otherwise (and for copies) it gets a form drawing its appearance upright, one per distinct appearance.
   for (const j of jobs) {
     if (j.o.type !== 'apStamp') continue;
     const en = j.t?.en;
-    j.keep = !!(en && en.page === j.o.page && j.o.apRotate === j.g.rotation && normalAppearance(doc, en.dict));
-    if (!j.keep) j.form = await apStampForm(doc, j.o, j.g);
+    j.keep = !!(en && j.o.apRotate === j.g.rotation && pageGeometry(pages[en.page]).rotation === j.g.rotation && normalAppearance(doc, en.dict));
+    if (!j.keep) j.form = await apForms(j.o, j.g);
   }
   const built = await buildAppearances(doc, jobs.filter((j) => j.o.type !== 'apStamp'));
   const aps = jobs.map((j) => (j.o.type === 'apStamp' ? j.form : built.shift()));
@@ -697,12 +699,23 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     if (contents !== undefined && contents !== null) dict.Contents = text(contents);
     if (Object.keys(extra).length) dict[EXTRA_KEY] = text(JSON.stringify(extra));
     if (o.type === 'image') dict[IMAGE_KEY] = doc.context.register(doc.context.stream(o.bytes, { Mime: PDFString.of(o.mime || 'image/png') }));
-    let annot;
-    if (j.keep) { // the original dictionary (appearance, /Name, private keys) with the new place and our fields
+    let annot, popup = null;
+    if (o.type === 'apStamp' && j.t) { // the other app's dictionary (/Name, /AS, private keys) with the new place and our fields
       annot = j.t.en.dict.clone(doc.context);
-      annot.delete(N('Popup')); // dropped with the deps
+      if (!j.keep) {
+        annot.set(N('AP'), doc.context.obj({ N: aps[k] }));
+        annot.delete(N('AS'));
+      }
+      // Its popup (dropped from /Annots with the deps) goes back on the stamp's page.
+      const p = annot.get(N('Popup'));
+      const pd = p instanceof PDFRef ? doc.context.lookup(p) : null;
+      if (pd instanceof PDFDict && nameOf(pd.lookup(N('Subtype'))) === 'Popup') {
+        popup = p;
+        pd.set(N('P'), page.ref);
+      } else annot.delete(N('Popup'));
       if (contents === undefined || contents === null) annot.delete(N('Contents'));
-      for (const k of ['Rect', 'P', 'NM', 'T', 'M', 'CA', 'Contents']) if (dict[k] !== undefined) annot.set(N(k), doc.context.obj(dict[k]));
+      for (const k of ['Rect', 'P', 'NM', 'M', 'CA', 'Contents']) if (dict[k] !== undefined) annot.set(N(k), doc.context.obj(dict[k]));
+      if (o.author !== undefined) annot.set(N('T'), doc.context.obj(dict.T)); // never the editor's name on another app's seal
     } else annot = doc.context.obj(dict);
     let ref;
     const en = j.t?.en;
@@ -720,6 +733,10 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     }
     if (j.t) j.t.ref = ref;
     const extras = [];
+    if (popup) {
+      doc.context.lookup(popup).set(N('Parent'), ref);
+      extras.push(popup);
+    }
     if (o.type === 'note') {
       const pv = { x: o.x + num(o.w, 20) + 4, y: o.y, w: 180, h: 120 };
       const popup = doc.context.register(doc.context.obj({ Type: 'Annot', Subtype: 'Popup', Parent: ref, Rect: visRectToPdf(g, pv).map(r4), Open: false, F: 4, P: page.ref }));
@@ -810,37 +827,101 @@ function appearanceMatrix(stream, rect) {
 }
 
 /**
- * The normal appearance of a stamp from another app as a one-page PDF drawing it upright (as seen on
- * the page), page size = its visible box. Returns null without a usable appearance.
+ * How an appearance stream draws upright in its visible box: {M: form space -> [0 0 w h] (rounded), w, h}.
+ * Depends only on the stream, the /Rect size and the page rotation (not where the stamp is), or null.
  */
-async function appearancePdf(doc, dict, g) {
-  const ap = normalAppearance(doc, dict);
-  const rect = readNums(dict, 'Rect');
-  const A = ap && rect && appearanceMatrix(ap.stream, rect);
+function uprightAppearance(stream, rect, g) {
+  const rw = Math.abs(rect[2] - rect[0]), rh = Math.abs(rect[3] - rect[1]);
+  const A = appearanceMatrix(stream, [0, 0, rw, rh]);
   if (!A) return null;
-  const R = [Math.min(rect[0], rect[2]), Math.min(rect[1], rect[3]), Math.max(rect[0], rect[2]), Math.max(rect[1], rect[3])];
-  const b = pdfRectToVis(g, R);
-  if (!(b.w > 0 && b.h > 0)) return null;
-  const M = compose([1, 0, 0, 1, -b.x, -(g.height - b.y - b.h)], compose(invert(visibleUpMatrix(g)), A));
-  const out = await PDFDocument.create({ updateMetadata: false });
-  const page = out.addPage([b.w, b.h]);
-  const form = out.context.register(PDFObjectCopier.for(doc.context, out.context).copy(ap.stream));
-  const name = page.node.newXObject('ASHAp', form);
-  page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...M.map(r4)), drawObject(name), popGraphicsState());
-  return out.save({ useObjectStreams: false });
+  const [a, b, c, d] = invert(visibleUpMatrix(g));
+  const [x1, y1, x2, y2] = bboxOf([[0, 0], [rw, 0], [0, rh], [rw, rh]].map(([x, y]) => [a * x + c * y, b * x + d * y]));
+  if (!(x2 - x1 > 0 && y2 - y1 > 0)) return null;
+  return { M: compose([1, 0, 0, 1, -x1, -y1], compose([a, b, c, d, 0, 0], A)).map(r4), w: x2 - x1, h: y2 - y1 };
 }
 
-/** Form XObject in `doc` from an apStamp's appearance PDF, /Matrix = the page rotation (§12.5.5 maps it onto /Rect upright). */
-async function apStampForm(doc, o, g) {
-  const src = await PDFDocument.load(o.ap);
-  const pg = src.getPage(0);
-  const { width, height } = pg.getSize();
-  const { Contents, Resources } = pg.node.normalizedEntries();
-  const [a, b, c, d] = visibleUpMatrix(g);
-  return doc.context.register(doc.context.flateStream(Contents ? decodeContents(Contents) : new Uint8Array(), {
-    Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: [0, 0, r4(width), r4(height)], Matrix: [a, b, c, d, 0, 0],
-    Resources: Resources ? PDFObjectCopier.for(src.context, doc.context).copy(Resources) : doc.context.obj({}),
-  }));
+/**
+ * The normal appearance of a stamp from another app as a one-page PDF drawing it upright (as seen on
+ * the page), page size = its visible box. Returns null without a usable appearance. `cache` (a Map, one
+ * per document load) shares the result between stamps with an equal appearance stream, size and page
+ * rotation: built once, one bytes object.
+ */
+function appearancePdf(doc, dict, g, cache) {
+  const ap = normalAppearance(doc, dict);
+  const rect = readNums(dict, 'Rect');
+  if (!ap || !rect || rect.length !== 4 || !rect.every(Number.isFinite)) return null;
+  // Apps often give each stamp its own stream with equal content (and the same image): keyed by content, sizes to 0.01 pt.
+  const key = `${bytesKey(ap.stream.getContents())}|${ap.stream.dict}|${Math.abs(rect[2] - rect[0]).toFixed(2)}|${Math.abs(rect[3] - rect[1]).toFixed(2)}|${g.rotation}`;
+  if (cache?.has(key)) return cache.get(key);
+  const build = async () => {
+    const U = uprightAppearance(ap.stream, rect, g);
+    if (!U) return null;
+    const out = await PDFDocument.create({ updateMetadata: false });
+    const page = out.addPage([U.w, U.h]);
+    const form = out.context.register(PDFObjectCopier.for(doc.context, out.context).copy(ap.stream));
+    const name = page.node.newXObject('ASHAp', form);
+    page.pushOperators(pushGraphicsState(), concatTransformationMatrix(...U.M), drawObject(name), popGraphicsState());
+    return out.save({ useObjectStreams: false });
+  };
+  const p = build();
+  cache?.set(key, p);
+  return p;
+}
+
+/**
+ * Forms for apStamps written into `doc` (scanned as `sc`): (o, g) -> a Form XObject ref drawing `o.ap`
+ * upright on page geometry `g` (/Matrix = the page rotation; §12.5.5 maps it onto /Rect). One form per
+ * distinct appearance and rotation, whatever the bytes objects. When a stamp in `doc` has that very
+ * appearance (rebuilt from it byte for byte) the form draws its stream by reference; otherwise the
+ * appearance PDF's content and resources are copied in once.
+ */
+function apStampForms(doc, sc) {
+  const forms = new ContentMap();
+  const copies = new ContentMap();
+  const origins = new ContentMap(); // appearance PDF -> {stream ref, upright mapping} of a stamp in doc
+  const built = new Map();
+  let todo = null;
+  const originOf = async (ap) => {
+    todo ??= sc.all.filter((en) => en.subtype === 'Stamp');
+    let hit = origins.get(ap);
+    while (hit === undefined && todo.length) {
+      const en = todo.shift();
+      const g = pageGeometry(doc.getPages()[en.page]);
+      const bytes = await appearancePdf(doc, en.dict, g, built);
+      if (bytes && origins.get(bytes) === undefined) {
+        const n = normalAppearance(doc, en.dict);
+        origins.set(bytes, { ref: n.ref, U: uprightAppearance(n.stream, readNums(en.dict, 'Rect'), g) });
+      }
+      hit = origins.get(ap);
+    }
+    return hit ?? null;
+  };
+  const make = async (o, g) => {
+    const [a, b, c, d] = visibleUpMatrix(g);
+    const src = await originOf(o.ap);
+    if (src) {
+      return doc.context.register(doc.context.formXObject([pushGraphicsState(), concatTransformationMatrix(...src.U.M), drawObject('ASHAp'), popGraphicsState()], {
+        BBox: [0, 0, r4(src.U.w), r4(src.U.h)], Matrix: [a, b, c, d, 0, 0], Resources: { XObject: { ASHAp: src.ref } },
+      }));
+    }
+    let cp = copies.get(o.ap);
+    if (!cp) {
+      const pdf = await PDFDocument.load(o.ap);
+      const pg = pdf.getPage(0);
+      const { Contents, Resources } = pg.node.normalizedEntries();
+      cp = copies.set(o.ap, {
+        size: pg.getSize(), contents: Contents ? decodeContents(Contents) : new Uint8Array(),
+        resources: Resources ? PDFObjectCopier.for(pdf.context, doc.context).copy(Resources) : doc.context.obj({}),
+      });
+    }
+    return doc.context.register(doc.context.flateStream(cp.contents, {
+      Type: 'XObject', Subtype: 'Form', FormType: 1, BBox: [0, 0, r4(cp.size.width), r4(cp.size.height)], Matrix: [a, b, c, d, 0, 0], Resources: cp.resources,
+    }));
+  };
+  return (o, g) => {
+    const rot = `|${g.rotation}`;
+    return forms.get(o.ap, rot) ?? forms.set(o.ap, make(o, g), rot);
+  };
 }
 
 /**
@@ -1095,6 +1176,7 @@ export async function readAnnotations(pdfBytes) {
   const objects = [];
   const skipped = [];
   const byEntry = new Map();
+  const apCache = new Map(); // stamps sharing an appearance stream (a seal on every page): built once, one bytes object
   const skip = (en, reason) => skipped.push({ page: en.page, subtype: en.subtype ?? null, ref: en.ref ? refKey(en.ref) : null, id: en.id, reason });
   for (const en of sc.all) {
     if (en.kind === 'markup') {
@@ -1102,7 +1184,7 @@ export async function readAnnotations(pdfBytes) {
         const g = pageGeometry(pages[en.page]);
         const o = toObject(doc, en, g);
         if (o.type === 'apStamp') {
-          o.ap = await appearancePdf(doc, en.dict, g);
+          o.ap = await appearancePdf(doc, en.dict, g, apCache);
           if (!o.ap) throw new Error('unusable appearance');
         }
         objects.push(o);

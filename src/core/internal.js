@@ -184,3 +184,33 @@ export function assertPageIndices(indices, pageCount, label = 'indices') {
     }
   }
 }
+
+const contentKeys = new WeakMap(); // bytes -> key, so repeated lookups of one array hash it once
+/** Content key of a byte array (length + FNV-1a): equal bytes give equal keys. */
+export function bytesKey(bytes) {
+  let k = contentKeys.get(bytes);
+  if (k === undefined) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < bytes.length; i++) h = Math.imul(h ^ bytes[i], 0x01000193);
+    k = `${bytes.length}:${(h >>> 0).toString(16)}`;
+    contentKeys.set(bytes, k);
+  }
+  return k;
+}
+const sameBytes = (a, b) => a === b || (a.length === b.length && a.every((v, i) => v === b[i]));
+/** Map keyed by byte content (equal bytes, any array object, share one entry; checked byte by byte). */
+export class ContentMap {
+  #m = new Map();
+  #find(bytes, suffix) { return (this.#m.get(bytesKey(bytes) + suffix) ?? []).find((e) => sameBytes(e.bytes, bytes)); }
+  get(bytes, suffix = '') { return this.#find(bytes, suffix)?.value; }
+  set(bytes, value, suffix = '') {
+    const e = this.#find(bytes, suffix);
+    if (e) e.value = value;
+    else {
+      const k = bytesKey(bytes) + suffix;
+      if (!this.#m.has(k)) this.#m.set(k, []);
+      this.#m.get(k).push({ bytes, value });
+    }
+    return value;
+  }
+}

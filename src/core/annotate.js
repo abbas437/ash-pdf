@@ -12,7 +12,7 @@ import {
   setLineJoin,
   rgb,
 } from 'pdf-lib';
-import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreError } from './internal.js';
+import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreError, ContentMap } from './internal.js';
 import { calloutArrowHead } from './arrowhead.js';
 import { stampLayout } from './stamps.js';
 import { cloudPath } from './cloud.js';
@@ -566,8 +566,9 @@ export async function flattenObjects(pdfBytes, objects, { skipUnknown = false } 
   }
   const fonts = new Map();
   const embedded = new Map(); // image bytes -> PDFImage, embedded once per document
+  const apPages = new ContentMap(); // apStamp appearance -> embedded page, one per distinct content (a seal on every page: one copy)
   for (const o of objects) {
-    if (o.type === 'apStamp' && o.ap instanceof Uint8Array && !embedded.has(o.ap)) embedded.set(o.ap, (await doc.embedPdf(o.ap, [0]))[0]);
+    if (o.type === 'apStamp' && o.ap instanceof Uint8Array && !apPages.get(o.ap)) apPages.set(o.ap, (await doc.embedPdf(o.ap, [0]))[0]);
     if (o.type !== 'image') continue;
     if (!(o.bytes instanceof Uint8Array) && !(o.bytes instanceof ArrayBuffer)) {
       throw new TypeError(`image object ${o.id ?? ''} needs bytes`);
@@ -584,7 +585,7 @@ export async function flattenObjects(pdfBytes, objects, { skipUnknown = false } 
     }
     embedded.set(o.bytes, img);
   }
-  const images = (o) => embedded.get(o.type === 'apStamp' ? o.ap : o.bytes);
+  const images = (o) => (o.type === 'apStamp' ? apPages.get(o.ap) : embedded.get(o.bytes));
   const byPage = new Map();
   for (const o of objects) {
     if (!byPage.has(o.page)) byPage.set(o.page, []);
