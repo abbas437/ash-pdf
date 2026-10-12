@@ -54,7 +54,7 @@ function renderMarkup(o, parent) {
   for (const q of o.quads ?? []) {
     const [TL, TR, BL, BR] = [0, 1, 2, 3].map((i) => qPt(q, i));
     if (o.type === 'textHighlight') {
-      svgEl('path', { d: `M${r3(TL[0])} ${r3(TL[1])}L${r3(TR[0])} ${r3(TR[1])}L${r3(BR[0])} ${r3(BR[1])}L${r3(BL[0])} ${r3(BL[1])}Z`, fill: o.color ?? '#ffd400' }, g);
+      svgEl('path', { d: `M${r3(TL[0])} ${r3(TL[1])}L${r3(TR[0])} ${r3(TR[1])}L${r3(BR[0])} ${r3(BR[1])}L${r3(BL[0])} ${r3(BL[1])}Z`, fill: o.color ?? '#ffd400', class: 'ann-blend' }, g);
       continue;
     }
     const sw = Number.isFinite(o.strokeWidth) ? o.strokeWidth : qHeight(q) / 14;

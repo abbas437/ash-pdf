@@ -70,6 +70,7 @@ export const viewer = {
   getPageEl,
   getOverlayEl,
   getOverlaySvg: (tab, i) => getOverlayEl(tab, i)?.querySelector('svg.overlay-svg') ?? null,
+  getBlendSvg: (tab, i) => tab.view?.ps[i]?.blendSvg ?? null,
   getPageState: (tab, i) => tab.view?.ps[i] ?? null,
   getScrollEl: (tab) => tab.view?.scrollEl ?? null,
   pageSize,
@@ -241,19 +242,27 @@ function build(tab) {
   for (let i = 0; i < tab.numPages; i++) {
     const pageEl = h('div.page', { dataset: { pageIndex: String(i), label: String(i + 1) }, role: 'region', 'aria-label': `Page ${i + 1}` });
     const { width, height } = pageSize(tab, i);
-    const svg = document.createElementNS(SVG_NS, 'svg');
-    svg.setAttribute('class', 'overlay-svg');
-    svg.setAttribute('viewBox', `0 0 ${round3(width)} ${round3(height)}`);
-    svg.setAttribute('preserveAspectRatio', 'none');
-    svg.dataset.pageWidth = String(width);
-    svg.dataset.pageHeight = String(height);
+    const pageSvg = (cls) => {
+      const s = document.createElementNS(SVG_NS, 'svg');
+      s.setAttribute('class', cls);
+      s.setAttribute('viewBox', `0 0 ${round3(width)} ${round3(height)}`);
+      s.setAttribute('preserveAspectRatio', 'none');
+      s.dataset.pageWidth = String(width);
+      s.dataset.pageHeight = String(height);
+      return s;
+    };
+    const svg = pageSvg('overlay-svg');
+    // Highlight fills: a direct child of the page, no stacking context in between, so its
+    // mix-blend-mode: multiply blends with the page canvas (text shows through, as in other viewers).
+    const blendSvg = pageSvg('overlay-svg overlay-blend');
+    blendSvg.setAttribute('aria-hidden', 'true');
     const overlay = h('div.page-overlay', { dataset: { pageIndex: String(i) } });
     overlay.append(svg);
     const linkLayer = h('div.linkLayer');
-    pageEl.append(linkLayer, overlay);
+    pageEl.append(blendSvg, linkLayer, overlay);
     pagesEl.append(pageEl);
     pageEls.push(pageEl);
-    ps.push({ rendered: false, scale: 0, rotation: -1, task: null, canvas: null, textLayer: null, textLayerDiv: null, linkLayer, overlay, svg, lastUsed: 0 });
+    ps.push({ rendered: false, scale: 0, rotation: -1, task: null, canvas: null, textLayer: null, textLayerDiv: null, linkLayer, overlay, svg, blendSvg, lastUsed: 0 });
   }
   if (old) {
     for (let i = 0; i < old.ps.length; i++) old.ps[i].task?.cancel();
@@ -291,10 +300,11 @@ function layout(tab) {
     el.style.setProperty('--scale-factor', String(scale));
     el.style.setProperty('--total-scale-factor', String(scale * (tab.pages[i].userUnit || 1)));
     const { width, height } = pageSize(tab, i);
-    const svg = v.ps[i].svg;
-    svg.style.width = `${width * scale}px`;
-    svg.style.height = `${height * scale}px`;
-    svg.dataset.viewRotation = String(tab.viewRotation);
+    for (const svg of [v.ps[i].svg, v.ps[i].blendSvg]) {
+      svg.style.width = `${width * scale}px`;
+      svg.style.height = `${height * scale}px`;
+      svg.dataset.viewRotation = String(tab.viewRotation);
+    }
     const ps = v.ps[i];
     if (ps.rendered && ps.rotation !== vp.rotation) release(tab, i);
   }

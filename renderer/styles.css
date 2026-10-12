@@ -515,7 +515,10 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 }
 
 /* Text markups, sticky notes and the comment popup (ui/tools-markup.js) */
-.ann-textHighlight path:first-child { mix-blend-mode: multiply; }
+/* Highlight fills are drawn twice: hidden in the overlay (.ann-blend there), visible in the page's
+   .overlay-blend layer, whose multiply reaches the canvas (the overlay's z-index isolates its own). */
+.overlay-blend { mix-blend-mode: multiply; pointer-events: none; }
+.page-overlay .ann-objects .ann-blend { visibility: hidden; }
 .mk-popup { position: fixed; z-index: 60; width: 260px; box-sizing: border-box; padding: 8px; display: flex; flex-direction: column; gap: 6px;
   background: var(--surface-2); color: var(--text); border: 1px solid var(--line); border-top: 3px solid var(--brass); border-radius: 6px; box-shadow: var(--page-shadow); font: 12px/1.35 system-ui, sans-serif; }
 .mk-popup-head { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); }

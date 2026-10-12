@@ -206,7 +206,7 @@ function registerBuiltins() {
   registerObjectType('arrow', lineType(true));
   registerObjectType('polyline', polyType);
   registerObjectType('ink', polyType);
-  registerObjectType('highlight', boxType((o, p) => svgEl('rect', { class: 'ann-highlight', x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.color ?? '#ffff00'), opacity: Math.min(opacityOf(o.opacity, 0.4), 0.5) }, p), {
+  registerObjectType('highlight', boxType((o, p) => svgEl('rect', { class: 'ann-highlight ann-blend', x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.color ?? '#ffff00'), opacity: Math.min(opacityOf(o.opacity, 0.4), 0.5) }, p), {
     style: (o, s, keys) => ({ ...(keys.includes('hlColor') ? { color: s.hlColor } : {}), ...(keys.includes('hlOpacity') ? { opacity: s.hlOpacity } : {}) }),
   }));
   registerObjectType('whiteout', boxType((o, p) => {
@@ -436,6 +436,8 @@ function renderPage(tab, i) {
   ensureTab(tab);
   L.objs.replaceChildren();
   L.sel.replaceChildren();
+  const blend = viewer.getBlendSvg(tab, i);
+  blend?.replaceChildren();
   const sel = selOf(tab);
   const px = 1 / scaleOf(tab);
   for (const o of tab.objects) {
@@ -445,6 +447,13 @@ function renderPage(tab, i) {
     const el = def.render(o, L.objs);
     if (el && !el.parentNode) L.objs.append(el);
     el?.setAttribute('data-obj-id', o.id);
+    // Highlight fills (.ann-blend) show from the page's blend layer, multiplied over the text; the
+    // overlay keeps the (hidden) original for its structure and hit areas.
+    if (blend && el && (el.matches('.ann-blend') || el.querySelector('.ann-blend'))) {
+      const copy = el.cloneNode(true);
+      copy.removeAttribute('data-obj-id');
+      blend.append(copy);
+    }
   }
   const selected = tab.objects.filter((o) => o.page === i && sel.has(o.id));
   for (const o of selected) {

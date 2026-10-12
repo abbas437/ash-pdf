@@ -475,3 +475,20 @@ describe('sticky-note icons', () => {
     }
   });
 });
+
+test('written Highlight appearances fill under an ExtGState with /BM /Multiply (text shows through in other viewers)', async () => {
+  const pdf = await makePdf(1);
+  const out = await writeAnnotations(pdf, { add: [
+    { id: 'th', page: 0, type: 'textHighlight', quads: [[40, 440, 140, 440, 40, 454, 140, 454]] },
+    { id: 'hl', page: 0, type: 'highlight', x: 40, y: 100, w: 100, h: 20 },
+  ] }, OPTS);
+  const doc = await PDFDocument.load(out);
+  const annots = doc.getPage(0).node.Annots().asArray().map((r) => doc.context.lookup(r));
+  assert.equal(annots.length, 2);
+  for (const a of annots) {
+    const ap = doc.context.lookup(a.lookup(PDFName.of('AP')).get(PDFName.of('N')));
+    const gs = ap.dict.lookup(PDFName.of('Resources')).lookup(PDFName.of('ExtGState'));
+    const modes = gs.keys().map((k) => String(gs.lookup(k).get(PDFName.of('BM'))));
+    assert.ok(modes.includes('/Multiply'), `${a.get(PDFName.of('NM'))}: ExtGState blend modes ${modes}`);
+  }
+});
