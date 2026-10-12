@@ -27,7 +27,7 @@ function formToVisible(g, rect, fx, fy) {
   return pdfToVisible(g, X, Y);
 }
 
-for (const rotate of [0, 90]) {
+for (const rotate of [0, 90, 180, 270]) {
   describe(`foreign stamp with an image/vector appearance (page /Rotate ${rotate})`, () => {
     test('imports as apStamp keeping name, author, contents and an upright appearance PDF', async () => {
       const bytes = await apStampPdf({ rotate });
