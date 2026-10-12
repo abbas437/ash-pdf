@@ -175,18 +175,27 @@ function apUrlOf(o) {
     const key = apKey(o.ap);
     e = apByContent.get(key);
     if (!e) {
-      e = { url: null };
+      e = { url: null, key };
       apByContent.set(key, e);
-      const ap = o.ap;
-      apQueue = apQueue.then(() => rasterAp(ap)).then((url) => {
-        e.url = url;
-        for (const t of state.tabs) if (t.objects?.some((x) => x.type === 'apStamp' && apImages.get(x.ap) === e)) annotations.render(t);
-      }, (err) => console.warn('Stamp appearance could not be drawn', err));
+      const ap = o.ap, entry = e;
+      // one retry: a failed raster would otherwise leave the stamp invisible for the session
+      const raster = () => rasterAp(ap).catch((err) => { console.warn('Stamp appearance could not be drawn, retrying', err); return rasterAp(ap); });
+      apQueue = apQueue.then(raster).then((url) => {
+        if (apByContent.get(key) !== entry) { if (url) URL.revokeObjectURL(url); return; } // dropped meanwhile
+        entry.url = url;
+        for (const t of state.tabs) if (t.objects?.some((x) => x.type === 'apStamp' && apImages.get(x.ap) === entry)) annotations.render(t);
+      }, (err) => { console.warn('Stamp appearance could not be drawn', err); apByContent.delete(key); });
     }
     apImages.set(o.ap, e);
   }
   return e.url;
 }
+// A closed tab's appearances: free the rasters no open tab still shows.
+bus.on('tab:closed', () => {
+  const live = new Set();
+  for (const t of state.tabs) for (const x of t.objects || []) if (x.type === 'apStamp' && x.ap instanceof Uint8Array) { const e = apImages.get(x.ap); if (e) live.add(e); }
+  for (const [key, e] of apByContent) if (!live.has(e)) { if (e.url) URL.revokeObjectURL(e.url); apByContent.delete(key); }
+});
 const apStampType = {
   ...imageType,
   render(o, parent) {
