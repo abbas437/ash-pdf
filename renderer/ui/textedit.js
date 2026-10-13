@@ -2,7 +2,8 @@
 // not an overlay. Lines come from pdfium.textLines on the tab's bytes (cached per page per bytes
 // revision, dropped on tab:bytesChanged); hover outlines the line under the pointer (a line that cannot
 // be edited shows why in the tooltip); a click opens an inline editor over the line. Enter, Tab or a
-// click outside applies, Esc cancels, unchanged text is a no-op.
+// click outside applies, Esc cancels, unchanged text (whitespace-normalised, pdfium/justify.js) is a no-op: no
+// undo step, the bytes are not touched.
 //
 // Applying is one page-operation undo step (runOp, identity map) on tab.bytes as they are: unsaved
 // annotations are not written first. They are overlay objects, the identity map keeps them, and Save
@@ -15,6 +16,7 @@ import { runOp } from './pagetools.js';
 import { registerTool, toggleTool } from './toolbar.js';
 import { viewer } from './viewer.js';
 import { pdfium } from '../pdfium/client.js';
+import { sameLineText } from '../pdfium/justify.js';
 import { linePageBox, lineBox, editorPlacement, lineAt, charIndexAt, wordAt } from './textedit-lib.js';
 
 const TOOL = 'textedit';
@@ -116,11 +118,12 @@ export function closeEditor(commit) {
   editor = null;
   const text = input.value;
   input.remove();
-  return commit && text !== line.text ? applyLineEdit(tab, pageIndex, line, text) : Promise.resolve(false);
+  return commit && !sameLineText(text, line.text) ? applyLineEdit(tab, pageIndex, line, text) : Promise.resolve(false);
 }
 
 /** Replace the text of `line` on page `pageIndex` with PDFium: one page undo step. Resolves true when applied. */
 export async function applyLineEdit(tab, pageIndex, line, text) {
+  if (sameLineText(text, line.text)) return false;
   let res = null;
   const ok = await runOp(tab, 'Edit text', async (bytes, n) => {
     const id = await pdfium.open(bytes);

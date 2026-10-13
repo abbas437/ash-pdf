@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, degrees } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { init } from '@embedpdf/pdfium';
 import { textLines, editLine, FONT_FILES, substituteFont } from '../renderer/pdfium/textedit.js';
@@ -154,4 +154,87 @@ test('lines inside a Form XObject are reported (page-space bbox) but refused for
   const { r } = await withDoc(src, (m, d) => editLine(m, d, 0, f.id, 'x', { loadFont }));
   assert.equal(r.ok, false);
   assert.match(r.reason, /Form XObject/);
+});
+
+/** Justified lines drawn one object per word: J (Helvetica 12, y=700) spans x 72 -> 540; R (y=650) is ragged, one
+ *  normal space between words; V is a line rotated 90 degrees at x=500 from y=100 with 8 pt word gaps. */
+const J = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor';
+async function justifiedFixture() {
+  const doc = await PDFDocument.create();
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const p = doc.addPage([612, 792]);
+  const spread = (text, from, to, put) => {
+    const words = text.split(' '), ws = words.map((w) => helv.widthOfTextAtSize(w, 12));
+    const gap = to ? (to - from - ws.reduce((s, w) => s + w, 0)) / (words.length - 1) : 8;
+    let x = from;
+    words.forEach((w, k) => { put(w, x); x += ws[k] + gap; });
+  };
+  spread(J, 72, 540, (w, x) => p.drawText(w, { x, y: 700, size: 12, font: helv }));
+  let x = 72;
+  for (const w of ['Ragged', 'line', 'stays', 'left']) { p.drawText(w, { x, y: 650, size: 12, font: helv }); x += helv.widthOfTextAtSize(w + ' ', 12); }
+  spread('Turned words spread along the line up the page side', 100, 0, (w, y) => p.drawText(w, { x: 500, y, size: 12, font: helv, rotate: degrees(90) }));
+  return doc.save();
+}
+
+test('editLine on a justified line keeps its extent: first word at the start, last word at the end, equal gaps', async () => {
+  const src = await justifiedFixture();
+  const ls = await lines(src);
+  const j = ls.find((l) => l.text.startsWith('Lorem'));
+  for (const text of [J.replace('dolor', 'doloremque'), J.replace('dolor', 'do'), J.replace('dolor sit', 'sit').replace('tempor', 'tempora')]) {
+    const { r, out } = await withDoc(src, (m, doc) => editLine(m, doc, 0, j.id, text, { loadFont }));
+    assert.equal(r.ok, true);
+    assert.equal(r.justified, true, text);
+    const e = (await lines(out)).find((l) => l.text === text);
+    assert.ok(e, JSON.stringify((await lines(out)).map((l) => l.text)));
+    assert.ok(Math.abs(e.bbox[0] - j.bbox[0]) < 0.5 && Math.abs(e.bbox[2] - j.bbox[2]) < 0.5, `${text}: extent ${j.bbox[0]}..${j.bbox[2]} -> ${e.bbox[0]}..${e.bbox[2]}`);
+    assert.equal(e.objects.length, text.split(' ').length, 'one object per word');
+  }
+  // Same word count: the word objects are reused in place.
+  const { out } = await withDoc(src, (m, doc) => editLine(m, doc, 0, j.id, J.replace('dolor', 'doloremque'), { loadFont }));
+  assert.deepEqual((await lines(out)).find((l) => l.text.startsWith('Lorem')).objects, j.objects);
+});
+
+test('editLine: a ragged line keeps its start and natural width; an overflowing justified edit starts at the start', async () => {
+  const src = await justifiedFixture();
+  const ls = await lines(src);
+  const rag = ls.find((l) => l.text === 'Ragged line stays left');
+  const { r, out } = await withDoc(src, (m, doc) => editLine(m, doc, 0, rag.id, 'Ragged line is', { loadFont }));
+  assert.equal(r.ok, true);
+  assert.ok(!r.justified);
+  const e = (await lines(out)).find((l) => l.text === 'Ragged line is');
+  assert.equal(e.objects.length, 1);
+  assert.ok(Math.abs(e.bbox[0] - rag.bbox[0]) < 0.5 && e.bbox[2] < rag.bbox[2] - 3, `${rag.bbox} -> ${e.bbox}`);
+  const j = ls.find((l) => l.text.startsWith('Lorem'));
+  const long = `${J} incididunt ut labore`;
+  const o2 = (await withDoc(src, (m, doc) => editLine(m, doc, 0, j.id, long, { loadFont }))).out;
+  const e2 = (await lines(o2)).find((l) => l.text === long);
+  assert.ok(e2 && Math.abs(e2.bbox[0] - j.bbox[0]) < 0.5 && e2.bbox[2] > j.bbox[2] + 20, `overflow ${e2?.bbox}`);
+});
+
+test('editLine on a justified line rotated 90 degrees lays the words out along the line', async () => {
+  const src = await justifiedFixture();
+  const v = (await lines(src)).find((l) => l.text.startsWith('Turned'));
+  assert.equal(v.rotation, 90);
+  const text = 'Turned words spread along this line up the page side';
+  const { r, out } = await withDoc(src, (m, doc) => editLine(m, doc, 0, v.id, text, { loadFont }));
+  assert.equal(r.justified, true);
+  const e = (await lines(out)).find((l) => l.text === text);
+  assert.ok(e, JSON.stringify((await lines(out)).map((l) => l.text)));
+  assert.ok(Math.abs(e.bbox[1] - v.bbox[1]) < 0.5 && Math.abs(e.bbox[3] - v.bbox[3]) < 0.5 && Math.abs(e.bbox[0] - v.bbox[0]) < 0.5, `${v.bbox} -> ${e.bbox}`);
+});
+
+// A bold table label beside body text on the same baseline, one em apart: two lines (editing the body must
+// not touch the label). Same-font words that far apart still form one line (a justified line in words).
+test('textLines: a different font one em away is another line; the same font stays one line', async () => {
+  const doc = await PDFDocument.create();
+  const helv = await doc.embedFont(StandardFonts.Helvetica), bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const p = doc.addPage([612, 792]);
+  p.drawText('Liability for KPI', { x: 50, y: 600, size: 12, font: bold });
+  p.drawText('The KPI provisions apply.', { x: 50 + bold.widthOfTextAtSize('Liability for KPI', 12) + 12, y: 600, size: 12, font: helv });
+  p.drawText('Wide', { x: 50, y: 500, size: 12, font: helv });
+  p.drawText('gap', { x: 50 + helv.widthOfTextAtSize('Wide', 12) + 12, y: 500, size: 12, font: helv });
+  const ls = await lines(await doc.save());
+  const texts = ls.map((l) => l.text.trim());
+  assert.ok(texts.includes('Liability for KPI') && texts.includes('The KPI provisions apply.'), JSON.stringify(texts));
+  assert.ok(texts.includes('Wide gap'), JSON.stringify(texts));
 });
