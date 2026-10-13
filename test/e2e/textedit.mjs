@@ -3,7 +3,10 @@
 // tool (D) edits ORIGINAL text line by line with PDFium. Click a line, type, Enter -> the tab bytes
 // (read with pdf.js) have the new text and not the old, the next line is untouched; page Undo/Redo
 // swap it back and forth; Esc cancels without a history entry; a subset-embedded Carlito line gets a
-// substitute font (toast) without U+0000; a /Rotate 90 page edits the clicked line. Prints "TEXTEDIT OK".
+// substitute font (toast) without U+0000; a /Rotate 90 page edits the clicked line; a justified line drawn as
+// word runs spanning x 72 -> 540 keeps that extent after a word gets longer, re-applying identical text
+// (whitespace aside) leaves tab.bytes and the undo history alone, and a ragged line keeps its start and natural
+// width. Prints "TEXTEDIT OK".
 import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
@@ -17,6 +20,8 @@ const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 
+const JUST = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor';
+let helvWidth = null; // (text, size) -> width, set by makePdf
 async function makePdf() {
   const doc = await PDFDocument.create();
   doc.registerFontkit(fontkit);
@@ -30,6 +35,13 @@ async function makePdf() {
   q.setRotation(degrees(90));
   q.drawText('Rotated alpha line', { x: 50, y: 700, size: 14, font: helv });
   q.drawText('Rotated beta line', { x: 50, y: 600, size: 14, font: helv });
+  const j = doc.addPage([612, 792]);
+  const words = JUST.split(' '), ws = words.map((w) => helv.widthOfTextAtSize(w, 12));
+  const gap = (540 - 72 - ws.reduce((a, w) => a + w, 0)) / (words.length - 1);
+  let x = 72;
+  words.forEach((w, k) => { j.drawText(w, { x, y: 700, size: 12, font: helv }); x += ws[k] + gap; });
+  j.drawText('Ragged line stays left', { x: 72, y: 650, size: 12, font: helv });
+  helvWidth = (t, size) => helv.widthOfTextAtSize(t, size);
   return Buffer.from(await doc.save());
 }
 
@@ -62,6 +74,12 @@ try {
   const clientOf = (i, X, Y) => ev(`const { pdfToPage } = await import('/renderer/ui/imgedit-lib.js');
     const pg = await tab.pdfDoc.getPage(arg[0] + 1); const [x, y] = pdfToPage({ view: pg.view, rotate: pg.rotate }, arg[1], arg[2]);
     const c = v.pageToClient(tab, arg[0], x, y); return [c.clientX, c.clientY];`, [i, X, Y]);
+  // [first glyph start, last glyph end] of the pdf.js text items on page n at baseline y.
+  const extentAt = (n, y) => ev(`
+    const d = await v.pdfjs.getDocument({ data: tab.bytes.slice() }).promise;
+    const its = (await (await d.getPage(arg[0])).getTextContent()).items.filter((x) => x.str.trim() && Math.abs(x.transform[5] - arg[1]) < 1);
+    await d.loadingTask.destroy();
+    return [Math.min(...its.map((x) => x.transform[4])), Math.max(...its.map((x) => x.transform[4] + x.width))];`, [n, y]);
   const textOf = (n) => ev(`
     const d = await v.pdfjs.getDocument({ data: tab.bytes.slice() }).promise;
     const t = (await (await d.getPage(arg)).getTextContent()).items.map((x) => x.str).join(' ');
@@ -81,7 +99,7 @@ try {
   const chooser = page.waitForEvent('filechooser');
   await page.click('#btn-open');
   await (await chooser).setFiles({ name: 'invoice.pdf', mimeType: 'application/pdf', buffer: pdf });
-  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs[0]; return t?.numPages === 2 && a.viewer.getOverlaySvg(t, 0); }, null, { timeout: 10_000 });
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs[0]; return t?.numPages === 3 && a.viewer.getOverlaySvg(t, 0); }, null, { timeout: 10_000 });
   await ev('v.setZoom(tab, 1);');
   await settle();
 
@@ -143,6 +161,38 @@ try {
   await waitUndo(before + 2);
   t = await textOf(2);
   check(t.includes('Rotated BETA edited') && t.includes('Rotated alpha line') && !t.includes('beta line'), `rotated edit: ${t}`);
+
+  step = 'justified';
+  await ev('v.scrollToPage(tab, 2);');
+  await settle();
+  check(await openLine(2, 125, 704) === JUST, 'justified line editor value');
+  const just2 = JUST.replace('dolor', 'doloremque');
+  await page.fill('input.te-editor', just2);
+  await page.keyboard.press('Enter');
+  await waitUndo(before + 3);
+  t = await textOf(3);
+  check(t.replace(/\s+/g, ' ').includes(just2), `justified edit text: ${t}`);
+  const ext = await extentAt(3, 700);
+  check(Math.abs(ext[0] - 72) < 1 && Math.abs(ext[1] - 540) < 1, `justified line extent 72..540 -> ${ext.map((n) => n.toFixed(2)).join('..')}`);
+
+  step = 'identical text';
+  await ev('window.__teBytes = tab.bytes;');
+  check(await openLine(2, 125, 704) === just2, 'edited justified line editor value');
+  await page.fill('input.te-editor', `${just2.replace(' ', '  ')} `); // same words, whitespace aside
+  await page.keyboard.press('Enter');
+  await frames();
+  await page.waitForTimeout(500);
+  check(!(await page.$('input.te-editor')), 'Enter left the editor open');
+  check(await ev('return tab.bytes === window.__teBytes;'), 'identical text changed tab.bytes');
+  check(await undoLen() === before + 3, `identical text added an undo step (${await undoLen()})`);
+
+  step = 'ragged';
+  check(await openLine(2, 90, 654) === 'Ragged line stays left', 'ragged line editor value');
+  await page.fill('input.te-editor', 'Ragged line is');
+  await page.keyboard.press('Enter');
+  await waitUndo(before + 4);
+  const rx = await extentAt(3, 650);
+  check(Math.abs(rx[0] - 72) < 1 && Math.abs(rx[1] - (72 + helvWidth('Ragged line is', 12))) < 1, `ragged line extent ${rx.map((n) => n.toFixed(2)).join('..')}`);
 
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('TEXTEDIT OK');

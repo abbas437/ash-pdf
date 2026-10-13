@@ -6,10 +6,15 @@
 //     -> { ok: true, substituted: fontFile | null, widthBefore, widthAfter } | { ok: false, reason }
 // Lines: text objects grouped by baseline (same rotation, baseline within 0.3 x font size, gaps < 1.5 x font size),
 // at top level and inside Form XObjects (reported, not editable). Edit: the first object keeps its matrix, size and
-// colour and takes the new text; the line's other objects are removed. No reflow. Coverage is verified by reading
+// colour and takes the new text; the line's other objects are removed. No reflow. A justified line (word gaps wider
+// than SPREAD_RATIO x a normal space, justify.js) keeps its extent instead: one text object per word, the first
+// starting where the line started, the last ending where it ended, equal gaps (reusing the line's objects in
+// place when it was one object per word; else new objects in the line's font, or the substitute). Coverage is verified by reading
 // the text back: a subset font silently writes missing glyphs as glyph 0 (read back as dropped chars / U+0000), so
 // then the text goes into a new object in a bundled full TrueType font (FONT_FILES) loaded with FPDFText_LoadFont.
 // FPDFPage_GenerateContent rewrites the page's whole content stream; the caller saves (worker.js: full save).
+import { isSpread, layoutWords, lineWords } from './justify.js';
+
 const OBJ_TEXT = 1, OBJ_FORM = 5, FPDF_FONT_TRUETYPE = 2;
 
 /** Bundled substitute fonts (SIL OFL 1.1, @expo-google-fonts/*): file name in renderer/vendor/fonts/edit/ -> node_modules source.
@@ -65,6 +70,7 @@ function api(m) {
     size: (o) => out(1, 'float', (p) => m.FPDFTextObj_GetFontSize(o, p))?.[0] ?? 0,
     color: (o) => out(4, 'i32', (r, g, b, a) => m.FPDFPageObj_GetFillColor(o, r, g, b, a)) ?? [0, 0, 0, 255],
     text: (o, tp) => str((p, len) => m.FPDFTextObj_GetText(o, tp, p, len), (p) => mem.UTF16ToString(p)),
+    glyphWidth: (f, cp, size) => out(1, 'float', (p) => m.FPDFFont_GetGlyphWidth(f, cp, size, p))?.[0] ?? 0,
     fontName: (f) => str((p, len) => m.FPDFFont_GetBaseFontName(f, p, len), (p) => mem.UTF8ToString(p)),
   };
 }
@@ -86,7 +92,7 @@ function collect(m, A, page, tp) {
       const corners = [[bbox[0], bbox[1]], [bbox[2], bbox[3]], [bbox[0], bbox[3]], [bbox[2], bbox[1]]].map(([x, y]) => x * ux + y * uy);
       const name = A.fontName(font);
       found.push({
-        obj: o, path: path.length ? [...path, i] : i, inForm: path.length > 0, container: path.join('/'),
+        obj: o, fontHandle: font, hscale: Math.hypot(T[0], T[1]), dir: [ux, uy], path: path.length ? [...path, i] : i, inForm: path.length > 0, container: path.join('/'),
         text: A.text(o, tp), font: name, rawSize: raw, size: raw * Math.hypot(T[2], T[3]), rot, matrix: M,
         along: [Math.min(...corners), Math.max(...corners)], perp: -T[4] * uy + T[5] * ux, bbox,
         color: A.color(o), embedded: !!m.FPDFFont_GetIsEmbedded(font), subset: /^[A-Z]{6}\+/.test(name),
@@ -149,34 +155,80 @@ export async function editLine(m, doc, pageIndex, lineId, newText, { loadFont } 
     if (!line) return { ok: false, reason: `no line ${lineId} on page ${pageIndex} (the page changed; list the lines again)` };
     if (!line.editable) return { ok: false, reason: line.reason };
     const [first, ...rest] = line.items;
-    const want = String(newText).replace(/\s+/g, '');
-    // Covered = PDFium reads back every character: missing glyphs come back dropped or as U+0000.
-    const covered = (o) => {
+    // Covered = PDFium reads back every character of each object's text: missing glyphs come back dropped or as U+0000.
+    const covered = (objs, texts) => {
       const tp = m.FPDFText_LoadPage(page);
-      try { const got = A.text(o, tp); return !/[\u0000�]/.test(got) && got.replace(/\s+/g, '') === want; } finally { m.FPDFText_ClosePage(tp); }
+      try { return objs.every((o, i) => { const got = A.text(o, tp); return !/[\u0000�]/.test(got) && got.replace(/\s+/g, '') === String(texts[i]).replace(/\s+/g, ''); }); } finally { m.FPDFText_ClosePage(tp); }
     };
-    const setText = (o) => { const p = A.wide(String(newText)); try { return !!m.FPDFText_SetText(o, p); } finally { A.free(p); } };
-    let target = first.obj, substituted = null;
-    if (!setText(first.obj) || !covered(first.obj)) {
-      substituted = substituteFont(first.font);
-      if (!loadFont) throw new Error(`textedit: font ${substituted} needed but no loadFont given`);
-      const ttf = await loadFont(substituted);
+    const setText = (o, text = newText) => { const p = A.wide(String(text)); try { return !!m.FPDFText_SetText(o, p); } finally { A.free(p); } };
+    const indexOf = (obj) => Array.from({ length: m.FPDFPage_CountObjects(page) }, (_, i) => m.FPDFPage_GetObject(page, i)).indexOf(obj);
+    const substitute = async () => {
+      const file = substituteFont(first.font);
+      if (!loadFont) throw new Error(`textedit: font ${file} needed but no loadFont given`);
+      const ttf = await loadFont(file);
       const p = A.bytes(ttf);
       try { font = m.FPDFText_LoadFont(doc, p, ttf.length, FPDF_FONT_TRUETYPE, true); } finally { A.free(p); }
-      if (!font) throw new Error(`textedit: FPDFText_LoadFont failed for ${substituted}`);
-      target = m.FPDFPageObj_CreateTextObj(doc, font, first.rawSize);
+      if (!font) throw new Error(`textedit: FPDFText_LoadFont failed for ${file}`);
+      return file;
+    };
+    /** New text objects in `f` at the first object's matrix, size and colour, inserted from z-index `at` on. */
+    const create = (f, texts, at) => texts.map((text, k) => {
+      const o = m.FPDFPageObj_CreateTextObj(doc, f, first.rawSize);
       const mp = A.bytes(new Uint8Array(new Float32Array(first.matrix).buffer));
-      try { m.FPDFPageObj_SetMatrix(target, mp); } finally { A.free(mp); }
+      try { m.FPDFPageObj_SetMatrix(o, mp); } finally { A.free(mp); }
       const [r, g, b, a] = first.color;
-      m.FPDFPageObj_SetFillColor(target, r, g, b, a);
-      setText(target);
-      const at = Array.from({ length: m.FPDFPage_CountObjects(page) }, (_, i) => m.FPDFPage_GetObject(page, i)).indexOf(first.obj);
-      m.FPDFPage_InsertObjectAtIndex(page, target, at); // same z-order as the replaced object
-      rest.unshift(first);
-      if (!covered(target)) throw new Error(`textedit: ${substituted} does not cover "${newText}"`);
+      m.FPDFPageObj_SetFillColor(o, r, g, b, a);
+      setText(o, text);
+      m.FPDFPage_InsertObjectAtIndex(page, o, at + k);
+      return o;
+    });
+    const drop = (objs) => { for (const o of objs) { m.FPDFPage_RemoveObject(page, o); m.FPDFPageObj_Destroy(o); } };
+    const [u, v] = first.dir;
+    const along = (o) => { const [l, b, r, t] = A.bounds(o); const c = [l * u + b * v, r * u + b * v, l * u + t * v, r * u + t * v]; return [Math.min(...c), Math.max(...c)]; };
+    const generate = () => { if (!m.FPDFPage_GenerateContent(page)) throw new Error(`pdfium: FPDFPage_GenerateContent failed on page ${pageIndex}`); };
+
+    // Justified line: lay the new words out across the line's original extent (justify.js).
+    const inked = line.items.filter((o) => o.text.trim() && o.along[1] > o.along[0]);
+    const oldWords = lineWords(line.text), newWords = lineWords(newText);
+    const space = (f, o = first) => (A.glyphWidth(f, 32, o.rawSize) * o.hscale) || 0.25 * o.size;
+    const advance = (o) => [...o.text].reduce((w, ch) => w + (/\s/.test(ch) ? 0 : A.glyphWidth(o.fontHandle, ch.codePointAt(0), o.rawSize)), 0) * o.hscale;
+    const start = Math.min(...inked.map((o) => o.along[0])), end = Math.max(...inked.map((o) => o.along[1]));
+    if (inked.length && newWords.length > 1
+      && isSpread({ extent: end - start, wordsWidth: line.items.reduce((w, o) => w + advance(o), 0), gaps: oldWords.length - 1, space: space(first.fontHandle) })) {
+      let words = null, wordFont = first.fontHandle, substituted = null, removed = line.items.map((o) => o.obj);
+      if (line.items.length === newWords.length && line.items.every((o) => lineWords(o.text).length === 1)) {
+        // One object per word: each keeps its own font, size and colour and takes its new word.
+        const objs = line.items.map((o) => o.obj);
+        if (objs.every((o, k) => setText(o, newWords[k])) && covered(objs, newWords)) { words = objs; removed = []; } else line.items.forEach((o) => setText(o.obj, o.text));
+      }
+      if (!words) {
+        words = create(first.fontHandle, newWords, indexOf(first.obj));
+        if (!covered(words, newWords)) {
+          drop(words);
+          substituted = await substitute();
+          wordFont = font;
+          words = create(font, newWords, indexOf(first.obj));
+          if (!covered(words, newWords)) throw new Error(`textedit: ${substituted} does not cover "${newText}"`);
+        }
+      }
+      drop(removed);
+      const ink = words.map(along);
+      const { positions } = layoutWords({ start, end, widths: ink.map(([a, b]) => b - a), space: space(wordFont) });
+      words.forEach((o, k) => { const d = positions[k] - ink[k][0]; m.FPDFPageObj_Transform(o, 1, 0, 0, 1, d * u, d * v); });
+      generate();
+      const span = words.map(along);
+      return { ok: true, substituted, justified: true, widthBefore: end - start, widthAfter: Math.max(...span.map((a) => a[1])) - Math.min(...span.map((a) => a[0])) };
     }
-    for (const o of rest) { m.FPDFPage_RemoveObject(page, o.obj); m.FPDFPageObj_Destroy(o.obj); }
-    if (!m.FPDFPage_GenerateContent(page)) throw new Error(`pdfium: FPDFPage_GenerateContent failed on page ${pageIndex}`);
+
+    let target = first.obj, substituted = null;
+    if (!setText(first.obj) || !covered([first.obj], [newText])) {
+      substituted = await substitute();
+      [target] = create(font, [newText], indexOf(first.obj)); // same z-order as the replaced object
+      rest.unshift(first);
+      if (!covered([target], [newText])) throw new Error(`textedit: ${substituted} does not cover "${newText}"`);
+    }
+    drop(rest.map((o) => o.obj));
+    generate();
     const after = A.bounds(target);
     return { ok: true, substituted, widthBefore: line.bbox[2] - line.bbox[0], widthAfter: after ? after[2] - after[0] : null };
   } finally {
