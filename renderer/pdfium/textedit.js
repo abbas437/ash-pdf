@@ -107,9 +107,14 @@ function group(objs, pageIndex) {
   const lines = [];
   for (const o of [...objs].sort((a, b) => a.along[0] - b.along[0])) {
     const s = o.size || 1;
-    const line = lines.find((L) => L.container === o.container && L.rot === o.rot && Math.abs(L.perp - o.perp) < 0.3 * Math.max(s, L.size)
-      && o.along[0] - L.end < 1.5 * Math.max(s, L.size) && o.along[1] > L.end - 0.01);
-    if (line) { line.items.push(o); line.end = Math.max(line.end, o.along[1]); } else lines.push({ container: o.container, rot: o.rot, perp: o.perp, size: s, end: o.along[1], items: [o] });
+    // A wide gap joins runs only in the same font and size (a justified line split into words); a different
+    // font after a gap of more than half an em is another column or cell (a bold label beside body text).
+    const line = lines.find((L) => {
+      if (L.container !== o.container || L.rot !== o.rot || Math.abs(L.perp - o.perp) >= 0.3 * Math.max(s, L.size) || !(o.along[1] > L.end - 0.01)) return false;
+      const sameFont = L.font === o.font && Math.abs(L.lastSize - s) <= 0.05 * Math.max(s, L.lastSize);
+      return o.along[0] - L.end < (sameFont ? 1.5 : 0.5) * Math.max(s, L.size);
+    });
+    if (line) { line.items.push(o); line.end = Math.max(line.end, o.along[1]); line.font = o.font; line.lastSize = s; } else lines.push({ container: o.container, rot: o.rot, perp: o.perp, size: s, end: o.along[1], font: o.font, lastSize: s, items: [o] });
   }
   return lines.map(({ items }) => {
     const first = items[0];
