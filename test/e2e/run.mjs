@@ -145,7 +145,7 @@ try {
   await ev('v.scrollToPage(tab, 0);');
   const b0 = await box(0), bR = await box(ROTATED);
   check(bR.w > bR.h && b0.h > b0.w, 'the /Rotate 90 page should be landscape, page 1 portrait');
-  await page.click('#btn-rotr');
+  await ev('v.rotateView(tab, 90);'); // View > Rotate view (display only)
   await settle();
   const b0r = await box(0), bRr = await box(ROTATED);
   near(b0r.w, b0.h, 0.5, 'page 1 width after view rotation'); near(b0r.h, b0.w, 0.5, 'page 1 height after view rotation');
@@ -155,9 +155,21 @@ try {
   await waitRendered(ROTATED);
   await page.screenshot({ path: join(OUT, 'rotated.png') });
   await ev('v.setZoom(tab, 1);');
-  await page.click('#btn-rotl');
+  await ev('v.rotateView(tab, -90);');
   await settle();
   near((await box(0)).w, b0.w, 0.5, 'page 1 width after rotating back');
+  check(!(await ev('return tab.dirty;')), 'view rotation must not change the document');
+
+  step = 'toolbar rotate turns the page itself (saved)';
+  await ev('v.scrollToPage(tab, 0);');
+  await page.click('#btn-rotr');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.dirty && t.pages?.[0]?.rotate === 90; }, null, { timeout: 15000 });
+  const rotBytes = await ev('return Array.from(tab.bytes);');
+  const { PDFDocument: PD } = await import('pdf-lib');
+  const rd = await PD.load(new Uint8Array(rotBytes));
+  check(rd.getPage(0).getRotation().angle === 90, `page 1 /Rotate in the bytes: ${rd.getPage(0).getRotation().angle}`);
+  await page.keyboard.press('Control+z');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.pages?.[0]?.rotate === 0; }, null, { timeout: 15000 });
 
   step = 'coordinates';
   // Ground truth: a page-space point (x, y) on a W x H page shows at local CSS offset

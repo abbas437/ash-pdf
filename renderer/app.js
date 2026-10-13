@@ -26,7 +26,7 @@ import { initComments } from './ui/comments.js';
 import { initSignatures } from './ui/signatures.js';
 import { initSign } from './ui/sign.js';
 import { initForms } from './ui/forms.js';
-import { initPageTools, idle as pageOpsIdle } from './ui/pagetools.js';
+import { initPageTools, idle as pageOpsIdle, rotate as rotatePages, selectionOf } from './ui/pagetools.js';
 import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
 import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextras.js';
@@ -390,6 +390,9 @@ zoomSelect.addEventListener('change', () => {
   const tab = activeTab();
   if (tab && zoomSelect.value !== 'custom') viewer.setZoom(tab, /^fit/.test(zoomSelect.value) ? zoomSelect.value : Number(zoomSelect.value));
 });
+// Toolbar rotate: the current page, or the pages selected in the thumbnails, as a saved, undoable change.
+// (View > Rotate view turns the display only.)
+const rotatePagesBy = (tab, delta) => rotatePages(tab, selectionOf(tab), delta);
 const withTab = (fn) => () => { const t = activeTab(); if (t) fn(t); };
 const themeBtn = btn('moon', 'Dark theme', () => setTheme(state.theme === 'dark' ? 'light' : 'dark'), { id: 'theme-toggle' });
 const findBtn = btn('search', 'Find (Ctrl+F)', () => bus.emit('search:open', {}), { id: 'btn-find' });
@@ -398,7 +401,7 @@ buildToolbar(toolbar, [
     btn('saveAs', 'Save as (Ctrl+Shift+S)', withTab((t) => saveTab(t, true)), { id: 'btn-saveas' }), btn('print', 'Print (Ctrl+P)', withTab(printTab), { id: 'btn-print' })],
   [btn('prev', 'Previous page (Page Up)', withTab(viewer.prevPage), { id: 'btn-prev' }), btn('next', 'Next page (Page Down)', withTab(viewer.nextPage), { id: 'btn-next' }), h('span.page-box', {}, pageInput, pageTotal)],
   [btn('zoomOut', 'Zoom out (Ctrl+-)', withTab((t) => viewer.zoomOut(t)), { id: 'btn-zoomout' }), zoomSelect, btn('zoomIn', 'Zoom in (Ctrl+=)', withTab((t) => viewer.zoomIn(t)), { id: 'btn-zoomin' })],
-  [btn('rotateLeft', 'Rotate view left', withTab((t) => viewer.rotateView(t, -90)), { id: 'btn-rotl' }), btn('rotateRight', 'Rotate view right', withTab((t) => viewer.rotateView(t, 90)), { id: 'btn-rotr' })],
+  [btn('rotateLeft', 'Rotate page left (selected pages, saved with the file)', withTab((t) => rotatePagesBy(t, -90)), { id: 'btn-rotl' }), btn('rotateRight', 'Rotate page right (selected pages, saved with the file)', withTab((t) => rotatePagesBy(t, 90)), { id: 'btn-rotr' })],
   [findBtn, btn('sidebar', 'Show / hide sidebar (Ctrl+B)', () => { state.sidebarOpen = !state.sidebarOpen; }, { id: 'btn-sidebar' }), themeBtn],
 ], optionsBar);
 // The Select tool is the default, always-available tool.

@@ -123,12 +123,12 @@ try {
   await page.selectOption('.zoom-select', '1.5'); await settle();
   await geometry('zoom 150%');
   step = 'geometry rotation 90';
-  await page.selectOption('.zoom-select', '1'); await page.click('#btn-rotr'); await settle();
+  await page.selectOption('.zoom-select', '1'); await ev('v.rotateView(tab, 90);'); await settle();
   await geometry('view rotation 90');
   await ev('v.scrollToPage(tab, 0);'); await settle();
   await page.waitForTimeout(300);
   await page.screenshot({ path: join(OUT, 'forms-rot90.png') });
-  await page.click('#btn-rotl'); await settle();
+  await ev('v.rotateView(tab, -90);'); await settle();
 
   step = 'fill';
   await ev('v.scrollToPage(tab, 0);'); await settle();
