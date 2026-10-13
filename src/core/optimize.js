@@ -2,9 +2,10 @@
 //
 // optimizePdf(bytes, { maxDpi, quality, decodeImage, encodeJpeg }) -> { bytes, before, after, imagesRecompressed, skipped }
 //
-// Candidates are image XObjects that are 8-bit DeviceRGB / DeviceGray, filtered by DCTDecode (JPEG) or
-// FlateDecode without DecodeParms. Anything else is left byte-identical: soft masks and stencil masks
-// (and the images that carry them), /Decode arrays, Indexed / ICC / CMYK / Lab colour spaces, JPX / JBIG2 /
+// Candidates are 8-bit image XObjects filtered by DCTDecode (JPEG) or
+// FlateDecode without DecodeParms, in DeviceRGB / DeviceGray or an ICCBased RGB / gray profile. Anything else
+// is left byte-identical: soft masks and stencil masks (and the images that carry them), /Decode arrays,
+// Indexed / CMYK / Lab colour spaces, JPX / JBIG2 /
 // CCITT, other bit depths, streams smaller than MIN_BYTES.
 //
 // Placed size: the core does not walk content streams for the CTM. It assumes an image can be shown no
@@ -55,6 +56,23 @@ function num(dict, key) {
   return v instanceof PDFNumber ? v.asNumber() : null;
 }
 
+/**
+ * 'gray' | 'rgb' for DeviceGray / DeviceRGB and ICCBased profiles with 1 / 3 components (scanners and
+ * phone apps tag their images with an sRGB or gray profile), else null.
+ */
+function colorModel(dict) {
+  const cs = dict.lookup(N('ColorSpace'));
+  const name = nameOf(cs);
+  if (name === 'DeviceRGB') return 'rgb';
+  if (name === 'DeviceGray') return 'gray';
+  if (cs instanceof PDFArray && cs.size() === 2 && nameOf(cs.lookup(0)) === 'ICCBased') {
+    const profile = cs.lookup(1);
+    const n = profile instanceof PDFStream ? num(profile.dict, 'N') : null;
+    return n === 3 ? 'rgb' : n === 1 ? 'gray' : null;
+  }
+  return null;
+}
+
 /** Why an image stream is not a candidate (null when it is). `maskRefs` are refs used as SMask / Mask. */
 function skipReason(ref, stream, maskRefs) {
   const d = stream.dict;
@@ -62,8 +80,7 @@ function skipReason(ref, stream, maskRefs) {
   if (d.has(N('SMask')) || d.has(N('Mask')) || d.lookup(N('ImageMask'))?.asBoolean?.()) return 'mask';
   if (d.has(N('Decode'))) return 'decode';
   if (num(d, 'BitsPerComponent') !== 8) return 'bits';
-  const cs = nameOf(d.lookup(N('ColorSpace')));
-  if (cs !== 'DeviceRGB' && cs !== 'DeviceGray') return 'colorspace';
+  if (!colorModel(d)) return 'colorspace';
   const filter = singleFilter(d);
   if (filter === 'DCTDecode') {
     if (d.has(N('DecodeParms'))) return 'filter';
@@ -153,7 +170,9 @@ export async function optimizePdf(bytes, { maxDpi = PRESETS.balanced.maxDpi, qua
     if (skipReason(ref, obj, maskRefs) || !(pageSideIn > 0)) { skipped++; continue; }
     const d = obj.dict;
     const w = num(d, 'Width'), h = num(d, 'Height');
-    const gray = nameOf(d.lookup(N('ColorSpace'))) === 'DeviceGray';
+    const model = colorModel(d), gray = model === 'gray';
+    // An RGB profile stays with the (RGB) JPEG; a gray image becomes DeviceRGB (the encoder writes RGB).
+    const iccRgb = model === 'rgb' && !(d.lookup(N('ColorSpace')) instanceof PDFName);
     const dct = singleFilter(d) === 'DCTDecode';
     try {
       const dpi = Math.max(w, h) / pageSideIn;
@@ -170,6 +189,7 @@ export async function optimizePdf(bytes, { maxDpi = PRESETS.balanced.maxDpi, qua
       if (!(jpeg instanceof Uint8Array) || jpeg.length >= obj.getContents().length * MIN_GAIN) { skipped++; continue; }
       const dict = { Type: 'XObject', Subtype: 'Image', Width: ow, Height: oh, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' };
       const next = context.stream(jpeg, dict);
+      if (iccRgb) next.dict.set(N('ColorSpace'), d.get(N('ColorSpace')));
       for (const [k, v] of d.entries()) if (!KEEP_KEYS.has(k.decodeText())) next.dict.set(k, v);
       context.assign(ref, next);
       imagesRecompressed++;

@@ -107,3 +107,28 @@ test('unreferenced objects are dropped', async () => {
   assert.ok(res.after < res.before / 2, `after ${res.after} before ${res.before}`);
   assert.equal((await PDFDocument.load(res.bytes)).getPageCount(), 1);
 });
+
+// Scanner / phone-app output: a Flate RGB image tagged with an ICC profile (Ahmad's timesheet: 2.7 MB, skipped before)
+test('an ICCBased RGB Flate scan is recompressed and keeps its profile', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([600, 800]);
+  const w = 500, h = 660, raw = new Uint8Array(w * h * 3);
+  let seed = 7; const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32);
+  for (let i = 0; i < w * h; i++) { const x = i % w, y = (i / w) | 0; for (let k = 0; k < 3; k++) raw[i * 3 + k] = 120 + ((x + y * (k + 1)) % 90) + rnd() * 30; } // scan-like: texture + sensor noise
+  const icc = doc.context.flateStream(new Uint8Array(400).fill(7), { N: 3 });
+  const iccRef = doc.context.register(icc);
+  const img = doc.context.flateStream(raw, { Type: 'XObject', Subtype: 'Image', Width: w, Height: h, BitsPerComponent: 8, ColorSpace: [PDFName.of('ICCBased'), iccRef], Interpolate: true });
+  const imgRef = doc.context.register(img);
+  page.node.setXObject(PDFName.of('Im1'), imgRef);
+  const content = doc.context.flateStream(new TextEncoder().encode(`q ${w} 0 0 ${h} 50 70 cm /Im1 Do Q`));
+  page.node.set(PDFName.of('Contents'), doc.context.register(content));
+  const bytes = await doc.save();
+  const r = await optimizePdf(bytes, { ...PRESETS.balanced, ...codec });
+  assert.equal(r.imagesRecompressed, 1);
+  assert.ok(r.after < r.before * 0.5, `${r.before} -> ${r.after}`);
+  const out = await PDFDocument.load(r.bytes);
+  const [[, s]] = imageStreams(out);
+  assert.equal(s.dict.get(PDFName.of('Filter')), PDFName.of('DCTDecode'));
+  const cs = s.dict.lookup(PDFName.of('ColorSpace'));
+  assert.equal(String(cs.lookup(0)), '/ICCBased');
+});
