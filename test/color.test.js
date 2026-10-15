@@ -19,7 +19,8 @@ test('contrastRatio follows WCAG', () => {
   assert.ok(Math.abs(contrastRatio('#777777', '#ffffff') - 4.48) < 0.01);
 });
 
-// The toolbar sits on --bg; every group accent must reach 3:1 on it in both themes.
+// The toolbar sits on --bg (the More panel on --surface-2, hovered buttons on --hover, sidebars on --surface);
+// every group accent must reach 3:1 on each in both themes.
 function tokens(block) {
   const out = {};
   for (const m of block.matchAll(/(--[\w-]+)\s*:\s*([^;]+);/g)) out[m[1]] = m[2].trim();
@@ -36,8 +37,10 @@ test('tool group colours reach 3:1 on the toolbar in light and dark', () => {
     for (const g of groups) {
       const c = val(`--grp-${g}`);
       assert.ok(c, `${name}: --grp-${g} missing`);
-      const r = contrastRatio(c, val('--bg'));
-      assert.ok(r >= 3, `${name}: --grp-${g} ${c} on ${val('--bg')} is ${r.toFixed(2)}:1`);
+      for (const under of ['--bg', '--surface', '--surface-2', '--hover']) {
+        const r = contrastRatio(c, val(under));
+        assert.ok(r >= 3, `${name}: --grp-${g} ${c} on ${under} ${val(under)} is ${r.toFixed(2)}:1`);
+      }
       seen.add(c.toLowerCase());
     }
     assert.equal(seen.size, groups.length, `${name}: group colours are not distinct`);
