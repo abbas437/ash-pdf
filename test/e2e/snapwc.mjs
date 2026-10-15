@@ -129,7 +129,7 @@ try {
   await menu('Document', 'word-count');
   await page.waitForSelector('.vx-wc-dialog');
   const bg = await page.$eval('.vx-wc-dialog', (d) => getComputedStyle(d).backgroundColor);
-  eq(bg, 'rgb(31, 42, 37)', 'dark dialog surface');
+  eq(bg, 'rgb(26, 45, 38)', 'dark dialog surface');
   await page.keyboard.press('Escape');
 
   if (problems.length) throw new Error(`page problems:\n${problems.join('\n')}`);

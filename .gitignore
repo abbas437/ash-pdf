@@ -10,3 +10,4 @@ build/libredwg/
 test/e2e/out/*-light.png
 test/e2e/out/*-dark.png
 test/e2e/out/redact-applied.png
+.scratch/
