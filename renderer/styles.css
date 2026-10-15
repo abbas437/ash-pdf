@@ -28,6 +28,7 @@
   color-scheme: dark;
 }
 ::selection { background: var(--selection); color: var(--text); }
+input[type=range], input[type=checkbox], input[type=radio] { accent-color: var(--accent); } /* brass, not the browser's blue */
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
 #app { height: 100%; display: flex; flex-direction: column; position: relative; }
