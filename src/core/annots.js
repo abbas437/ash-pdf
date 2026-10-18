@@ -256,6 +256,13 @@ function readDate(dict, key) {
   }
 }
 
+const READ_ONLY = 64;
+/** the annotation flags /F of an annotation dictionary (0 when absent or not a number) */
+function annotFlags(dict) {
+  const v = dict.lookup(PDFName.of('F'));
+  return v instanceof PDFNumber ? v.asNumber() | 0 : 0;
+}
+
 function readNums(dict, key) {
   const v = dict.lookup(N(key));
   if (!(v instanceof PDFArray)) return undefined;
@@ -492,6 +499,10 @@ function scan(doc) {
   });
   for (const en of all) {
     if (en.irt) en.kind = en.rt === 'Group' ? 'group' : en.subtype === 'Text' ? 'reply' : 'xreply';
+    // /F ReadOnly (64): the annotation must not interact with the user or be changed (PDF 32000 12.5.3). AutoCAD's
+    // plotter writes one per SHX text string ("AutoCAD SHX Text": an invisible Square carrying the text for search);
+    // left out of the editable overlay, they stay in the file untouched.
+    else if (MARKUP.has(en.subtype) && (annotFlags(en.dict) & READ_ONLY)) en.kind = 'readonly';
     else if (MARKUP.has(en.subtype)) en.kind = 'markup';
     else en.kind = 'other';
   }
@@ -1209,7 +1220,7 @@ export async function readAnnotations(pdfBytes) {
   }
   for (const en of sc.all) {
     if (en.kind === 'markup' || shown.has(en)) continue;
-    const reason = { group: 'grouped annotation (RT /Group)', reply: 'reply not shown on its markup (state, or to an unsupported annotation)', xreply: 'reply that is not a Text annotation' }[en.kind];
+    const reason = { readonly: 'read-only annotation (kept as it is in the file)', group: 'grouped annotation (RT /Group)', reply: 'reply not shown on its markup (state, or to an unsupported annotation)', xreply: 'reply that is not a Text annotation' }[en.kind];
     skip(en, reason ?? 'not a supported markup type');
   }
   return { objects, skipped };

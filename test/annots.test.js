@@ -508,3 +508,29 @@ test('writeAnnotations: opacity is in /CA only, not also inside the appearance',
   if (gs) for (const [, v] of gs.dict ?? gs.entries()) { const d = doc.context.lookup(v); for (const k of ['ca', 'CA']) { const n = d.lookup?.(Nm.of(k)); if (n) cas.push(n.asNumber()); } }
   assert.ok(cas.every((c) => c === 1), `appearance opacities ${JSON.stringify(cas)}`);
 });
+
+test('read-only annotations (/F 64, e.g. AutoCAD SHX Text) are not editable objects and survive a save untouched', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([600, 400]);
+  const ctx = doc.context;
+  const shx = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [213, 889 - 600, 204, 915 - 600], T: PDFString.of('AutoCAD SHX Text'), F: 64, Contents: PDFHexString.fromText('ELEC.PANEL'), Border: [0, 0, 0] }));
+  const mine = ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Square', Rect: [100, 100, 200, 150], C: [1, 0, 0], F: 4, NM: PDFHexString.fromText('mine') }));
+  page.node.set(PDFName.of('Annots'), ctx.obj([shx, mine]));
+  const bytes = await doc.save();
+
+  const { objects, skipped } = await readAnnotations(bytes);
+  assert.deepEqual(objects.map((o) => o.note ?? o.source.nm ?? o.id).length, 1, 'only the ordinary markup is an object');
+  assert.equal(objects[0].source.nm, 'mine');
+  const ro = skipped.find((s) => s.subtype === 'Square');
+  assert.ok(ro && /read-only/.test(ro.reason), JSON.stringify(skipped));
+
+  // remove the ordinary markup and add one: the read-only annotation stays, with its text and flags
+  const out = await writeAnnotations(bytes, { remove: [objects[0].id], add: [{ id: 'n', page: 0, type: 'rect', x: 10, y: 10, w: 20, h: 20, stroke: '#0000ff' }] }, OPTS);
+  const back = await PDFDocument.load(out);
+  const annots = back.getPage(0).node.Annots().asArray().map((r) => back.context.lookup(r));
+  const kept = annots.filter((a) => a.lookup(PDFName.of('T'))?.decodeText?.() === 'AutoCAD SHX Text');
+  assert.equal(kept.length, 1, 'SHX text annotation kept');
+  assert.equal(kept[0].lookup(PDFName.of('F')).asNumber(), 64);
+  assert.equal(kept[0].lookup(PDFName.of('Contents')).decodeText(), 'ELEC.PANEL');
+  assert.equal((await readAnnotations(out)).objects.length, 1, 'the new markup only');
+});
