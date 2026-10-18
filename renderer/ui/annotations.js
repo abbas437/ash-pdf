@@ -877,7 +877,11 @@ async function makeView(tab, bytes) {
     const { objects } = await coreWorker.readAnnotations(bytes);
     if (tab.bytes !== bytes) { // superseded: the newer reload reconciles (and these bytes, if they come back, are read again)
       if (views.get(tab)?.bytes === bytes) views.delete(tab);
-      return asIs;
+      // Unless no newer reload exists (a save put its output in tab.bytes without one): the raw copy
+      // installed here shows markups nothing mirrors. Reload the current bytes when it is installed
+      // (commit runs only for the newest reload, so no newer one is pending; that reload's commit finds
+      // tab.bytes unchanged, or supersedes again and reloads again: no loop).
+      return { data: bytes, commit() { if (tab.bytes !== bytes) queueMicrotask(() => bus.emit('tab:bytesChanged', { tab })); } };
     }
     const remove = mirrorIds(tab, objects);
     const data = remove.length ? await coreWorker.writeAnnotations(bytes, { remove }) : bytes;
