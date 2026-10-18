@@ -22,3 +22,17 @@ test('dropSlot / slotToIndex map a pointer position to the final index', () => {
   assert.equal(slotToIndex(1, 1), 1);
   assert.equal(slotToIndex(1, 2), 1);
 });
+
+test('tabsToClose: this / others / left / right / all, in strip order', async () => {
+  const { tabsToClose } = await import('../renderer/ui/tabs-lib.js');
+  const ids = ['a', 'b', 'c', 'd'];
+  assert.deepEqual(tabsToClose(ids, 'c', 'this'), ['c']);
+  assert.deepEqual(tabsToClose(ids, 'c', 'others'), ['a', 'b', 'd']);
+  assert.deepEqual(tabsToClose(ids, 'c', 'left'), ['a', 'b']);
+  assert.deepEqual(tabsToClose(ids, 'c', 'right'), ['d']);
+  assert.deepEqual(tabsToClose(ids, 'c', 'all'), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(tabsToClose(ids, 'a', 'left'), []);
+  assert.deepEqual(tabsToClose(ids, 'd', 'right'), []);
+  assert.deepEqual(tabsToClose(ids, 'x', 'others'), [], 'unknown tab');
+  assert.deepEqual(tabsToClose(ids, 'x', 'all'), ids);
+});

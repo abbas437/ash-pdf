@@ -18,3 +18,19 @@ export function dropSlot(centres, x) {
 
 /** Final index of the dragged tab (`from`) when dropped into insertion slot `slot`. */
 export const slotToIndex = (from, slot) => (slot > from ? slot - 1 : slot);
+
+/**
+ * The tabs a "Close …" command from the tab strip's context menu closes, in strip order.
+ * `which`: 'this' | 'others' | 'left' | 'right' | 'all'; `ids` the strip order, `id` the tab right-clicked.
+ * An unknown id closes nothing (except 'all').
+ */
+export function tabsToClose(ids, id, which) {
+  const k = ids.indexOf(id);
+  if (which === 'all') return [...ids];
+  if (k < 0) return [];
+  if (which === 'this') return [id];
+  if (which === 'others') return ids.filter((x) => x !== id);
+  if (which === 'left') return ids.slice(0, k);
+  if (which === 'right') return ids.slice(k + 1);
+  return [];
+}

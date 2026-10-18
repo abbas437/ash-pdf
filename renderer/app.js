@@ -8,7 +8,7 @@ import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, d
 import { signedSaveMode } from './ui/save-lib.js';
 import { clearBytesHistory } from './ui/pagehistory-lib.js';
 import { viewer } from './ui/viewer.js';
-import { moveItem, dropSlot, slotToIndex } from './ui/tabs-lib.js';
+import { moveItem, dropSlot, slotToIndex, tabsToClose } from './ui/tabs-lib.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
 import { initSplitView } from './ui/splitview.js';
@@ -348,6 +348,70 @@ function startTabDrag(e, tab, el) {
   document.addEventListener('keydown', key, true);
 }
 
+// ---------------------------------------------------------------- tab strip context menu (right-click a tab)
+/** Close several tabs one by one (each unsaved one asks Save / Discard / Cancel); Cancel stops the rest. */
+async function closeTabs(ids) {
+  for (const id of ids) {
+    const t = state.tabs.find((x) => x.id === id);
+    if (t && !(await closeTab(t))) return false;
+  }
+  return true;
+}
+let tabCtx = null;
+function closeTabCtx(refocus = false) {
+  if (!tabCtx) return;
+  const { el, origin } = tabCtx;
+  tabCtx = null;
+  el.remove();
+  document.removeEventListener('mousedown', onTabCtxDown, true);
+  document.removeEventListener('keydown', onTabCtxKey, true);
+  window.removeEventListener('blur', onTabCtxAway);
+  window.removeEventListener('resize', onTabCtxAway);
+  if (refocus && origin?.isConnected) origin.focus();
+}
+function onTabCtxAway() { closeTabCtx(); }
+function onTabCtxDown(e) { if (tabCtx && !tabCtx.el.contains(e.target)) closeTabCtx(); }
+function onTabCtxKey(e) {
+  if (!tabCtx) return;
+  const list = [...tabCtx.el.querySelectorAll('button:not(:disabled)')];
+  const k = list.indexOf(document.activeElement);
+  if (e.key === 'Escape' || e.key === 'Tab') closeTabCtx(true);
+  else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') list[(k + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length]?.focus();
+  else if (e.key === 'Home' || e.key === 'End') list[e.key === 'Home' ? 0 : list.length - 1]?.focus();
+  else return;
+  e.preventDefault();
+  e.stopPropagation();
+}
+function openTabContext(e, t) {
+  e.preventDefault();
+  closeTabCtx();
+  const ids = state.tabs.map((x) => x.id);
+  const item = (key, text, which, shortcut = '') => {
+    const n = tabsToClose(ids, t.id, which).length;
+    return h('button.menu-item', { type: 'button', role: 'menuitem', tabindex: '-1', disabled: n === 0, dataset: { id: key },
+      onclick: () => { closeTabCtx(); closeTabs(tabsToClose(state.tabs.map((x) => x.id), t.id, which)); } }, h('span', {}, text), h('kbd', {}, shortcut));
+  };
+  const el = h('div.ctx-menu.tab-ctx-menu', { role: 'menu', 'aria-label': 'Tabs' },
+    item('close', 'Close', 'this', 'Ctrl+W'),
+    item('close-others', 'Close other tabs', 'others'),
+    item('close-left', 'Close tabs to the left', 'left'),
+    item('close-right', 'Close tabs to the right', 'right'),
+    h('div.menu-sep', { role: 'separator' }),
+    item('close-all', 'Close all tabs', 'all'));
+  document.body.append(el);
+  let x = e.clientX, y = e.clientY;
+  if (!x && !y) { const b = e.currentTarget?.getBoundingClientRect?.() ?? e.target.getBoundingClientRect(); x = b.left + 10; y = b.bottom; }
+  const b = el.getBoundingClientRect();
+  el.style.left = `${Math.max(4, Math.min(x, innerWidth - b.width - 4))}px`;
+  el.style.top = `${Math.max(4, Math.min(y, innerHeight - b.height - 4))}px`;
+  tabCtx = { el, origin: document.activeElement };
+  document.addEventListener('mousedown', onTabCtxDown, true);
+  document.addEventListener('keydown', onTabCtxKey, true);
+  window.addEventListener('blur', onTabCtxAway);
+  window.addEventListener('resize', onTabCtxAway);
+  el.querySelector('button:not(:disabled)')?.focus();
+}
+
 function renderTabs() {
   tabstrip.replaceChildren();
   for (const t of state.tabs) {
@@ -360,6 +424,7 @@ function renderTabs() {
     el.addEventListener('click', () => { if (!justDragged) activate(t.id); });
     el.addEventListener('pointerdown', (e) => startTabDrag(e, t, el));
     el.addEventListener('auxclick', (e) => { if (e.button === 1) { e.preventDefault(); closeTab(t); } });
+    el.addEventListener('contextmenu', (e) => openTabContext(e, t));
     el.addEventListener('keydown', (e) => {
       const k = state.tabs.indexOf(t);
       if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
