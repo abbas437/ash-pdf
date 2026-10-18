@@ -888,7 +888,12 @@ async function makeView(tab, bytes) {
         if (done) return;
         done = true;
         if (views.get(tab)?.bytes === bytes) views.delete(tab);
-        if (tab.bytes === bytes) reconcile(tab, objects, bytes); // else superseded, as above
+        if (tab.bytes === bytes) { reconcile(tab, objects, bytes); return; }
+        // Superseded while this copy was loading, by bytes no reload shows (a save puts its output in
+        // tab.bytes without one): the installed copy lacks markups nothing mirrors. Reload the current
+        // bytes, whose view copy and reconcile match again. (commit runs only for the newest reload, so
+        // a newer one is not pending; that reload's commit finds tab.bytes unchanged: no loop.)
+        queueMicrotask(() => bus.emit('tab:bytesChanged', { tab }));
       },
     };
   } catch (err) {
