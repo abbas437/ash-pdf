@@ -170,18 +170,43 @@ function stepZoom(z, dir) {
 
 // ---------------------------------------------------------------- loading
 /** Load tab.bytes with pdf.js, asking for a password if needed. Throws {cancelled:true} on cancel. */
+// Opening shows the view copy when the core worker has it within OPEN_WAIT_MS (small files: as before);
+// otherwise tab.bytes at once (pdf.js draws its markups), swapping to the view copy when it is ready.
+const OPEN_WAIT_MS = 1000;
 async function openDocument(tab) {
-  const loaded = await loadDocument(tab);
+  const quick = viewBytes && await Promise.race([viewBytes(tab), new Promise((r) => setTimeout(r, OPEN_WAIT_MS, null))]);
+  const loaded = await loadDocument(tab, { showFirst: !quick });
   commitDocument(tab, loaded);
+  if (!quick) swapToView(tab, loaded.bytes);
   return loaded.doc;
 }
 
-/** Load tab.bytes (as they are now) with pdf.js without touching the tab's document state. */
-async function loadDocument(tab) {
+/**
+ * Once the view copy of `bytes` (what openDocument showed) is ready, show it through the reload path
+ * (scroll position and zoom kept); its commit then creates the overlay's mirrored objects. Nothing to
+ * swap when the copy is the bytes themselves; a reload since the open has shown newer bytes already.
+ */
+function swapToView(tab, bytes) {
+  if (!viewBytes) return;
+  const gen = tab.reloadGen ?? 0;
+  viewBytes(tab).then((view) => {
+    if (!tab.pdfDoc || (tab.reloadGen ?? 0) !== gen) return; // closed, or a reload installed newer bytes
+    if (tab.bytes === bytes && view.data === bytes) { view.commit(); return; }
+    if (tab.view) reload(tab); // the view copy, or (bytes changed without a reload, e.g. a save) the newer bytes
+  }).catch((err) => console.warn('Could not prepare the view copy', err));
+}
+
+/**
+ * Load tab.bytes (as they are now) with pdf.js without touching the tab's document state. The data
+ * is the view copy (annotations.js: tab.bytes without the markup annotations the overlay mirrors),
+ * or tab.bytes as they are with showFirst (the copy is then made in the background: swapToView).
+ */
+async function loadDocument(tab, { showFirst = false } = {}) {
   let needed = false;
   let cancelled = false;
-  // The view copy (annotations.js): tab.bytes without the markup annotations the overlay mirrors.
-  const data = viewBytes ? await viewBytes(tab) : tab.bytes;
+  const bytes = tab.bytes;
+  const view = viewBytes && !showFirst ? await viewBytes(tab) : null;
+  const data = view?.data ?? bytes;
   const task = pdfjs.getDocument({
     data: data.slice(),   // pdf.js transfers the buffer to its worker
     password: tab.password ?? undefined,
@@ -206,7 +231,7 @@ async function loadDocument(tab) {
     const meta = await doc.getMetadata().catch(() => null);
     const pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
     const ocConfig = await doc.getOptionalContentConfig().catch(() => null);
-    return { doc, meta, pages, ocConfig, encrypted: needed || !!meta?.info?.EncryptFilterName };
+    return { doc, meta, pages, ocConfig, encrypted: needed || !!meta?.info?.EncryptFilterName, bytes, view };
   } catch (err) {
     destroyDoc(doc);
     throw err;
@@ -214,10 +239,13 @@ async function loadDocument(tab) {
 }
 
 let viewBytes = null;
-/** fn(tab) -> Promise<Uint8Array>: the bytes pdf.js renders instead of tab.bytes. */
+/**
+ * fn(tab) -> Promise<{ data: Uint8Array, commit() }>: the bytes pdf.js renders instead of tab.bytes;
+ * commit() is called when a document loaded from `data` is installed in the tab.
+ */
 function setViewBytes(fn) { viewBytes = fn; }
 
-function commitDocument(tab, { doc, meta, pages, ocConfig, encrypted }) {
+function commitDocument(tab, { doc, meta, pages, ocConfig, encrypted, view }) {
   // Layers (optional content): keep the user's visibility across reloads of the same document.
   if (tab.ocConfig && ocConfig) {
     for (const [id, g] of tab.ocConfig) if (ocConfig.getGroup(id) && ocConfig.getGroup(id).visible !== g.visible) ocConfig.setVisibility(id, g.visible, false);
@@ -230,6 +258,7 @@ function commitDocument(tab, { doc, meta, pages, ocConfig, encrypted }) {
   tab.numPages = doc.numPages;
   tab.pages = pages;
   tab.currentPage = Math.min(tab.currentPage, tab.numPages - 1);
+  view?.commit(); // the overlay mirrors what the installed view copy leaves out
 }
 
 /** (Re)create the scroll container and page elements of a tab. */

@@ -231,16 +231,17 @@ try {
   await page.click('.dialog button[data-value="ok"]');
   await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t?.bytesUndo?.length === 1 && t.objects.length === 1; }, null, { timeout: 10_000 });
   await ev('await new Promise((r) => setTimeout(r, 300));');
-  // Hold the next readAnnotations (the page undo's reload) and the save's writeAnnotations at their
-  // PDFDocument.load, so beforeSave snapshots before the reload re-imports the square, which lands
-  // before the save completes.
+  // Hold the next readAnnotations (the page undo's reload; it runs in the core worker, so it is held at
+  // the worker client) and the save's writeAnnotations at its PDFDocument.load, so beforeSave snapshots
+  // before the reload re-imports the square, which lands before the save completes.
   await ev(`const { PDFDocument: D } = await import('pdf-lib');
+    const { coreWorker } = await import('/renderer/coreworker/client.js');
     const orig = D.load; window.__arm = { readAnnotations: true, writeAnnotations: false }; window.__gate = {};
+    const hold = async (fn) => { if (window.__arm[fn]) { window.__arm[fn] = false; await new Promise((r) => { window.__gate[fn] = r; }); } };
+    const read = coreWorker.readAnnotations;
+    coreWorker.readAnnotations = async (b) => { await hold('readAnnotations'); return read(b); };
     D.load = async function (...a) {
-      const st = new Error().stack;
-      for (const fn of ['readAnnotations', 'writeAnnotations']) if (window.__arm[fn] && st.includes(fn)) {
-        window.__arm[fn] = false; await new Promise((r) => { window.__gate[fn] = r; });
-      }
+      if (new Error().stack.includes('writeAnnotations')) await hold('writeAnnotations');
       return orig.apply(this, a);
     };`);
   await ev('app.pageTools.undo(tab);');

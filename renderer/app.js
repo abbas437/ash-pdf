@@ -8,6 +8,7 @@ import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, d
 import { signedSaveMode } from './ui/save-lib.js';
 import { clearBytesHistory } from './ui/pagehistory-lib.js';
 import { viewer } from './ui/viewer.js';
+import { coreWorker } from './coreworker/client.js';
 import { moveItem, dropSlot, slotToIndex } from './ui/tabs-lib.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
@@ -141,15 +142,26 @@ export async function openBytes({ name, path = null, bytes }) {
   tab.signedPath = null;
   tab.fileBytes = bytes; // what the file at tab.path holds: the prefix of an incremental update
   tab.certified = false; // certified (DocMDP) against annotation changes: no incremental update
-  tab.signatureCheck = import('../src/core/index.js').then(async (core) => {
-    if (!(await core.detectSignatures(bytes)).signed) return;
+  // The pdf-lib checks run in the core worker, skipped only when a raw scan proves there can be no
+  // signature (mayBeSigned: no /Sig*, /ByteRange, /ObjStm or #-escaped name in the bytes). pdf.js
+  // metadata IsSignaturesPresent is no proof: it is only AcroForm /SigFlags bit 1, which a signed file
+  // may lack. A failed check is "unknown", not "unsigned": the path is treated as signed, so saveTab
+  // still asks before rewriting it. saveTab awaits tab.signatureCheck.
+  let opened;
+  tab.signatureCheck = new Promise((resolve) => { opened = resolve; }).then(async (doc) => {
+    if (!doc || !(await import('../src/core/signatures.js')).mayBeSigned(bytes)) return;
+    if (!(await coreWorker.detectSignatures(bytes)).signed) return;
     tab.signedPath = path;
-    const p = await core.docMdpPermission(bytes);
+    const p = await coreWorker.docMdpPermission(bytes);
     tab.certified = p != null && p < 3;
-  }).catch(() => {});
+  }).catch((err) => {
+    console.warn('Signature check failed; the file is treated as signed', err);
+    tab.signedPath = path;
+  });
   try {
-    await viewer.openDocument(tab);
+    opened(await viewer.openDocument(tab));
   } catch (err) {
+    opened(null);
     if (!err?.cancelled) showError('Could not open the document', new Error(`"${name}": ${err?.message ?? err}`));
     return null;
   }

@@ -124,6 +124,21 @@ try {
   await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return !t.dirty; }, null, { timeout: 5_000 });
   eq(await dialogCount(), 0, 'asked only once per signed original');
 
+  // pdf.js metadata IsSignaturesPresent reads only /SigFlags bit 1: a signed file with /SigFlags 0 or 2 must
+  // still be detected (and its overwrite asked for).
+  for (const sigFlags of [0, 2]) {
+    step = `signed with /SigFlags ${sigFlags}: detected, Save asks`;
+    await openFile(`signed-flags${sigFlags}.pdf`, Buffer.from(await makeSignedPdf({ sigFlags })));
+    eq(await ev('return tab.signedPath === tab.path && !!tab.path;'), true, `signed file with /SigFlags ${sigFlags} detected`);
+    const orig = await fileBytes();
+    await edit();
+    await page.click('#btn-save');
+    await signedDialog();
+    await clickButton('Cancel');
+    await page.waitForSelector('.dialog-backdrop', { state: 'detached', timeout: 5_000 });
+    eq(await fileBytes(), orig, `/SigFlags ${sigFlags}: original untouched after Cancel`);
+  }
+
   step = 'unsigned saves without a dialog';
   await openFile('plain.pdf', plain);
   eq(await ev('return tab.signedPath;'), null, 'unsigned file not flagged');
