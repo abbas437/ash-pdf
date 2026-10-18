@@ -5,6 +5,8 @@
 //  2. The UI thread never stalls for a second (the pdf-lib parses run in the core worker).
 //  3. Afterwards every markup is an overlay object and the document pdf.js shows is the view copy (no markup
 //     annotations left in it: nothing drawn twice).
+//  4. Before the swap to the view copy the overlay holds no mirror objects (pdf.js draws the markups then), and
+//     a zoom and scroll position set before the swap are kept by it.
 // Prints "BIGOPEN OK". Run `node scripts/vendor.js` first.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -82,27 +84,47 @@ try {
     const t0 = performance.now();
     window.ashStudio.openBytes({ name: 'big.pdf', bytes });
     let firstInk = null, reconciled = null;
+    // Before the swap (tab.pdfDoc still the raw document pdf.js draws the markups from) the overlay must hold
+    // no mirror objects (else both draw them). A zoom and scroll position set then must survive the swap.
+    let raw = null, preSwapObjects = 0, set = null;
     while (performance.now() - t0 < 180_000) {
       await new Promise((res) => setTimeout(res, 25));
       const tab = window.ashStudio.state.tabs.find((t) => t.name === 'big.pdf');
       const c = document.querySelector('.page[data-page-index="0"] canvas.page-canvas');
       if (firstInk == null && c && ink(c)) firstInk = performance.now() - t0;
-      if ((tab?.objects?.length ?? 0) >= MARKUPS && document.querySelector('.page[data-page-index="0"].rendered')) { reconciled = performance.now() - t0; break; }
+      if (tab?.pdfDoc && !raw) raw = tab.pdfDoc;
+      if (raw && tab.pdfDoc === raw) {
+        preSwapObjects = Math.max(preSwapObjects, tab.objects.length);
+        if (firstInk != null && !set) {
+          window.ashStudio.viewer.setZoom(tab, 1.5);
+          const sc = tab.view.scrollEl;
+          sc.scrollTop = tab.view.pageEls[5].offsetTop + 123;
+          await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+          set = { zoom: tab.zoom, mode: tab.zoomMode, top: sc.scrollTop, preSwap: tab.pdfDoc === raw };
+        }
+      }
+      if ((tab?.objects?.length ?? 0) >= MARKUPS && raw && tab.pdfDoc !== raw && document.querySelector(`.page[data-page-index="${set ? 5 : 0}"].rendered`)) { reconciled = performance.now() - t0; break; }
     }
     clearInterval(probe);
     const tab = window.ashStudio.state.tabs.find((t) => t.name === 'big.pdf');
     let shownMarkups = 0;
     for (let i = 1; i <= tab.pdfDoc.numPages; i++) shownMarkups += (await (await tab.pdfDoc.getPage(i)).getAnnotations()).filter((a) => /^(Square|Highlight)$/.test(a.subtype)).length;
     const svgObjs = document.querySelectorAll('.page[data-page-index="0"] .overlay-svg [data-obj-id]').length;
-    return { firstInk: firstInk && Math.round(firstInk), reconciled: reconciled && Math.round(reconciled), stall: Math.round(stall), objects: tab.objects.length, shownMarkups, svgObjs, size: bytes.length };
+    const after = { zoom: tab.zoom, mode: tab.zoomMode, top: tab.view.scrollEl.scrollTop, swapped: tab.pdfDoc !== raw };
+    return { firstInk: firstInk && Math.round(firstInk), reconciled: reconciled && Math.round(reconciled), stall: Math.round(stall), objects: tab.objects.length, shownMarkups, svgObjs, size: bytes.length, preSwapObjects, set, after };
   }, MARKUPS);
   check(r.firstInk != null, `page 1 never showed ink: ${JSON.stringify(r)}`);
   check(r.reconciled != null, `the reconcile never finished (${r.objects}/${MARKUPS} objects): ${JSON.stringify(r)}`);
+  check(r.preSwapObjects === 0, `${r.preSwapObjects} overlay objects before the swap, while pdf.js still draws the markups (drawn twice): ${JSON.stringify(r)}`);
   check(r.firstInk < r.reconciled / 2, `first ink only ${r.firstInk} ms, with the reconcile at ${r.reconciled} ms: ${JSON.stringify(r)}`);
   check(r.stall < 1000, `the UI thread stalled for ${r.stall} ms: ${JSON.stringify(r)}`);
   check(r.objects === MARKUPS, `expected ${MARKUPS} overlay objects: ${JSON.stringify(r)}`);
   check(r.shownMarkups === 0, `the displayed document still has ${r.shownMarkups} markups (drawn twice): ${JSON.stringify(r)}`);
   check(r.svgObjs > 0, `the overlay draws no objects on page 1: ${JSON.stringify(r)}`);
+  check(r.set?.preSwap, `the zoom and scroll were not set before the swap: ${JSON.stringify(r)}`);
+  check(r.after.swapped, `the view copy was never swapped in: ${JSON.stringify(r)}`);
+  check(r.after.zoom === r.set.zoom && r.after.mode === 'custom' && r.set.zoom === 1.5, `zoom not kept across the swap: ${JSON.stringify(r)}`);
+  check(r.set.top > 0 && Math.abs(r.after.top - r.set.top) <= 2, `scroll position not kept across the swap: ${JSON.stringify(r)}`);
 
   check(problems.length === 0, `console/page errors: ${problems.join(' | ')}`);
   console.log(`BIGOPEN OK (${(r.size / 1e6).toFixed(1)} MB, first ink ${r.firstInk} ms, reconciled ${r.reconciled} ms, longest stall ${r.stall} ms, ${r.objects} objects, view copy shown)`);
