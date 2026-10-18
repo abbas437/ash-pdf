@@ -31,7 +31,9 @@
 // File mirror: every supported markup annotation in tab.bytes (made by any app) is an editable
 // object here. The viewer renders a VIEW COPY of tab.bytes without the mirrored annotations
 // (viewer.setViewBytes), so the overlay alone draws them; Links, Widgets and unsupported annotations
-// stay in the view copy. Per tab a Map<id, {source, snap}> records which objects mirror an
+// stay in the view copy. Reading and the view copy run in the core worker; on open the viewer shows
+// tab.bytes first (pdf.js draws the markups) and swaps to the view copy when it is ready, and only
+// then are the mirrored objects created. Per tab a Map<id, {source, snap}> records which objects mirror an
 // annotation of tab.bytes and their state there (snap = stable JSON); every reload reconciles it with
 // the bytes (new annotations are imported, unedited mirrors follow the file, missing ones become
 // unsaved objects again).
@@ -48,6 +50,7 @@ import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
 import { setTool } from './toolbar.js';
 import { cloudPath } from '../../src/core/cloud.js';
+import { coreWorker } from '../coreworker/client.js';
 import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from './pagehistory-lib.js';
 import { objectsSummary, unionBox, pasteDelta, clampDelta, pageBox } from './clipboard-lib.js';
 
@@ -845,21 +848,52 @@ function reconcile(tab, read, bytes) {
   if (touched) { bus.emit('annotations:changed', { tab }); updateChrome(); }
 }
 
-/** viewer.setViewBytes: reconcile, then tab.bytes without the mirrored annotations. */
-async function viewBytes(tab) {
-  const bytes = tab.bytes;
-  if (tab.password != null) return bytes; // encrypted: read-only, rendered as is
+/** Ids reconcile(tab, read) leaves in the mirror: the annotations the view copy must not contain. */
+function mirrorIds(tab, read) {
+  const sync = syncOf(tab), count = new Map();
+  for (const r of read) count.set(r.id, (count.get(r.id) ?? 0) + 1);
+  return read.filter((r) => count.get(r.id) === 1 && (sync.has(r.id) || getObject(tab, r.id) || types.has(r.type))).map((r) => r.id);
+}
+
+const views = new WeakMap(); // tab -> { bytes, promise }: the view copy of those bytes, until it is committed
+/**
+ * viewer.setViewBytes: Promise<{ data, commit() }> — data = tab.bytes without the mirrored annotations,
+ * made in the core worker. The viewer calls commit() when it installs `data`: only then is the mirror
+ * reconciled with the bytes, so the overlay never draws an annotation the displayed document still has.
+ * One result per tab and bytes (the viewer's background swap and the reload it starts share it).
+ */
+function viewBytes(tab) {
+  const bytes = tab.bytes, v = views.get(tab);
+  if (v?.bytes === bytes) return v.promise;
+  const promise = makeView(tab, bytes);
+  views.set(tab, { bytes, promise });
+  return promise;
+}
+async function makeView(tab, bytes) {
+  const asIs = { data: bytes, commit() {} };
+  if (tab.password != null) return asIs; // encrypted: read-only, rendered as is
   ensureTab(tab);
   try {
-    const { readAnnotations, writeAnnotations } = await import('../../src/core/index.js');
-    const { objects } = await readAnnotations(bytes);
-    if (tab.bytes !== bytes) return bytes; // superseded: the newer reload reconciles
-    reconcile(tab, objects, bytes);
-    const sync = syncOf(tab), remove = [...new Set(objects.map((r) => r.id))].filter((id) => sync.has(id));
-    return remove.length ? await writeAnnotations(bytes, { remove }) : bytes;
+    const { objects } = await coreWorker.readAnnotations(bytes);
+    if (tab.bytes !== bytes) { // superseded: the newer reload reconciles (and these bytes, if they come back, are read again)
+      if (views.get(tab)?.bytes === bytes) views.delete(tab);
+      return asIs;
+    }
+    const remove = mirrorIds(tab, objects);
+    const data = remove.length ? await coreWorker.writeAnnotations(bytes, { remove }) : bytes;
+    let done = false;
+    return {
+      data,
+      commit() {
+        if (done) return;
+        done = true;
+        if (views.get(tab)?.bytes === bytes) views.delete(tab);
+        if (tab.bytes === bytes) reconcile(tab, objects, bytes); // else superseded, as above
+      },
+    };
   } catch (err) {
     if (err?.code !== 'ENCRYPTED') console.warn('Annotations could not be read; shown as in the file', err);
-    return bytes;
+    return asIs;
   }
 }
 

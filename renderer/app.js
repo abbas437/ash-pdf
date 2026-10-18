@@ -8,6 +8,7 @@ import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, d
 import { signedSaveMode } from './ui/save-lib.js';
 import { clearBytesHistory } from './ui/pagehistory-lib.js';
 import { viewer } from './ui/viewer.js';
+import { coreWorker } from './coreworker/client.js';
 import { moveItem, dropSlot, slotToIndex } from './ui/tabs-lib.js';
 import { buildToolbar, btn, registerTool, setTool, getTool } from './ui/toolbar.js';
 import { initSidebar, registerSidebarTab, showSidebarTab, thumbs, initSidebarResize, setSidebarWidth } from './ui/sidebar.js';
@@ -141,15 +142,21 @@ export async function openBytes({ name, path = null, bytes }) {
   tab.signedPath = null;
   tab.fileBytes = bytes; // what the file at tab.path holds: the prefix of an incremental update
   tab.certified = false; // certified (DocMDP) against annotation changes: no incremental update
-  tab.signatureCheck = import('../src/core/index.js').then(async (core) => {
-    if (!(await core.detectSignatures(bytes)).signed) return;
+  // pdf.js (loaded anyway) answers first: no signature field in the form (its metadata IsSignaturesPresent;
+  // getFieldObjects() leaves out invisible signature fields), not signed. Otherwise the pdf-lib checks run
+  // in the core worker. saveTab awaits tab.signatureCheck.
+  let opened;
+  tab.signatureCheck = new Promise((resolve) => { opened = resolve; }).then(async (doc) => {
+    if (!doc || tab.metadata?.info?.IsSignaturesPresent === false) return;
+    if (!(await coreWorker.detectSignatures(bytes)).signed) return;
     tab.signedPath = path;
-    const p = await core.docMdpPermission(bytes);
+    const p = await coreWorker.docMdpPermission(bytes);
     tab.certified = p != null && p < 3;
   }).catch(() => {});
   try {
-    await viewer.openDocument(tab);
+    opened(await viewer.openDocument(tab));
   } catch (err) {
+    opened(null);
     if (!err?.cancelled) showError('Could not open the document', new Error(`"${name}": ${err?.message ?? err}`));
     return null;
   }
