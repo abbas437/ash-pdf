@@ -142,17 +142,22 @@ export async function openBytes({ name, path = null, bytes }) {
   tab.signedPath = null;
   tab.fileBytes = bytes; // what the file at tab.path holds: the prefix of an incremental update
   tab.certified = false; // certified (DocMDP) against annotation changes: no incremental update
-  // pdf.js (loaded anyway) answers first: no signature field in the form (its metadata IsSignaturesPresent;
-  // getFieldObjects() leaves out invisible signature fields), not signed. Otherwise the pdf-lib checks run
-  // in the core worker. saveTab awaits tab.signatureCheck.
+  // The pdf-lib checks run in the core worker, skipped only when a raw scan proves there can be no
+  // signature (mayBeSigned: no /Sig*, /ByteRange, /ObjStm or #-escaped name in the bytes). pdf.js
+  // metadata IsSignaturesPresent is no proof: it is only AcroForm /SigFlags bit 1, which a signed file
+  // may lack. A failed check is "unknown", not "unsigned": the path is treated as signed, so saveTab
+  // still asks before rewriting it. saveTab awaits tab.signatureCheck.
   let opened;
   tab.signatureCheck = new Promise((resolve) => { opened = resolve; }).then(async (doc) => {
-    if (!doc || tab.metadata?.info?.IsSignaturesPresent === false) return;
+    if (!doc || !(await import('../src/core/signatures.js')).mayBeSigned(bytes)) return;
     if (!(await coreWorker.detectSignatures(bytes)).signed) return;
     tab.signedPath = path;
     const p = await coreWorker.docMdpPermission(bytes);
     tab.certified = p != null && p < 3;
-  }).catch(() => {});
+  }).catch((err) => {
+    console.warn('Signature check failed; the file is treated as signed', err);
+    tab.signedPath = path;
+  });
   try {
     opened(await viewer.openDocument(tab));
   } catch (err) {

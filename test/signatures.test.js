@@ -1,7 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument, PDFHexString, PDFName } from 'pdf-lib';
-import { detectSignatures } from '../src/core/index.js';
+import { detectSignatures, mayBeSigned } from '../src/core/index.js';
 import { makePdf, makeSignedPdf } from './helpers.js';
 
 describe('detectSignatures', () => {
@@ -62,5 +62,27 @@ describe('detectSignatures', () => {
     const copy = bytes.slice();
     await detectSignatures(bytes);
     assert.deepEqual(bytes, copy);
+  });
+});
+
+describe('mayBeSigned (raw scan: false only when no signature can be in the file)', () => {
+  const latin = (s) => new Uint8Array(Buffer.from(s, 'latin1'));
+  test('signed files, whatever /SigFlags says (0, 2, 3, absent object streams too)', async () => {
+    for (const sigFlags of [0, 2, 3]) assert.equal(mayBeSigned(await makeSignedPdf({ sigFlags })), true, `sigFlags ${sigFlags}`);
+    assert.equal(mayBeSigned(await makeSignedPdf({ objectStreams: true })), true, 'object streams');
+  });
+  test('a plain file without object streams or binary data: certainly unsigned', async () => {
+    const doc = await PDFDocument.create();
+    doc.addPage([200, 200]);
+    assert.equal(mayBeSigned(await doc.save({ useObjectStreams: false })), false);
+  });
+  test('names it cannot see past or that may name a signature', () => {
+    assert.equal(mayBeSigned(latin('1 0 obj << /Type /ObjStm /N 3 /First 20 >> stream')), true, 'object stream');
+    assert.equal(mayBeSigned(latin('1 0 obj << /Type /S#69g >> endobj')), true, '#-escaped name');
+    assert.equal(mayBeSigned(latin('1 0 obj <</Type/Sig>> endobj')), true, '/Type/Sig without spaces');
+    assert.equal(mayBeSigned(latin('1 0 obj <</ByteRange[0 1 2 3]>> endobj')), true, '/ByteRange');
+    assert.equal(mayBeSigned(latin('1 0 obj <</SigFlags 0>> endobj')), true, '/SigFlags');
+    assert.equal(mayBeSigned(latin('1 0 obj <</Type/Page/Signer 1/ByteRanges 2/ObjStms 1>> endobj')), true, '/Signer starts with Sig');
+    assert.equal(mayBeSigned(latin('1 0 obj <</Type/Page/ByteRanges 2/ObjStms 1/Si 3>> endobj')), false, 'similar names only');
   });
 });

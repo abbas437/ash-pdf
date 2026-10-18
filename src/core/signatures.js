@@ -29,6 +29,38 @@ export async function detectSignatures(bytes) {
   }
 }
 
+/**
+ * mayBeSigned(bytes) -> boolean: a raw scan of the file's names, fast enough for any size. false only
+ * when the file certainly carries no signature, so the detectSignatures parse can be skipped:
+ *   - A signature is a dictionary in an indirect object (or nested in one) with /ByteRange or /Type /Sig,
+ *     reached from a field with /FT /Sig (AcroForm /SigFlags) or from /Perms; outside object streams
+ *     every such name is literally in the bytes, so none of /Sig* (Sig, SigFlags, SigRef...) and no
+ *     /ByteRange means no signature there.
+ *   - Objects inside an object stream are compressed and invisible to a raw scan; the stream's own
+ *     dictionary (never itself in an object stream) is not, so any /ObjStm means "may be signed".
+ *   - A name may be written with #xx escapes (/S#69g is /Sig): any name holding '#' means "may be signed".
+ * A true result proves nothing (a name in a content stream, an unsigned field): detectSignatures decides.
+ * pdf.js metadata IsSignaturesPresent cannot stand in for this: it is only AcroForm /SigFlags bit 1.
+ */
+export function mayBeSigned(bytes) {
+  if (bytes instanceof ArrayBuffer) bytes = new Uint8Array(bytes);
+  const n = bytes.length;
+  const at = (i, s) => { for (let k = 0; k < s.length; k++) if (bytes[i + k] !== s.charCodeAt(k)) return false; return true; };
+  for (let i = bytes.indexOf(0x2f); i >= 0 && i < n; i = bytes.indexOf(0x2f, i + 1)) { // '/'
+    let j = i + 1;
+    // Name characters: anything but whitespace and delimiters ( ) < > [ ] { } / %
+    for (; j < n; j++) {
+      const c = bytes[j];
+      if (c <= 0x20 || c === 0x28 || c === 0x29 || c === 0x3c || c === 0x3e || c === 0x5b || c === 0x5d || c === 0x7b || c === 0x7d || c === 0x2f || c === 0x25) break;
+      if (c === 0x23) return true; // '#': escaped name
+    }
+    const len = j - i - 1;
+    if ((len >= 3 && at(i + 1, 'Sig')) || (len === 9 && at(i + 1, 'ByteRange')) || (len === 6 && at(i + 1, 'ObjStm'))) return true;
+    i = j - 1;
+  }
+  return false;
+}
+
 function structural(doc) {
   let signed = false;
   let fields = 0;
