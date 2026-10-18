@@ -226,7 +226,7 @@ async function pumpThumbs() {
       canvas.width = Math.max(1, Math.floor(vp.width));
       canvas.height = Math.max(1, Math.floor(vp.height));
       try {
-        await page.render({ canvas, viewport: vp, ...viewer.optionalContent(tab) }).promise;
+        await page.render({ canvas, viewport: vp, annotationMode: viewer.pdfjs.AnnotationMode.ENABLE_FORMS, ...viewer.optionalContent(tab) }).promise;
       } catch (err) {
         T.rendered.delete(i);
         if (gen === T.gen) console.warn(`Thumbnail ${i + 1} failed`, err);

@@ -584,9 +584,16 @@ async function renderPage(tab, i) {
   const task = page.render({ canvas, viewport: vp, transform: out !== 1 ? [out, 0, 0, out, 0, 0] : undefined, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
     ...optionalContent(tab) });
   ps.task = task;
+  // First render of this page: show the canvas while pdf.js draws into it, so a heavy drawing (CAD plots with
+  // hundreds of thousands of strokes) builds up on screen instead of leaving a blank page until it is complete.
+  // A re-render (zoom, rotation) keeps the old canvas until the new one is finished, as before.
+  const progressive = !ps.canvas;
+  if (progressive) { v.pageEls[i].prepend(canvas); ps.canvas = canvas; }
+  const dropProgressive = () => { if (progressive && ps.canvas === canvas) { canvas.remove(); ps.canvas = null; } };
   try {
     await task.promise;
   } catch (err) {
+    dropProgressive();
     freeCanvas(canvas);
     if (err?.name === 'RenderingCancelledException') return;
     throw err;
@@ -596,12 +603,14 @@ async function renderPage(tab, i) {
   // Re-resolve the holder after each await: a pane focus swap moves the view to the other one.
   tab = owner.get(v.scrollEl) ?? tab;
   if (v.destroyed || tab.view !== v || cssScale(tab) !== scale || totalRotation(tab, i) !== vp.rotation) {
+    dropProgressive();
     freeCanvas(canvas);
     if (tab.view && !tab.view.destroyed) schedule(tab);
     return;
   }
   const pageEl = v.pageEls[i];
-  if (ps.canvas) { ps.canvas.replaceWith(canvas); freeCanvas(ps.canvas); }
+  if (ps.canvas === canvas) { /* already shown while drawing */ }
+  else if (ps.canvas) { ps.canvas.replaceWith(canvas); freeCanvas(ps.canvas); }
   else pageEl.prepend(canvas);
   ps.canvas = canvas;
 
