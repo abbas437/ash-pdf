@@ -122,6 +122,48 @@ try {
   r = await call('cancelSearch');
   expect('cancelSearch', r, r === 'ok:true');
 
+  step = 'dialogs start in the folder of the last file opened or saved through a dialog';
+  {
+    const d1 = join(tmp, 'last1'), d2 = join(tmp, 'last2'), d3 = join(tmp, 'last3');
+    for (const d of [d1, d2, d3]) await mkdir(d, { recursive: true });
+    await writeFile(join(d1, 'one.pdf'), pdfBytes);
+    // Each stubbed dialog records the options it was given and returns `result`.
+    const stub = (result) => app.evaluate(({ dialog }, result) => {
+      globalThis.__dlgSeen = [];
+      dialog.showOpenDialog = async (_w, o) => { globalThis.__dlgSeen.push(o.defaultPath ?? null); return result; };
+      dialog.showSaveDialog = async (_w, o) => { globalThis.__dlgSeen.push(o.defaultPath ?? null); return result; };
+    }, result);
+    const seen = () => app.evaluate(() => globalThis.__dlgSeen);
+    const lastDirOnDisk = () => JSON.parse(readFileSync(join(dataDir, 'settings.json'), 'utf8')).lastDir;
+    await stub({ canceled: false, filePaths: [join(d1, 'one.pdf')] });
+    r = await call('openFiles', {});
+    expect('open in d1', r, r.startsWith('ok:') && lastDirOnDisk() === d1);
+    await stub({ canceled: false, filePath: join(d2, 'saved.pdf') });
+    r = await call('saveFile', { defaultPath: 'report-reduced.pdf', bytes: pdfBytes });
+    let s = await seen();
+    expect('save: bare name goes in the last folder', JSON.stringify(s), s[0] === join(d1, 'report-reduced.pdf') && r.startsWith('ok:'));
+    expect('save moves the last folder', lastDirOnDisk(), lastDirOnDisk() === d2);
+    await stub({ canceled: true, filePaths: [] });
+    r = await call('openFiles', {});
+    s = await seen();
+    expect('open starts in the folder of the last save', JSON.stringify(s), s[0] === d2);
+    r = await call('openFolder');
+    s = await seen();
+    expect('folder picker starts in the last folder', JSON.stringify(s), s[0] === d2);
+    await stub({ canceled: false, filePath: join(d2, 'own.pdf') });
+    r = await call('saveFile', { defaultPath: join(d1, 'one.pdf'), bytes: pdfBytes });
+    s = await seen();
+    expect('Save As keeps a full path', JSON.stringify(s), s[0] === join(d1, 'one.pdf'));
+    await stub({ canceled: false, filePaths: [d3] });
+    await call('openFolder');
+    expect('folder picker moves the last folder', lastDirOnDisk(), lastDirOnDisk() === d3);
+    await rm(d3, { recursive: true });
+    await stub({ canceled: true, filePaths: [] });
+    await call('openFiles', {});
+    s = await seen();
+    expect('a deleted last folder falls back to the OS default', JSON.stringify(s), s[0] === null);
+  }
+
   step = 'library ids and limits';
   for (const id of ['../x', 'CON', 'nul', 'Com1', 'LPT9']) {
     r = await call('libraryPut', 'signature', id, { meta: {}, bytes: new Uint8Array([1]) });

@@ -20,6 +20,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { registerOfficeIpc } from './office.js'; // office conversions
 import { ImageExportJobs, planImageExport } from '../src/core/imgexport.js'; // multi-page image export rules
 import { cleanWindowState, isPathString, isPlainObject, pathKey } from './sessionState.js'; // last-session validation
+import { dialogDefaultPath } from './dialogPaths.js'; // where file dialogs start
 
 const APP_NAME = 'ASH PDF Studio';
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // app.asar root when packaged
@@ -75,6 +76,29 @@ function saveSettings() {
     console.error('settings: save failed', err);
   }
 }
+
+// --- File dialogs start in the last folder used through a dialog (settings.lastDir) ----------------
+// Only dialogs move it: files opened by drag-and-drop, the command line or the OS do not.
+const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+function rememberDir(dir) {
+  if (!isPathString(dir) || settings.lastDir === dir) return;
+  settings.lastDir = dir;
+  saveSettings();
+}
+// Every open/save dialog of the app goes through these (office.js gets them as its `dialog`).
+const fileDialog = {
+  async showOpenDialog(win, opts) {
+    const r = await dialog.showOpenDialog(win, { ...opts, defaultPath: dialogDefaultPath(settings.lastDir, opts.defaultPath, isDir) });
+    const first = !r.canceled && r.filePaths?.[0];
+    if (first) rememberDir(opts.properties?.includes('openDirectory') ? first : dirname(first));
+    return r;
+  },
+  async showSaveDialog(win, opts) {
+    const r = await dialog.showSaveDialog(win, { ...opts, defaultPath: dialogDefaultPath(settings.lastDir, opts.defaultPath, isDir) });
+    if (!r.canceled && r.filePath) rememberDir(dirname(r.filePath));
+    return r;
+  },
+};
 
 // --- File capabilities ----------------------------------------------------------------------
 const grantedPaths = new Set();
@@ -548,7 +572,7 @@ async function cacheSet(key, value) {
 }
 function registerAdvancedSearchIpc() {
   handle('dialog:openFolder', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(callerWindow(), { properties: ['openDirectory'] });
+    const { canceled, filePaths } = await fileDialog.showOpenDialog(callerWindow(), { properties: ['openDirectory'] });
     if (canceled || !filePaths[0]) return null;
     grantedFolders.add(pathKey(await realpath(filePaths[0])));
     return { path: filePaths[0] };
@@ -567,7 +591,7 @@ function registerIpc() {
   registerAdvancedSearchIpc();
   handle('dialog:open', async (opts = {}) => {
     if (!isPlainObject(opts)) throw new TypeError('dialog:open options must be an object');
-    const { canceled, filePaths } = await dialog.showOpenDialog(callerWindow(), {
+    const { canceled, filePaths } = await fileDialog.showOpenDialog(callerWindow(), {
       properties: opts.multiple ? ['openFile', 'multiSelections'] : ['openFile'],
       filters: cleanFilters(opts.filters),
     });
@@ -589,7 +613,7 @@ function registerIpc() {
     if (opts.defaultPath !== undefined && (typeof opts.defaultPath !== 'string' || opts.defaultPath.length > 1024)) {
       throw new TypeError('defaultPath must be a string');
     }
-    const { canceled, filePath } = await dialog.showSaveDialog(callerWindow(), {
+    const { canceled, filePath } = await fileDialog.showSaveDialog(callerWindow(), {
       defaultPath: opts.defaultPath,
       filters: cleanFilters(opts.filters),
     });
@@ -605,7 +629,7 @@ function registerIpc() {
   handle('imgexport:begin', async (req) => {
     const plan = planImageExport(req);
     const win = callerWindow();
-    const { canceled, filePaths } = await dialog.showOpenDialog(win, { title: 'Export images to folder', properties: ['openDirectory', 'createDirectory'] });
+    const { canceled, filePaths } = await fileDialog.showOpenDialog(win, { title: 'Export images to folder', properties: ['openDirectory', 'createDirectory'] });
     if (canceled || !filePaths[0]) return null;
     const folder = filePaths[0];
     const existing = (await Promise.all(plan.names.map((n) => lstat(join(folder, n)).then(() => 1, () => 0)))).reduce((a, b) => a + b, 0);
@@ -689,7 +713,7 @@ function registerIpc() {
 
   // File dialog, then the chosen PDFs open as tabs in a new window. false when cancelled.
   handle('app:openInNewWindow', async () => {
-    const { canceled, filePaths } = await dialog.showOpenDialog(callerWindow(), {
+    const { canceled, filePaths } = await fileDialog.showOpenDialog(callerWindow(), {
       properties: ['openFile', 'multiSelections'],
       filters: cleanFilters(undefined),
     });
@@ -990,7 +1014,7 @@ app.whenReady().then(() => {
   registerIpc();
   registerLibraryIpc(); // signature library
   // ---- office conversions (electron/office.js): Word/Excel/PowerPoint <-> PDF through Microsoft Office
-  registerOfficeIpc({ handle, dialog, getWindow: callerWindow, grant, describeFile, isPackaged: app.isPackaged });
+  registerOfficeIpc({ handle, dialog: fileDialog, getWindow: callerWindow, grant, describeFile, isPackaged: app.isPackaged });
   registerHtmlToPdfIpc();
   // ---- end office conversions
   loadSessionAndRecent();
