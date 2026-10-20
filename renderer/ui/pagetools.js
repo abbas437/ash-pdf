@@ -30,7 +30,7 @@ let pendingSelect = null;  // {tab, indices, focus} applied when the thumbnails 
 const range = (n, from = 0) => Array.from({ length: n }, (_, i) => i + from);
 const sorted = (set) => [...set].sort((a, b) => a - b);
 const baseName = (tab) => tab.name.replace(/\.pdf$/i, '');
-const editable = (tab) => !!tab && !tab.readOnly;
+export const editable = (tab) => !!tab && !tab.readOnly;
 
 // ---------------------------------------------------------------- maps
 function shiftMap(n, at, count) { return new Map(range(n).map((i) => [i, i < at ? i : i + count])); }
@@ -91,7 +91,7 @@ export function runOp(tab, label, fn) {
       dropOlderThan(tab, pushCapped(tab.bytesUndo, entry));
       const taken = commit(tab, res.bytes, res.map, res.select, null, res.remove);
       if (res.remove) entry.objs = { restore: taken, remove: [] };
-      offerUndo(tab);
+      offerUndo(tab, res.note);
       return true;
     } catch (err) {
       showError(`${label}: the operation failed`, err);
@@ -157,10 +157,10 @@ function undoRedo(tab, dir) {
 export const undoAny = (tab = activeTab()) => undoRedo(tab, 'undo');
 export const redoAny = (tab = activeTab()) => undoRedo(tab, 'redo');
 
-function offerUndo(tab) {
+function offerUndo(tab, note = 'Pages changed') {
   for (const old of document.querySelectorAll('.pt-toast')) old.remove(); // one undo toast at a time
   const b = h('button.toast-action', { type: 'button', 'aria-label': 'Undo page change' }, 'Undo');
-  const t = toast(h('span.toast-row', {}, h('span', {}, 'Pages changed'), b), { timeout: 6000 });
+  const t = toast(h('span.toast-row', {}, h('span', {}, note), b), { timeout: 6000 });
   t.classList.add('pt-toast');
   const entry = tab.bytesUndo[tab.bytesUndo.length - 1];
   // Only while this change is still the newest one: older entries are undone in time order.
@@ -206,6 +206,31 @@ export function duplicate(tab, sel) {
   return runOp(tab, 'Duplicate pages', async (bytes, n, c) => ({
     bytes: await c.insertPagesFrom(bytes, bytes, sel, at), map: shiftMap(n, at, sel.length), select: range(sel.length, at),
   }));
+}
+
+/**
+ * Insert pages of other documents before page `at` of `tab` (clamped to the end), as one undo step.
+ * sources: [{name, bytes} | {name, tab, indices}] — a `tab` source is read when the step runs (its current
+ * bytes, after any queued page change); `indices` default to every page.
+ */
+export function insertSources(tab, sources, at) {
+  if (!editable(tab) || !sources.length) return Promise.resolve(false);
+  return runOp(tab, 'Insert pages', async (bytes, n, c) => {
+    const start = Math.min(at, n);
+    let out = bytes, k = start;
+    for (const s of sources) {
+      const src = s.tab ? s.tab.bytes : s.bytes;
+      const info = await c.getInfo(src);
+      if (info.isEncrypted) throw new Error(`"${s.name}" is encrypted and its pages cannot be inserted.`);
+      const idx = (s.indices ?? range(info.pageCount)).filter((i) => i < info.pageCount);
+      out = await c.insertPagesFrom(out, src, idx, k);
+      k += idx.length;
+    }
+    const count = k - start;
+    if (!count) return null;
+    const from = sources.length === 1 ? sources[0].name : `${sources.length} files`;
+    return { bytes: out, map: shiftMap(n, start, count), select: range(count, start), note: `Inserted ${count} page${count === 1 ? '' : 's'} from ${from}` };
+  });
 }
 
 export function reorder(tab, order) {
@@ -307,7 +332,11 @@ function openContext(e, { tab, pageIndex }) {
 }
 
 // ---------------------------------------------------------------- thumbnail list: keys + drag
-let drag = null; // {tab, sel, line}
+let drag = null; // {tab, sel, els}: thumbnails dragged from `tab`'s list (moved there, copied into another tab)
+const PAGES_TYPE = 'application/x-ash-pages';
+/** The thumbnail drag `e` carries, while its source tab is open, else null. */
+export const pageDrag = (e) => (drag && e?.dataTransfer?.types?.includes(PAGES_TYPE) && state.tabs.includes(drag.tab) ? drag : null);
+const hasFiles = (e) => !!e.dataTransfer?.types?.includes('Files');
 function onListKey(e) {
   const tab = activeTab();
   if (!tab || !e.target.closest('.thumb') || dialogOpen()) return;
@@ -344,39 +373,53 @@ function wireList({ tab, count }) {
     const i = Number(el.dataset.pageIndex);
     if (!thumbs.selection.has(i)) thumbs.setSelection([i]);
     const sel = sorted(thumbs.selection);
-    e.dataTransfer.effectAllowed = 'move';
-    e.dataTransfer.setData('application/x-ash-pages', JSON.stringify(sel));
-    const line = h('div.thumb-drop-line', { hidden: true, 'aria-hidden': 'true' });
-    list.append(line);
-    drag = { tab, sel, line, els };
+    e.dataTransfer.effectAllowed = 'copyMove';
+    e.dataTransfer.setData(PAGES_TYPE, JSON.stringify(sel));
+    drag = { tab, sel, els };
     for (const k of sel) els[k]?.classList.add('dragging');
+    // On the source itself: once another tab is shown (spring-loaded) this list is out of the document.
+    el.addEventListener('dragend', endDrag, { once: true });
   });
+  // Files from outside, or thumbnails from another tab, are inserted (copies) at the line; thumbnails of
+  // this tab are moved there.
+  let line = null;
   list.addEventListener('dragover', (e) => {
-    if (!drag || drag.tab !== tab) return;
+    const files = hasFiles(e), d = !files && pageDrag(e);
+    if (!files && !d) return;
+    const copy = files || d.tab !== tab;
+    if (copy && !editable(tab)) return;
     e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-    const pos = dropPos(drag.els, e.clientY);
-    const ref = drag.els[Math.min(pos, drag.els.length - 1)];
-    drag.line.hidden = false;
-    drag.line.style.top = `${pos < drag.els.length ? ref.offsetTop - 5 : ref.offsetTop + ref.offsetHeight + 5}px`;
+    e.dataTransfer.dropEffect = copy ? 'copy' : 'move';
+    const pos = dropPos(els, e.clientY);
+    const ref = els[Math.min(pos, els.length - 1)];
+    line ??= h('div.thumb-drop-line', { 'aria-hidden': 'true' });
+    if (!line.isConnected) list.append(line);
+    line.style.top = `${pos < els.length ? ref.offsetTop - 5 : ref.offsetTop + ref.offsetHeight + 5}px`;
+    app.dropHint?.(!copy ? null : files ? `Insert at page ${pos + 1} · drop on the tab bar to open` : `Insert copies at page ${pos + 1}`, e);
     const sc = list.parentElement, r = sc.getBoundingClientRect();
     if (e.clientY < r.top + 30) sc.scrollTop -= 12; else if (e.clientY > r.bottom - 30) sc.scrollTop += 12;
   });
-  list.addEventListener('dragleave', (e) => { if (drag && !list.contains(e.relatedTarget)) drag.line.hidden = true; });
+  list.addEventListener('dragleave', (e) => { if (!list.contains(e.relatedTarget)) { line?.remove(); app.dropHint?.(null); } });
   list.addEventListener('drop', (e) => {
-    if (!drag || drag.tab !== tab) return;
+    const files = hasFiles(e), d = !files && pageDrag(e);
+    if (!files && !d) return;
     e.preventDefault();
     e.stopPropagation();
-    const { sel, els } = drag;
-    const order = moveOrder(els.length, sel, dropPos(els, e.clientY));
+    line?.remove();
+    app.dropHint?.(null);
+    const pos = dropPos(els, e.clientY);
+    if (files) { app.insertDroppedFiles?.(tab, e.dataTransfer.files, pos); return; }
     endDrag();
-    reorder(tab, order);
+    if (d.tab === tab) reorder(tab, moveOrder(els.length, d.sel, pos));
+    else insertSources(tab, [{ name: d.tab.name, tab: d.tab, indices: d.sel }], pos);
   });
   list.addEventListener('dragend', endDrag);
 }
-function endDrag() {
+/** End a thumbnail drag: no drop target is shown any more. */
+export function endDrag() {
+  for (const el of document.querySelectorAll('.thumb-drop-line')) el.remove();
+  app?.clearDrop?.();
   if (!drag) return;
-  drag.line.remove();
   for (const el of drag.els) el.classList.remove('dragging');
   drag = null;
 }
@@ -1133,5 +1176,5 @@ export function initPageTools(appApi) {
   item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
   item('Document', { id: 'apply-redactions', label: 'Apply redactions…', action: withTab((t) => import('./redact.js').then((m) => m.applyRedactionsDialog(t))) },
     (t) => !!t.objects?.some((o) => o.type === 'redactMark'));
-  app.pageTools = { runOp, undo, redo, undoAny, redoAny, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
+  app.pageTools = { runOp, insertSources, undo, redo, undoAny, redoAny, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
 }

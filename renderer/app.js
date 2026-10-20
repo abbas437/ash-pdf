@@ -27,7 +27,7 @@ import { initComments } from './ui/comments.js';
 import { initSignatures } from './ui/signatures.js';
 import { initSign } from './ui/sign.js';
 import { initForms } from './ui/forms.js';
-import { initPageTools, idle as pageOpsIdle, rotate as rotatePages, selectionOf } from './ui/pagetools.js';
+import { initPageTools, idle as pageOpsIdle, rotate as rotatePages, selectionOf, editable, insertSources, pageDrag, endDrag as endPageDrag } from './ui/pagetools.js';
 import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
 import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextras.js';
@@ -617,21 +617,119 @@ for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
 bus.on('tool:changed', ({ tool }) => { viewerHost.style.cursor = getTool(tool)?.cursor ?? ''; });
 
 // ---------------------------------------------------------------- drag & drop, launch files
-window.addEventListener('dragover', (e) => { if (e.dataTransfer?.types?.includes('Files')) { e.preventDefault(); document.body.classList.add('drop-target'); } });
-window.addEventListener('dragleave', (e) => { if (e.target === document.documentElement || !e.relatedTarget) document.body.classList.remove('drop-target'); });
+// PDF files dropped on the page view of an editable document are inserted there (before the page under
+// the pointer in its upper half, after it in its lower half); dropped on the tab strip, on the welcome
+// screen or on a read-only document they open as new tabs. Page thumbnails dragged onto another tab's
+// header switch to it after a short hover; dropped on its pages (or its thumbnails, see pagetools.js)
+// they are copied there, dropped on the header they are appended. Esc cancels (the browser ends the drag).
+const dropLine = h('div.drop-insert-line', { hidden: true, 'aria-hidden': 'true' });
+const dropHintEl = h('div.drop-hint', { hidden: true, role: 'status' });
+document.body.append(dropLine, dropHintEl);
+const SPRING_MS = 600;
+let spring = null; // {id, timer}: the tab a page drag hovers, activated after SPRING_MS
+function dropHint(text, e) {
+  dropHintEl.hidden = !text;
+  dropHintEl.textContent = text ?? '';
+  if (text && e) Object.assign(dropHintEl.style, { left: `${Math.min(e.clientX + 16, innerWidth - dropHintEl.offsetWidth - 8)}px`, top: `${e.clientY + 18}px` });
+}
+function clearDrop() {
+  dropLine.hidden = true;
+  dropHint(null);
+  document.body.classList.remove('drop-target');
+  for (const n of tabstrip.querySelectorAll('.drop-into')) n.classList.remove('drop-into');
+  clearTimeout(spring?.timer);
+  spring = null;
+}
+const hasFiles = (e) => !!e.dataTransfer?.types?.includes('Files');
+const tabById = (id) => state.tabs.find((t) => t.id === id) ?? null;
+const pdfFiles = (list) => {
+  const all = [...(list ?? [])], pdfs = all.filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
+  if (!pdfs.length && all.length) toast('Only PDF files can be opened');
+  return pdfs;
+};
+/** Where a drop at the pointer inserts into the page view under it: {tab, at, line} or null. */
+function viewDropAt(e) {
+  const sc = e.target.closest?.('.viewer-scroll');
+  const tab = sc && tabById(sc.dataset.tabId);
+  const rects = tab ? [...sc.querySelectorAll('.pages > .page')].map((p) => p.getBoundingClientRect()) : [];
+  if (!rects.length) return null;
+  let at = rects.findIndex((r) => e.clientY < r.bottom); // the page under the pointer, or the one after the gap
+  if (at < 0) at = rects.length;
+  else if (e.clientY >= rects[at].top + rects[at].height / 2) at++;
+  const ref = rects[Math.min(at, rects.length - 1)];
+  const top = at === 0 ? ref.top - 4 : at === rects.length ? ref.bottom + 4 : (rects[at - 1].bottom + ref.top) / 2;
+  return { tab, at, line: { left: ref.left, width: ref.width, top } };
+}
+function showLine({ left, width, top }) {
+  Object.assign(dropLine.style, { left: `${left}px`, width: `${width}px`, top: `${top}px` });
+  dropLine.hidden = false;
+}
+function springTo(tabEl) {
+  const id = tabEl?.dataset.tabId;
+  if (spring?.id === id) return;
+  clearTimeout(spring?.timer);
+  spring = id == null ? null : { id, timer: id === state.activeId ? 0 : setTimeout(() => { if (tabById(id)) activate(id); }, SPRING_MS) };
+}
+/** Insert dropped PDF files into `tab` before page index `at` (one undo step); used by the thumbnail list too. */
+async function insertDroppedFiles(tab, list, at) {
+  const files = pdfFiles(list);
+  if (!files.length) return false;
+  const sources = await Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
+  return insertSources(tab, sources, at);
+}
+window.addEventListener('dragover', (e) => {
+  const files = hasFiles(e), pd = !files && pageDrag(e);
+  if (!files && !pd) return;
+  dropLine.hidden = true;
+  const tabEl = e.target.closest?.('.doc-tab'), inStrip = tabstrip.contains(e.target);
+  for (const n of tabstrip.querySelectorAll('.drop-into')) if (n !== tabEl) n.classList.remove('drop-into');
+  if (pd) springTo(tabEl);
+  if (e.defaultPrevented) return; // the thumbnail list shows its own line and hint
+  if (files) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+    document.body.classList.add('drop-target');
+    const v = !inStrip && viewDropAt(e);
+    if (v && editable(v.tab)) { showLine(v.line); dropHint(`Insert at page ${v.at + 1} · drop on the tab bar to open`, e); } else dropHint(state.tabs.length ? 'Open in a new tab' : null, e);
+    return;
+  }
+  const target = tabEl ? tabById(tabEl.dataset.tabId) : null;
+  const v = !inStrip && viewDropAt(e);
+  const n = pd.sel.length, pages = `${n} page${n === 1 ? '' : 's'}`;
+  if (target && target !== pd.tab && editable(target)) {
+    tabEl.classList.add('drop-into');
+    dropHint(`Append ${pages} to ${target.name}`, e);
+  } else if (!tabEl && v && v.tab !== pd.tab && editable(v.tab)) {
+    showLine(v.line);
+    dropHint(`Insert copies at page ${v.at + 1}`, e);
+  } else { dropHint(tabEl && tabEl.dataset.tabId !== state.activeId ? 'Hold to switch to this tab' : null, e); return; }
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+window.addEventListener('dragleave', (e) => { if (e.target === document.documentElement || !e.relatedTarget) clearDrop(); });
+window.addEventListener('dragend', () => { clearDrop(); endPageDrag(); }, true);
+window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (spring || !dropHintEl.hidden)) { clearDrop(); endPageDrag(); } }, true);
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
-  document.body.classList.remove('drop-target');
-  const files = [...(e.dataTransfer?.files ?? [])].filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
-  if (!files.length && e.dataTransfer?.files?.length) toast('Only PDF files can be opened');
-  for (const f of files) await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
+  const files = hasFiles(e), pd = !files && pageDrag(e);
+  const tabEl = e.target.closest?.('.doc-tab'), inStrip = tabstrip.contains(e.target);
+  const v = !inStrip && viewDropAt(e);
+  clearDrop();
+  if (pd) {
+    endPageDrag();
+    const target = tabEl ? tabById(tabEl.dataset.tabId) : v?.tab;
+    if (target && target !== pd.tab && editable(target)) insertSources(target, [{ name: pd.tab.name, tab: pd.tab, indices: pd.sel }], tabEl ? Infinity : v.at);
+    return;
+  }
+  if (v && editable(v.tab)) { await insertDroppedFiles(v.tab, e.dataTransfer?.files, v.at); return; }
+  for (const f of pdfFiles(e.dataTransfer?.files)) await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
 });
 window.addEventListener('beforeunload', (e) => { if (state.tabs.some((t) => t.dirty)) { e.preventDefault(); e.returnValue = ''; } });
 
 bus.on('tab:dirtyChanged', refresh);
 
 // ---------------------------------------------------------------- start-up
-export const app = { state, bus, viewer, registerSidebarTab, showSidebarTab, thumbs, search, openBytes, openDialog, activate, closeTab, saveTab, printTab, showProperties, registerMenuItem, registerTool, setTool, showDialog, toast, markDirty, setTheme, pdfium };
+export const app = { state, bus, viewer, dropHint, clearDrop, insertDroppedFiles, registerSidebarTab, showSidebarTab, thumbs, search, openBytes, openDialog, activate, closeTab, saveTab, printTab, showProperties, registerMenuItem, registerTool, setTool, showDialog, toast, markDirty, setTheme, pdfium };
 window.ashStudio = app;
 initAnnotations();
 initShapeTools();
