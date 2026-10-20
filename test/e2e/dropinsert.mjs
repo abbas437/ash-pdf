@@ -170,6 +170,13 @@ try {
   await fileDrag({ ...p, files: X });
   await page.waitForFunction(() => window.ashStudio.state.tabs.length === 2, null, { timeout: 10_000 });
   eq(await ev('return [tabs[0].numPages, tabs[1].name];'), [3, 'extra.pdf'], 'read-only: opened as a tab');
+  await ev('tabs[1].dirty = false; await app.closeTab(tabs[1]);');
+  await settle(0, 3);
+  p = await thumbAt(1);
+  shown = await fileDrag({ x: p.x + p.width / 2, y: p.y + p.height * 0.8, files: X });
+  eq(shown.hint, 'Open in a new tab', 'hint over a read-only thumbnail list');
+  await page.waitForFunction(() => window.ashStudio.state.tabs.length === 2, null, { timeout: 10_000 });
+  eq(await ev('return [tabs[0].numPages, tabs[1].name];'), [3, 'extra.pdf'], 'read-only thumbnails: opened as a tab');
   await ev('tabs[0].readOnly = false; tabs[1].dirty = false; await app.closeTab(tabs[1]);');
 
   step = 'thumbnail dragged to another tab (spring-loaded) is copied into its thumbnail list';
@@ -247,6 +254,24 @@ try {
   await settle(0, 3);
   eq(await texts(0), ['A 2', 'A 3', 'A 1'], 'A after a same-tab move');
   eq(await ev('return tabs.length;'), 2, 'tab count');
+
+  step = 'source pages changed mid-drag';
+  const beforeB = await texts(1);
+  await page.evaluate(async () => {
+    const app = window.ashStudio, [A, B] = app.state.tabs;
+    const dt = new DataTransfer();
+    const fire = (el, type, x = 0, y = 0) => el.dispatchEvent(new DragEvent(type, { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
+    fire(document.querySelector('.thumb-list .thumb'), 'dragstart');
+    await app.pageTools.deletePages(A, [0], { confirm: false });
+    const tabEl = document.querySelector(`.doc-tab[data-tab-id="${B.id}"]`), r = tabEl.getBoundingClientRect();
+    fire(tabEl, 'dragover', r.left + 5, r.top + 5);
+    fire(tabEl, 'drop', r.left + 5, r.top + 5);
+    fire(tabEl, 'dragend');
+  });
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => t.textContent.includes('changed during the drag')), null, { timeout: 5000 });
+  eq(await texts(1), beforeB, 'B unchanged after a drop of stale pages');
+  await ev('await pt.undoAny(tabs[0]);');
+  await settle(0, 3);
 
   step = 'source tab closed mid-drag';
   const before = await texts(1);

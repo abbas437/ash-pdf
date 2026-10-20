@@ -79,7 +79,20 @@ function saveSettings() {
 
 // --- File dialogs start in the last folder used through a dialog (settings.lastDir) ----------------
 // Only dialogs move it: files opened by drag-and-drop, the command line or the OS do not.
-const isDir = (p) => { try { return statSync(p).isDirectory(); } catch { return false; } };
+// Checked asynchronously with a 1 s limit: an offline mapped drive or UNC share can block a stat for the SMB
+// timeout (tens of seconds), which must not freeze the main process before every dialog.
+async function lastDirUsable() {
+  const dir = settings.lastDir;
+  if (!isPathString(dir)) return false;
+  let timer;
+  const ok = await Promise.race([
+    stat(dir).then((s) => s.isDirectory(), () => false),
+    new Promise((r) => { timer = setTimeout(() => r(false), 1000); }),
+  ]);
+  clearTimeout(timer);
+  return ok;
+}
+const startPath = async (requested) => { const ok = await lastDirUsable(); return dialogDefaultPath(settings.lastDir, requested, () => ok); };
 function rememberDir(dir) {
   if (!isPathString(dir) || settings.lastDir === dir) return;
   settings.lastDir = dir;
@@ -88,13 +101,13 @@ function rememberDir(dir) {
 // Every open/save dialog of the app goes through these (office.js gets them as its `dialog`).
 const fileDialog = {
   async showOpenDialog(win, opts) {
-    const r = await dialog.showOpenDialog(win, { ...opts, defaultPath: dialogDefaultPath(settings.lastDir, opts.defaultPath, isDir) });
+    const r = await dialog.showOpenDialog(win, { ...opts, defaultPath: await startPath(opts.defaultPath) });
     const first = !r.canceled && r.filePaths?.[0];
     if (first) rememberDir(opts.properties?.includes('openDirectory') ? first : dirname(first));
     return r;
   },
   async showSaveDialog(win, opts) {
-    const r = await dialog.showSaveDialog(win, { ...opts, defaultPath: dialogDefaultPath(settings.lastDir, opts.defaultPath, isDir) });
+    const r = await dialog.showSaveDialog(win, { ...opts, defaultPath: await startPath(opts.defaultPath) });
     if (!r.canceled && r.filePath) rememberDir(dirname(r.filePath));
     return r;
   },

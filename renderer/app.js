@@ -720,7 +720,7 @@ window.addEventListener('drop', async (e) => {
   if (pd) {
     endPageDrag();
     const target = tabEl ? tabById(tabEl.dataset.tabId) : v?.tab;
-    if (target && target !== pd.tab && editable(target)) insertSources(target, [{ name: pd.tab.name, tab: pd.tab, indices: pd.sel }], tabEl ? Infinity : v.at);
+    if (target && target !== pd.tab && editable(target)) insertSources(target, [{ name: pd.tab.name, tab: pd.tab, indices: pd.sel, expect: pd.bytes }], tabEl ? Infinity : v.at);
     return;
   }
   if (v && editable(v.tab)) { await insertDroppedFiles(v.tab, e.dataTransfer?.files, v.at); return; }

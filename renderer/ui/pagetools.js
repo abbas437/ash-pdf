@@ -210,7 +210,7 @@ export function duplicate(tab, sel) {
 
 /**
  * Insert pages of other documents before page `at` of `tab` (clamped to the end), as one undo step.
- * sources: [{name, bytes} | {name, tab, indices}] — a `tab` source is read before the step is queued, as
+ * sources: [{name, bytes} | {name, tab, indices, expect?}] — a `tab` source is read before the step is queued, as
  * Save would write it (after any queued page change, with its unsaved annotations); `indices` default to every page.
  */
 export async function insertSources(tab, sources, at) {
@@ -219,6 +219,8 @@ export async function insertSources(tab, sources, at) {
   // here, before the step is queued: currentBytes() waits for idle() and would deadlock inside it.
   const { currentBytes } = await import('./office.js');
   sources = await Promise.all(sources.map(async (s) => (s.tab ? { ...s, bytes: await currentBytes(s.tab) } : s)));
+  // `expect`: the source bytes the page indices refer to (a drag's start); a page change since then moved them.
+  if (sources.some((s) => s.expect && s.tab.bytes !== s.expect)) { toast(`The pages of "${sources.find((s) => s.expect && s.tab.bytes !== s.expect).name}" changed during the drag; drag them again.`); return false; }
   return runOp(tab, 'Insert pages', async (bytes, n, c) => {
     const start = Math.min(at, n);
     let out = bytes, k = start;
@@ -336,7 +338,7 @@ function openContext(e, { tab, pageIndex }) {
 }
 
 // ---------------------------------------------------------------- thumbnail list: keys + drag
-let drag = null; // {tab, sel, els}: thumbnails dragged from `tab`'s list (moved there, copied into another tab)
+let drag = null; // {tab, sel, els, bytes}: thumbnails dragged from `tab`'s list (moved there, copied into another tab)
 const PAGES_TYPE = 'application/x-ash-pages';
 /** The thumbnail drag `e` carries, while its source tab is open, else null. */
 export const pageDrag = (e) => (drag && e?.dataTransfer?.types?.includes(PAGES_TYPE) && state.tabs.includes(drag.tab) ? drag : null);
@@ -379,7 +381,7 @@ function wireList({ tab, count }) {
     const sel = sorted(thumbs.selection);
     e.dataTransfer.effectAllowed = 'copyMove';
     e.dataTransfer.setData(PAGES_TYPE, JSON.stringify(sel));
-    drag = { tab, sel, els };
+    drag = { tab, sel, els, bytes: tab.bytes }; // bytes: `sel` indexes this version of the document
     for (const k of sel) els[k]?.classList.add('dragging');
     // On the source itself: once another tab is shown (spring-loaded) this list is out of the document.
     el.addEventListener('dragend', endDrag, { once: true });
@@ -407,6 +409,7 @@ function wireList({ tab, count }) {
   list.addEventListener('drop', (e) => {
     const files = hasFiles(e), d = !files && pageDrag(e);
     if (!files && !d) return;
+    if ((files || d.tab !== tab) && !editable(tab)) return; // the window handler opens dropped files as a tab
     e.preventDefault();
     e.stopPropagation();
     line?.remove();
@@ -415,7 +418,7 @@ function wireList({ tab, count }) {
     if (files) { app.insertDroppedFiles?.(tab, e.dataTransfer.files, pos); return; }
     endDrag();
     if (d.tab === tab) reorder(tab, moveOrder(els.length, d.sel, pos));
-    else insertSources(tab, [{ name: d.tab.name, tab: d.tab, indices: d.sel }], pos);
+    else insertSources(tab, [{ name: d.tab.name, tab: d.tab, indices: d.sel, expect: d.bytes }], pos);
   });
   list.addEventListener('dragend', endDrag);
 }
