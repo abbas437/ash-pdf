@@ -8,7 +8,7 @@
 //   bus.emit('pages:remapped', {tab, map});  // Map<oldIndex, newIndex|null>, inserted pages have no key
 //   bus.emit('tab:bytesChanged', {tab});      // the viewer reloads
 import { bus } from '../bus.js';
-import { activeTab, markDirty } from '../state.js';
+import { state, activeTab, markDirty } from '../state.js';
 import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen, progressDialog } from './dialogs.js';
 import { thumbs } from './sidebar.js';
@@ -418,26 +418,73 @@ const radioValue = (dlg, name) => dlg.querySelector(`input[name="${name}"]:check
 const num = (input) => (input.value.trim() === '' ? NaN : Number(input.value));
 const CANCEL = { label: 'Cancel', value: 'cancel', cancel: true };
 
+/** A PDF to combine: {name, bytes, pages}; throws for an encrypted file. */
+async function pdfSource(name, bytes) {
+  const info = await (await core()).getInfo(bytes);
+  if (info.isEncrypted) throw Object.assign(new Error(`"${name}" is encrypted and cannot be combined.`), { code: 'ENCRYPTED' });
+  return { name, bytes, pages: info.pageCount };
+}
+
 async function pickPdfs(multiple) {
   const files = await window.api.openFiles({ filters: PDF_FILTER, multiple });
   const out = [];
-  const c = await core();
   for (const f of files ?? []) {
     const bytes = f.bytes instanceof Uint8Array ? f.bytes : await window.api.readFile(f.path);
-    const name = f.name ?? String(f.path).split(/[\\/]/).pop();
-    const info = await c.getInfo(bytes);
-    if (info.isEncrypted) throw Object.assign(new Error(`"${name}" is encrypted and cannot be combined.`), { code: 'ENCRYPTED' });
-    out.push({ name, bytes, pages: info.pageCount });
+    out.push(await pdfSource(f.name ?? String(f.path).split(/[\\/]/).pop(), bytes));
   }
   return out;
 }
 
+/** A dropped File as a PDF source; throws for a non-PDF, unreadable or encrypted file. */
+async function droppedPdf(f) {
+  if (!/\.pdf$/i.test(f.name) && f.type !== 'application/pdf') throw new Error(`"${f.name}" is not a PDF file.`);
+  try { return await pdfSource(f.name, new Uint8Array(await f.arrayBuffer())); } catch (e) {
+    if (e.code === 'ENCRYPTED') throw e;
+    throw new Error(`"${f.name}" could not be read as a PDF.`);
+  }
+}
+
+/**
+ * Files dragged from the file manager onto the dialog go to onFiles(File[]) and are highlighted while
+ * over it; the window-level drop handler (which opens dropped PDFs as tabs) does not see them.
+ */
+function acceptDrops(dlg, onFiles) {
+  const files = (e) => e.dataTransfer?.types?.includes('Files');
+  const over = (on) => dlg.classList.toggle('pt-drop-over', on);
+  const accept = (e) => { if (!files(e)) return; e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'copy'; over(true); };
+  dlg.addEventListener('dragenter', accept);
+  dlg.addEventListener('dragover', accept);
+  dlg.addEventListener('dragleave', (e) => { if (files(e) && !dlg.contains(e.relatedTarget)) over(false); });
+  dlg.addEventListener('drop', (e) => {
+    if (!files(e)) return;
+    e.preventDefault(); e.stopPropagation();
+    over(false);
+    document.body.classList.remove('drop-target'); // set by the window dragover before the pointer reached the dialog
+    if (e.dataTransfer.files.length) onFiles([...e.dataTransfer.files]);
+  });
+}
+
+/** Open documents other than `tab` that can be a source (encrypted ones cannot). */
+const otherTabs = (tab) => state.tabs.filter((t) => t !== tab && !t.readOnly);
+/** The open document as Save would write it (unsaved annotations and form values included). */
+async function tabSource(t) {
+  const { currentBytes } = await import('./office.js');
+  return { ...(await pdfSource(t.name, await currentBytes(t))), tab: t };
+}
+function openDocSelect(id, tab, label, placeholder) {
+  const others = otherTabs(tab);
+  return h('select.input', { id, 'aria-label': label, disabled: !others.length },
+    h('option', { value: '' }, others.length ? placeholder : 'No other open documents'),
+    others.map((t) => h('option', { value: t.id }, `${t.name} (${pagesLabel({ pages: t.numPages })})`)));
+}
+const tabById = (id) => state.tabs.find((t) => t.id === id);
+
 /** Reorderable file list with ↑ / ↓ / remove buttons. */
-function fileList(files, label, describe) {
+function fileList(files, label, describe, empty = 'No files added yet') {
   const ul = h('ul.pt-filelist', { 'aria-label': label });
   const render = () => {
     ul.replaceChildren();
-    if (!files.length) { ul.append(h('li.pt-empty', {}, 'No files added yet')); return; }
+    if (!files.length) { ul.append(h('li.pt-empty', {}, empty)); return; }
     files.forEach((f, k) => {
       const mk = (txt, aria, fn, dis) => {
         const b = h('button.pt-icon-btn', { type: 'button', 'aria-label': `${aria} ${f.name}`, title: aria, disabled: dis }, txt);
@@ -460,24 +507,38 @@ export async function mergeDialog(tab = activeTab()) {
   if (!editable(tab)) return;
   const n = tab.numPages;
   const files = [];
-  const list = fileList(files, 'PDF files to merge', pagesLabel);
+  const list = fileList(files, 'PDF files to merge', pagesLabel, 'No files added yet: drop PDF files here');
   const err = errEl();
+  const added = (picked) => { files.push(...picked); list.render(); };
   const add = h('button.btn', { type: 'button', id: 'pt-merge-add' }, 'Add PDF files…');
   add.addEventListener('click', () => {
-    pickPdfs(true).then((picked) => { files.push(...picked); list.render(); setErr(err, null); })
+    pickPdfs(true).then((picked) => { added(picked); setErr(err, null); })
       .catch((e) => setErr(err, e.message));
   });
+  const open = openDocSelect('pt-merge-open', tab, 'Open document to add', 'Open document…');
+  const addOpen = h('button.btn', { type: 'button', id: 'pt-merge-add-open', disabled: open.disabled }, 'Add open document');
+  addOpen.addEventListener('click', () => {
+    const t = tabById(open.value);
+    if (!t) { setErr(err, 'Choose the open document to add.', open); return; }
+    tabSource(t).then((f) => { added([f]); setErr(err, null); }).catch((e) => setErr(err, e.message));
+  });
+  // Several files at once: the readable PDFs are added in order, the others are named in the error.
+  const onDrop = async (dropped) => {
+    const bad = [];
+    for (const f of dropped) { try { added([await droppedPdf(f)]); } catch (e) { bad.push(e.message); } }
+    setErr(err, bad.length ? bad.join(' ') : null);
+  };
   const after = h('input.input', { type: 'number', min: '1', max: String(n), value: String(n), id: 'pt-merge-after', 'aria-label': 'Insert after page number' });
   const form = h('div.pt-form', {},
-    h('p.pt-hint', {}, `Pages from the chosen files are added to "${tab.name}" (${n} pages), in the order listed.`),
-    h('div.pt-row', {}, add), list.ul,
+    h('p.pt-hint', {}, `Pages from the chosen files are added to "${tab.name}" (${n} pages), in the order listed. You can also drop PDF files on this dialog.`),
+    h('div.pt-row', {}, add), h('div.pt-row', {}, open, addOpen), list.ul,
     h('fieldset.pt-fieldset', {}, h('legend', {}, 'Position'),
       radio('pt-merge-pos', 'end', 'Append at the end', true),
       radio('pt-merge-pos', 'after', 'Insert after page', false, after)),
     err);
   after.addEventListener('focus', () => { form.querySelector('input[value="after"]').checked = true; });
   const v = await showDialog({
-    title: 'Merge PDFs', body: form, className: 'pt-dialog pt-merge', initialFocus: '#pt-merge-add',
+    title: 'Merge PDFs', body: (dlg) => { acceptDrops(dlg, onDrop); return form; }, className: 'pt-dialog pt-merge', initialFocus: '#pt-merge-add',
     buttons: [CANCEL, { label: 'Merge', value: 'ok', primary: true, validate: (dlg) => {
       if (!files.length) return setErr(err, 'Add at least one PDF file to merge.', add);
       if (radioValue(dlg, 'pt-merge-pos') === 'after') {
@@ -780,27 +841,58 @@ export async function imagesDialog() {
 }
 
 // ---------------------------------------------------------------- Insert pages from another PDF…
+/**
+ * The source of Insert pages / Replace pages: a file (Choose PDF… or dropped on the dialog) or another
+ * open document. The latest choice wins, also over a slower earlier one still being read.
+ */
+function sourcePicker(tab, prefix, err) {
+  let src = null, seq = 0;
+  const chosen = h('span.pt-file-name', { id: `${prefix}-file` }, 'No file chosen');
+  const pick = h('button.btn', { type: 'button', id: `${prefix}-pick` }, 'Choose PDF…');
+  const open = openDocSelect(`${prefix}-open`, tab, 'Source: open document', 'Or an open document…');
+  const load = (job) => {
+    const k = ++seq;
+    return job.then((f) => {
+      if (k !== seq || !f) return;
+      src = f;
+      if (!f.tab) open.value = '';
+      chosen.textContent = `${f.name} (${f.tab ? 'open document, ' : ''}${pagesLabel(f)})`;
+      setErr(err, null);
+    }).catch((e) => { if (k === seq) setErr(err, e.message); });
+  };
+  pick.addEventListener('click', () => load(pickPdfs(false).then(([f]) => f)));
+  open.addEventListener('change', () => {
+    const t = tabById(open.value);
+    if (t) { src = null; chosen.textContent = `Reading ${t.name}…`; load(tabSource(t)); return; }
+    if (src?.tab || !src) { seq++; src = null; chosen.textContent = 'No file chosen'; }
+  });
+  return {
+    rows: [h('div.pt-row', {}, pick, chosen), h('div.pt-row', {}, open),
+      h('p.pt-hint', {}, 'You can also drop a PDF file on this dialog.')],
+    pick,
+    get src() { return src; },
+    /** Dropped files: the first one becomes the source. */
+    drop: (files) => load(droppedPdf(files[0])),
+  };
+}
+
 export async function insertFromDialog(tab = activeTab()) {
   if (!editable(tab)) return;
   const n = tab.numPages;
-  let src = null;
   const err = errEl();
-  const chosen = h('span.pt-file-name', { id: 'pt-ins-file' }, 'No file chosen');
-  const pick = h('button.btn', { type: 'button', id: 'pt-ins-pick' }, 'Choose PDF…');
-  pick.addEventListener('click', () => {
-    pickPdfs(false).then(([f]) => { if (f) { src = f; chosen.textContent = `${f.name} (${pagesLabel(f)})`; setErr(err, null); } })
-      .catch((e) => setErr(err, e.message));
-  });
+  const source = sourcePicker(tab, 'pt-ins', err);
+  const pick = source.pick;
   const pages = h('input.input', { type: 'text', id: 'pt-ins-pages', placeholder: 'All pages' });
   const after = h('input.input', { type: 'number', min: '0', max: String(n), value: String(n), id: 'pt-ins-after' });
-  const form = h('div.pt-form', {}, h('div.pt-row', {}, pick, chosen),
+  const form = h('div.pt-form', {}, source.rows,
     field('Pages to insert', pages, 'Leave empty for all pages, or enter ranges such as 1-3,5.'),
     field('Insert after page', after, `0 inserts before page 1; ${n} appends at the end.`), err);
-  let idx = null, at = null;
+  let src = null, idx = null, at = null;
   const c = await core();
   const v = await showDialog({
-    title: 'Insert pages from PDF', body: form, className: 'pt-dialog', initialFocus: '#pt-ins-pick',
+    title: 'Insert pages from PDF', body: (dlg) => { acceptDrops(dlg, source.drop); return form; }, className: 'pt-dialog', initialFocus: '#pt-ins-pick',
     buttons: [CANCEL, { label: 'Insert', value: 'ok', primary: true, validate: () => {
+      src = source.src;
       if (!src) return setErr(err, 'Choose the PDF to insert pages from.', pick);
       try { idx = pages.value.trim() ? c.parseRanges(pages.value, src.pages) : range(src.pages); } catch (e) { return setErr(err, `Pages: ${e.message}`, pages); }
       at = num(after);
@@ -820,24 +912,20 @@ export const replaceMap = (n, at, count) => new Map(range(n).map((i) => [i, i >=
 export async function replaceDialog(tab = activeTab()) {
   if (!editable(tab)) return;
   const n = tab.numPages;
-  let src = null;
   const err = errEl();
-  const chosen = h('span.pt-file-name', { id: 'pt-rp-file' }, 'No file chosen');
-  const pick = h('button.btn', { type: 'button', id: 'pt-rp-pick' }, 'Choose PDF…');
-  pick.addEventListener('click', () => {
-    pickPdfs(false).then(([f]) => { if (f) { src = f; chosen.textContent = `${f.name} (${pagesLabel(f)})`; setErr(err, null); } })
-      .catch((e) => setErr(err, e.message));
-  });
+  const source = sourcePicker(tab, 'pt-rp', err);
+  const pick = source.pick;
   const pages = h('input.input', { type: 'text', id: 'pt-rp-pages', placeholder: 'All pages' });
   const start = h('input.input', { type: 'number', min: '1', max: String(n), value: String(thumbs.selection?.size ? Math.min(...thumbs.selection) + 1 : 1), id: 'pt-rp-at' });
-  const form = h('div.pt-form', {}, h('div.pt-row', {}, pick, chosen),
+  const form = h('div.pt-form', {}, source.rows,
     field('Source pages', pages, 'Leave empty for all pages, or enter ranges such as 1-3,5.'),
     field('Replace starting at page', start, `The same number of pages is replaced from this page on (1-${n}).`), err);
-  let idx = null, at = null;
+  let src = null, idx = null, at = null;
   const c = await core();
   const v = await showDialog({
-    title: 'Replace pages', body: form, className: 'pt-dialog', initialFocus: '#pt-rp-pick',
+    title: 'Replace pages', body: (dlg) => { acceptDrops(dlg, source.drop); return form; }, className: 'pt-dialog', initialFocus: '#pt-rp-pick',
     buttons: [CANCEL, { label: 'Replace', value: 'ok', primary: true, validate: () => {
+      src = source.src;
       if (!src) return setErr(err, 'Choose the PDF with the replacement pages.', pick);
       try { idx = pages.value.trim() ? c.parseRanges(pages.value, src.pages) : range(src.pages); } catch (e) { return setErr(err, `Source pages: ${e.message}`, pages); }
       at = num(start) - 1;
