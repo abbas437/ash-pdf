@@ -193,6 +193,31 @@ try {
   eq(await texts(1), ['B 1', 'A 2', 'B 2', 'A 3'], 'B after a header drop');
   eq(await texts(0), ['A 1', 'A 2', 'A 3'], 'A unchanged after a header drop');
 
+  step = 'a page copied to another tab keeps its unsaved annotations';
+  await ev('app.activate(tabs[0].id);');
+  await settle(0, 3);
+  await ev('app.annotations.add(tabs[0], { type: "rect", page: 0, x: 40, y: 40, w: 100, h: 60, stroke: "#d0021b", strokeWidth: 2, fill: null });');
+  await thumbDrag(0, [moveUntilHint(() => tabPoint(1), 'Append 1 page to b.pdf')]);
+  await page.waitForFunction(() => window.ashStudio.state.tabs[1].numPages === 5, null, { timeout: 10_000 });
+  eq(await texts(1), ['B 1', 'A 2', 'B 2', 'A 3', 'A 1'], 'B after copying an annotated page');
+  eq(await ev('const { readAnnotations } = await import("../src/core/index.js"); return (await readAnnotations(tabs[1].bytes)).objects.map((o) => o.page);'), [4], 'annotation copied with the page');
+  await ev('await pt.undoAny(tabs[1]); app.annotations.remove(tabs[0], app.annotations.list(tabs[0]).map((o) => o.id));');
+  await settle(1, 4);
+
+  step = 'a file dropped on a dialog backdrop is ignored';
+  await ev('app.activate(tabs[0].id);');
+  await settle(0, 3);
+  await ev('pt.reverseDialog(tab);');
+  await page.locator('.dialog-backdrop').waitFor();
+  const bd = await page.evaluate(() => { const r = document.querySelector('.dialog').getBoundingClientRect(); return { x: Math.max(4, r.left - 20), y: r.top + 10 }; });
+  check(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.classList.contains('dialog-backdrop'), bd), 'backdrop point not on the backdrop');
+  shown = await fileDrag({ ...bd, files: X });
+  eq(shown, { hint: null, line: false }, 'no insert indicator over a dialog backdrop');
+  await page.waitForTimeout(300);
+  eq(await ev('return [tabs.length, tabs[0].numPages];'), [2, 3], 'backdrop drop opened or inserted nothing');
+  await page.keyboard.press('Escape');
+  await page.locator('.dialog-backdrop').waitFor({ state: 'detached' });
+
   step = 'thumbnail dropped on another tab page view is inserted there';
   await ev('app.activate(tabs[0].id);');
   await settle(0, 3);

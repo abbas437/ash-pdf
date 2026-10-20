@@ -681,6 +681,7 @@ window.addEventListener('dragover', (e) => {
   const files = hasFiles(e), pd = !files && pageDrag(e);
   if (!files && !pd) return;
   dropLine.hidden = true;
+  if (document.querySelector('.dialog-backdrop')) { e.preventDefault(); e.dataTransfer.dropEffect = 'none'; clearDrop(); return; } // only the dialog itself takes drops
   const tabEl = e.target.closest?.('.doc-tab'), inStrip = tabstrip.contains(e.target);
   for (const n of tabstrip.querySelectorAll('.drop-into')) if (n !== tabEl) n.classList.remove('drop-into');
   if (pd) springTo(tabEl);
@@ -711,6 +712,7 @@ window.addEventListener('dragend', () => { clearDrop(); endPageDrag(); }, true);
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (spring || !dropHintEl.hidden)) { clearDrop(); endPageDrag(); } }, true);
 window.addEventListener('drop', async (e) => {
   e.preventDefault();
+  if (document.querySelector('.dialog-backdrop')) { clearDrop(); return; } // a modal dialog takes drops on itself only
   const files = hasFiles(e), pd = !files && pageDrag(e);
   const tabEl = e.target.closest?.('.doc-tab'), inStrip = tabstrip.contains(e.target);
   const v = !inStrip && viewDropAt(e);

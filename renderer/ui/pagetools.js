@@ -210,16 +210,20 @@ export function duplicate(tab, sel) {
 
 /**
  * Insert pages of other documents before page `at` of `tab` (clamped to the end), as one undo step.
- * sources: [{name, bytes} | {name, tab, indices}] — a `tab` source is read when the step runs (its current
- * bytes, after any queued page change); `indices` default to every page.
+ * sources: [{name, bytes} | {name, tab, indices}] — a `tab` source is read before the step is queued, as
+ * Save would write it (after any queued page change, with its unsaved annotations); `indices` default to every page.
  */
-export function insertSources(tab, sources, at) {
-  if (!editable(tab) || !sources.length) return Promise.resolve(false);
+export async function insertSources(tab, sources, at) {
+  if (!editable(tab) || !sources.length) return false;
+  // A tab source contributes its pages as Save would write them, unsaved annotations included. Read
+  // here, before the step is queued: currentBytes() waits for idle() and would deadlock inside it.
+  const { currentBytes } = await import('./office.js');
+  sources = await Promise.all(sources.map(async (s) => (s.tab ? { ...s, bytes: await currentBytes(s.tab) } : s)));
   return runOp(tab, 'Insert pages', async (bytes, n, c) => {
     const start = Math.min(at, n);
     let out = bytes, k = start;
     for (const s of sources) {
-      const src = s.tab ? s.tab.bytes : s.bytes;
+      const src = s.bytes;
       const info = await c.getInfo(src);
       if (info.isEncrypted) throw new Error(`"${s.name}" is encrypted and its pages cannot be inserted.`);
       const idx = (s.indices ?? range(info.pageCount)).filter((i) => i < info.pageCount);
@@ -888,7 +892,7 @@ export async function imagesDialog() {
  * The source of Insert pages / Replace pages: a file (Choose PDF… or dropped on the dialog) or another
  * open document. The latest choice wins, also over a slower earlier one still being read.
  */
-function sourcePicker(tab, prefix, err) {
+function sourcePicker(tab, prefix, err, onLoad) {
   let src = null, seq = 0;
   const chosen = h('span.pt-file-name', { id: `${prefix}-file` }, 'No file chosen');
   const pick = h('button.btn', { type: 'button', id: `${prefix}-pick` }, 'Choose PDF…');
@@ -901,6 +905,7 @@ function sourcePicker(tab, prefix, err) {
       if (!f.tab) open.value = '';
       chosen.textContent = `${f.name} (${f.tab ? 'open document, ' : ''}${pagesLabel(f)})`;
       setErr(err, null);
+      onLoad?.(f);
     }).catch((e) => { if (k === seq) setErr(err, e.message); });
   };
   pick.addEventListener('click', () => load(pickPdfs(false).then(([f]) => f)));
@@ -1113,22 +1118,17 @@ export async function resizeDialog(tab = activeTab()) {
 export const interleaveMap = (nA, nB) => new Map(range(nA).map((i) => [i, i < Math.min(nA, nB) ? 2 * i : i + Math.min(nA, nB)]));
 export async function interleaveDialog(tab = activeTab()) {
   if (!editable(tab)) return;
-  let src = null;
   const err = errEl();
-  const chosen = h('span.pt-file-name', { id: 'pt-il-file' }, 'No file chosen');
-  const pick = h('button.btn', { type: 'button', id: 'pt-il-pick' }, 'Choose PDF…');
-  pick.addEventListener('click', () => {
-    pickPdfs(false).then(([f]) => { if (f) { src = f; chosen.textContent = `${f.name} (${pagesLabel(f)})`; setErr(err, f.pages === tab.numPages ? null : `Page counts differ (${tab.numPages} and ${f.pages}): leftover pages are added at the end.`); } })
-      .catch((e) => setErr(err, e.message));
-  });
+  const source = sourcePicker(tab, 'pt-il', err, (f) => setErr(err, f.pages === tab.numPages ? null : `Page counts differ (${tab.numPages} and ${f.pages}): leftover pages are added at the end.`));
   const rev = h('input', { type: 'checkbox', id: 'pt-il-rev' });
   const form = h('div.pt-form', {},
     h('p.pt-hint', {}, `Merges a second scan page by page: ${baseName(tab)} 1, second file 1, ${baseName(tab)} 2, second file 2, …`),
-    h('div.pt-row', {}, pick, chosen),
+    source.rows,
     h('div.pt-radio', {}, rev, h('label', { for: rev.id }, 'Second file is in reverse order (back sides scanned last page first)')), err);
+  let src = null;
   const v = await showDialog({
-    title: 'Interleave pages', body: form, className: 'pt-dialog', initialFocus: '#pt-il-pick',
-    buttons: [CANCEL, { label: 'Interleave', value: 'ok', primary: true, validate: () => (src ? true : setErr(err, 'Choose the PDF with the other sides.', pick)) }],
+    title: 'Interleave pages', body: (dlg) => { acceptDrops(dlg, source.drop); return form; }, className: 'pt-dialog', initialFocus: '#pt-il-pick',
+    buttons: [CANCEL, { label: 'Interleave', value: 'ok', primary: true, validate: () => ((src = source.src) ? true : setErr(err, 'Choose the PDF with the other sides.', source.pick)) }],
   });
   if (v !== 'ok') return;
   return runOp(tab, 'Interleave pages', async (bytes, n, c) => ({ bytes: await c.interleavePdfs(bytes, src.bytes, { reverseB: rev.checked }), map: interleaveMap(n, src.pages) }));

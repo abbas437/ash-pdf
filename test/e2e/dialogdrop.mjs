@@ -159,6 +159,21 @@ try {
     got = (await texts()).slice(0, 3);
   }
   eq(got, ['Other 2', 'Other 3', 'Main 1'], 'replace from an open document');
+
+  step = 'interleave: drop, then open document';
+  const n0 = await ev('return tab.numPages;');
+  await ev('pt.interleaveDialog(tab);');
+  await page.waitForSelector('#pt-il-pick');
+  r = await drop('.dialog', [pdf('drop-il.pdf', extra)]);
+  check(r.dropped && !r.after, 'interleave drop not accepted');
+  await page.waitForFunction(() => document.querySelector('#pt-il-file').textContent === 'drop-il.pdf (2 pages)', null, { timeout: 10_000 });
+  check((await page.textContent('.dialog')).includes('Page counts differ'), 'no page-count note for a dropped file');
+  eq(await tabCount(), 3, 'a drop on the interleave dialog opened a tab');
+  await page.selectOption('#pt-il-open', { label: (await page.$$eval('#pt-il-open option', (os) => os.map((o) => o.textContent))).find((t) => t.startsWith('other.pdf')) });
+  await page.waitForFunction(() => document.querySelector('#pt-il-file').textContent === 'other.pdf (open document, 3 pages)', null, { timeout: 10_000 });
+  await page.click('.dialog button.primary');
+  await pages(n0 + 3);
+  eq((await texts()).slice(0, 4), ['Other 2', 'Other 1', 'Other 3', 'Other 2'], 'interleave with an open document');
   eq(await tabCount(), 3, 'tabs at the end');
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
