@@ -297,6 +297,9 @@ body.forms-highlight .form-unsupported { background-color: rgba(120, 120, 120, .
 .thumb.dragging { opacity: .45; }
 .thumb-drop-line { position: absolute; left: 14px; right: 14px; height: 3px; margin-top: -1.5px; border-radius: 2px; background: var(--brass); pointer-events: none; }
 .pt-dialog { min-width: 420px; }
+.pt-dialog.pt-drop-over { outline: 3px dashed var(--brass); outline-offset: -6px; }
+.pt-dialog.pt-drop-over .pt-filelist { border-color: var(--brass); }
+.pt-row select.input { flex: 1; min-width: 0; }
 .pt-form { display: flex; flex-direction: column; gap: 12px; }
 .pt-form .pt-hint { margin: 0; }
 .pt-row { display: flex; align-items: center; gap: 10px; min-width: 0; }
