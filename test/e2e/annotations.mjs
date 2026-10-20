@@ -211,6 +211,43 @@ try {
   near(dup.x, o1.x + 12, 'duplicate offset x', 1e-6); near(dup.y, o1.y + 12, 'duplicate offset y', 1e-6);
   check(JSON.stringify(await sel()) === JSON.stringify([dup.id]) && dup.stroke === '#0000ff', 'duplicate not selected / style lost');
 
+  step = 'Ctrl+click adds to and removes from the selection';
+  o1 = await obj();
+  const inOrig = await toClient(0, o1.x + 3, o1.y + 3), inDup = await toClient(0, dup.x + dup.w - 3, dup.y + dup.h - 3);
+  const ctrlClick = async (pt) => { await page.keyboard.down('Control'); await page.mouse.click(...pt); await page.keyboard.up('Control'); };
+  await page.mouse.click(...inOrig);
+  check(JSON.stringify(await sel()) === JSON.stringify([sid]), 'click did not select the original');
+  await ctrlClick(inDup);
+  check(JSON.stringify((await sel()).sort()) === JSON.stringify([sid, dup.id].sort()), `Ctrl+click did not add: ${JSON.stringify(await sel())}`);
+  await ctrlClick(inDup);
+  check(JSON.stringify(await sel()) === JSON.stringify([sid]), 'Ctrl+click on a selected object did not remove it');
+  await ctrlClick(inDup);
+  check((await sel()).length === 2, 'Ctrl+click did not add it back');
+
+  step = 'Ctrl+drag places copies and leaves the originals';
+  n = (await objs()).length;
+  const prev = await objs();
+  await page.keyboard.down('Control');
+  const to = [inOrig[0] + 60, inOrig[1] + 90];
+  await drag([inOrig, to]);
+  await page.keyboard.up('Control');
+  const next = await objs();
+  check(next.length === n + 2, `Ctrl+drag did not add two copies (${next.length - n})`);
+  for (const id of [sid, dup.id]) { const a = prev.find((o) => o.id === id), b = next.find((o) => o.id === id); near(b.x, a.x, 'original x kept', 1e-6); near(b.y, a.y, 'original y kept', 1e-6); }
+  p0 = await toPage(inOrig); p1 = await toPage(to);
+  const copies = next.slice(-2);
+  copies.forEach((c, k) => { // in drawing order: the original, then the duplicate
+    const src = prev.find((o) => o.id === [sid, dup.id][k]);
+    near(c.x, src.x + (p1.x - p0.x), 'copy x', 0.01); near(c.y, src.y + (p1.y - p0.y), 'copy y', 0.01);
+  });
+  check(JSON.stringify((await sel()).sort()) === JSON.stringify(copies.map((c) => c.id).sort()), 'the copies are not the selection');
+  await key('Control+z');
+  check((await objs()).length === n, 'one undo did not remove both copies');
+  await page.mouse.click(...await toClient(0, 540, 300)); // empty page: clear, then pick the duplicate alone
+  await frames(); // the options bar closes with the selection, so the page moves: map the point again
+  await page.mouse.click(...await toClient(0, dup.x + dup.w - 3, dup.y + dup.h - 3));
+  check(JSON.stringify(await sel()) === JSON.stringify([dup.id]), `reselect the duplicate: ${JSON.stringify(await sel())}`);
+
   step = 'delete, undo, redo';
   n = all.length;
   await key('Delete');

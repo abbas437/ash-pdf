@@ -534,21 +534,26 @@ export const selectHandlers = {
   onDeactivate: restoreToolDefaults,
   onPointerDown(e, { tab, hit }) {
     if (e.button !== 0 || !hit) return;
+    let toggleOff = null;
     const p = toPage(tab, hit.pageIndex, e.clientX, e.clientY);
     const hd = handleAt(tab, hit.pageIndex, p.x, p.y);
     let mode = null, objs = [];
     if (hd) { mode = 'resize'; objs = [hd.obj]; } else {
       const o = objectAt(tab, hit.pageIndex, p.x, p.y);
-      if (!o) { if (!e.shiftKey && selOf(tab).size) select(tab, []); return; }
+      const ctrl = e.ctrlKey || e.metaKey;
+      if (!o) { if (!e.shiftKey && !ctrl && selOf(tab).size) select(tab, []); return; }
       const s = selOf(tab);
-      if (e.shiftKey) { s.has(o.id) ? withGroups(tab, [o.id]).forEach((id) => s.delete(id)) : s.add(o.id); select(tab, [...s]); if (!s.has(o.id)) return; } else if (!s.has(o.id)) select(tab, [o.id]);
+      if (e.shiftKey) { s.has(o.id) ? withGroups(tab, [o.id]).forEach((id) => s.delete(id)) : s.add(o.id); select(tab, [...s]); if (!s.has(o.id)) return; } else if (ctrl) {
+        // Ctrl+click adds to the selection; on a selected object it removes it, unless the press becomes a Ctrl+drag (a copy)
+        if (s.has(o.id)) toggleOff = o.id; else { s.add(o.id); select(tab, [...s]); }
+      } else if (!s.has(o.id)) select(tab, [o.id]);
       mode = 'move';
       objs = tab.objects.filter((x) => s.has(x.id));
     }
     e.preventDefault();
     capture(e);
     document.body.classList.add('ann-gesture');
-    gesture = { tab, page: hit.pageIndex, mode, handle: hd?.handle, start: p, orig: new Map(objs.map((o) => [o.id, clone(o)])), moved: false, drawn: new Set([hit.pageIndex, ...objs.map((o) => o.page)]) };
+    gesture = { tab, page: hit.pageIndex, mode, handle: hd?.handle, start: p, orig: new Map(objs.map((o) => [o.id, clone(o)])), moved: false, drawn: new Set([hit.pageIndex, ...objs.map((o) => o.page)]), toggleOff };
   },
   onPointerMove(e, { tab }) {
     if (!gesture || gesture.tab !== tab) { hover(e, tab); return; }
@@ -557,14 +562,19 @@ export const selectHandlers = {
     if (!gesture.moved && Math.hypot(dx, dy) * scaleOf(tab) < 2) return;
     gesture.moved = true;
     window.getSelection?.()?.removeAllRanges();
-    if (gesture.mode === 'move') { dragMove(tab, e); return; }
+    if (gesture.mode === 'move') {
+      const sc = viewer.getScrollEl(tab);
+      if (sc) sc.style.cursor = e.ctrlKey || e.metaKey ? 'copy' : 'move'; // Ctrl held at the drop: a copy is placed there
+      dragMove(tab, e);
+      return;
+    }
     for (const [id, o0] of gesture.orig) {
       const o = getObject(tab, id), def = types.get(o0.type);
       if (o && def) Object.assign(o, def.resize(o0, gesture.handle, dx, dy));
     }
     renderAll(tab, [gesture.page]);
   },
-  onPointerUp(e, { tab }) { if (gesture?.tab === tab) endGesture(true); },
+  onPointerUp(e, { tab }) { if (gesture?.tab === tab) endGesture(true, e.ctrlKey || e.metaKey); },
 };
 /** Box that must stay on the page: the bbox turned by the object's rotation (stamps, images). */
 const clampBox = (o) => pageBox(types.get(o.type).bbox(o), o.rotation);
@@ -593,11 +603,24 @@ function dragMove(tab, e) {
   }
   renderAll(tab, [...g.drawn]);
 }
-function endGesture(commitIt) {
+function endGesture(commitIt, copy = false) {
   const g = gesture;
   gesture = null;
   document.body.classList.remove('ann-gesture');
+  if (g && !g.moved && g.toggleOff && commitIt) { // a Ctrl+click on a selected object: take it out of the selection
+    const drop = new Set(withGroups(g.tab, [g.toggleOff]));
+    select(g.tab, getSelection(g.tab).filter((id) => !drop.has(id)));
+    return;
+  }
   if (!g?.moved) return;
+  if (commitIt && copy && g.mode === 'move') {
+    // Ctrl+drag (as in Word / PowerPoint): the originals stay, copies are placed where the drag ended - one undo step
+    const placed = [...g.orig.keys()].map((id) => getObject(g.tab, id)).filter((o) => o && !types.get(o.type)?.fixed).map(clone);
+    for (const [id, o0] of g.orig) { const o = getObject(g.tab, id); if (o) Object.assign(o, clone(o0)); }
+    if (placed.length) select(g.tab, addMany(g.tab, copiesOf(g.tab, placed, 0, 0)));
+    else renderAll(g.tab);
+    return;
+  }
   const patches = new Map();
   for (const [id, o0] of g.orig) {
     const o = getObject(g.tab, id);
