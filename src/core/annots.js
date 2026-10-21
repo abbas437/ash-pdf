@@ -1103,11 +1103,8 @@ function toObject(doc, en, g) {
       } else if (da.color) o.color = da.color;
       // A box taller than its text keeps that height as the user's minimum (see the editor's `minH`).
       const pad = callout ? num(o.padding, 4) : 0;
-      const fm = measureText(o.text, {
-        font: o.font || 'Helvetica', bold: !!o.bold, italic: !!o.italic,
-        fontSize: num(o.fontSize, callout ? 10 : 12), maxWidth: Math.max(1, o.w - 2 * pad), lineHeight: num(o.lineHeight, 1.2),
-      });
-      const need = Math.max(fm.height, fm.lineHeight) + 2 * pad;
+      const fm = layoutRich({ ...o, font: o.font || 'Helvetica', fontSize: num(o.fontSize, callout ? 10 : 12), lineHeight: num(o.lineHeight, 1.2) }, Math.max(1, o.w - 2 * pad));
+      const need = Math.max(fm.height, num(o.fontSize, callout ? 10 : 12) * num(o.lineHeight, 1.2)) + 2 * pad; // runs-aware; an empty box still has one line
       if (o.h > need + 0.5) o.minH = o.h;
       break;
     }
