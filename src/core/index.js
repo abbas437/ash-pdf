@@ -7,4 +7,4 @@ export { addHeaderFooter, addWatermark, addBackground, addBates, removeMarks, li
 export { detectSignatures, mayBeSigned } from './signatures.js';
 export { appendIncrementalUpdate, docMdpPermission } from './incremental.js';
 export { writeAnnotations, readAnnotations, flattenAnnotations } from './annots.js';
-export { applyStyleToRange, insertText, deleteRange, normalizeRuns, runsOf, styleAt, boxStyle, STYLE_KEYS } from './richtext.js';
+export { applyStyleToRange, insertText, insertImage, deleteRange, normalizeRuns, runsOf, styleAt, boxStyle, isImageRun, STYLE_KEYS, OBJ_CHAR } from './richtext.js';

@@ -12,7 +12,7 @@ import { calloutArrowHead } from './arrowhead.js';
 import { trailerSize } from './incremental.js';
 import { cloudArc } from './cloud.js';
 import { stampShape } from './stamps.js';
-import { runsOf, normalizeRuns } from './richtext.js';
+import { runsOf, normalizeRuns, isImageRun, OBJ_CHAR } from './richtext.js';
 import { toRichContents, richFromRC } from './richxhtml.js';
 
 const N = (s) => PDFName.of(s);
@@ -31,6 +31,19 @@ const STATUS = { accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancell
 const REDACT_STROKE = '#d62828';
 const EXTRA_KEY = 'ASHStudio'; // private: JSON of style fields the standard keys cannot carry
 const IMAGE_KEY = 'ASHImage'; // private: original image bytes of an image stamp
+// private: a FreeText's inline images, a dict <image key> -> unfiltered stream of the original bytes
+// with /Mime (never in the ASHStudio JSON: a hex string there costs ~4 bytes per byte). The image
+// runs (key + size) travel in extra.runs; /Contents carries the text without the U+FFFC placeholders
+// (other viewers), extra.fullText the exact text (see typeEntries / toObject).
+const TEXT_IMAGES_KEY = 'ASHImages';
+const OBJ_RE = new RegExp(OBJ_CHAR, 'g');
+
+/** The inline images a text / callout object's runs use: [[key, { bytes, mime }]] (keys without an image are skipped). */
+function usedImages(o) {
+  if (!o.images || typeof o.images !== 'object') return [];
+  const keys = new Set(runsOf(o).filter(isImageRun).map((r) => r.img));
+  return [...keys].filter((k) => o.images[k]?.bytes instanceof Uint8Array).map((k) => [k, o.images[k]]);
+}
 
 // ---------------------------------------------------------------- geometry
 
@@ -357,6 +370,7 @@ function typeEntries(o, g, lay) {
       if (o.strike) extra.strike = true;
       const runs = normalizeRuns(runsOf(o), o);
       if (runs) extra.runs = runs; // exact round trip here; /RC for other programs
+      if (String(o.text ?? '').includes(OBJ_CHAR)) extra.fullText = String(o.text); // /Contents drops the image placeholders
       if (runs || o.underline || o.strike) e.RC = text(toRichContents({ ...o, runs }));
       if (o.type === 'callout') {
         strokeColor = parseColor(o.stroke, '#ff0000');
@@ -718,7 +732,7 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     const { entries, extra } = typeEntries(o, g, lay);
     // Signature identity: the library item id and the block id, so Apply signature still works after reopening.
     for (const k of ['sig', 'group']) if (typeof o[k] === 'string' && o[k]) extra[k] = o[k];
-    const contents = o.type === 'text' || o.type === 'callout' ? o.text : (o.note ?? (o.type === 'stamp' ? o.text : undefined));
+    const contents = o.type === 'text' || o.type === 'callout' ? String(o.text ?? '').replace(OBJ_RE, '') : (o.note ?? (o.type === 'stamp' ? o.text : undefined));
     const opacity = o.type === 'highlight' ? Math.min(Math.max(num(o.opacity, 0.4), 0), 0.5) : Math.min(Math.max(num(o.opacity, 1), 0), 1);
     const rect = visRectToPdf(g, lay.bbox).map(r4);
     const dict = {
@@ -729,6 +743,10 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     if (contents !== undefined && contents !== null) dict.Contents = text(contents);
     if (Object.keys(extra).length) dict[EXTRA_KEY] = text(JSON.stringify(extra));
     if (o.type === 'image') dict[IMAGE_KEY] = doc.context.register(doc.context.stream(o.bytes, { Mime: PDFString.of(o.mime || 'image/png') }));
+    if (o.type === 'text' || o.type === 'callout') {
+      const used = usedImages(o);
+      if (used.length) dict[TEXT_IMAGES_KEY] = Object.fromEntries(used.map(([k, im]) => [k, doc.context.register(doc.context.stream(im.bytes, { Mime: PDFString.of(im.mime || 'image/png') }))]));
+    }
     let annot, popup = null;
     if (o.type === 'apStamp' && j.t) { // the other app's dictionary (/Name, /AS, private keys) with the new place and our fields
       annot = j.t.en.dict.clone(doc.context);
@@ -1136,6 +1154,8 @@ function toObject(doc, en, g) {
       o.type = callout ? 'callout' : 'text';
       Object.assign(o, pdfRectToVis(g, inner()));
       o.text = contents ?? '';
+      // the exact text (with inline image placeholders) while /Contents still is that text without them
+      if (typeof extra.fullText === 'string' && extra.fullText.replace(OBJ_RE, '') === o.text) o.text = extra.fullText;
       const da = parseDA(readText(dict, 'DA'));
       const font = da.fontName && fontFromName(da.fontName);
       if (font) [o.font, o.bold, o.italic] = font;
@@ -1157,6 +1177,19 @@ function toObject(doc, en, g) {
         if (fill) o.fill = fill;
       }
       richText(o, dict, extra);
+      if (o.runs?.some(isImageRun)) {
+        const imgs = dict.lookup(N(TEXT_IMAGES_KEY));
+        const images = {};
+        if (imgs instanceof PDFDict) {
+          for (const [k, v] of imgs.entries()) {
+            const st = doc.context.lookup(v);
+            if (!(st instanceof PDFRawStream)) continue;
+            const mime = st.dict.lookup(N('Mime'));
+            images[k.decodeText()] = { bytes: st.contents.slice(), mime: mime instanceof PDFString ? mime.decodeText() : 'image/png' };
+          }
+        }
+        o.images = images;
+      }
       // A box taller than its text keeps that height as the user's minimum (see the editor's `minH`).
       const pad = callout ? num(o.padding, 4) : textInset(o);
       const fm = layoutRich({ ...o, font: o.font || 'Helvetica', fontSize: num(o.fontSize, callout ? 10 : 12), lineHeight: num(o.lineHeight, 1.2) }, Math.max(1, o.w - 2 * pad));
