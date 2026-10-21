@@ -176,7 +176,11 @@ const textType = {
     for (const k of TEXT_KEYS) if (keys.includes(k)) p[k] = ns[k];
     // Frame keys: cleared fields become undefined (the border colour goes with the border).
     const f = frameFromStyle(s);
-    if (keys.includes('textBorderWidth') || keys.includes('textBorderColor')) Object.assign(p, { borderWidth: f.borderWidth, borderColor: f.borderColor });
+    // Width and colour act separately on each box: a colour pick recolours only boxes that have a border;
+    // a width keeps a box's own colour (a box without one takes the options bar's).
+    if (keys.includes('textBorderWidth')) {
+      Object.assign(p, f.borderWidth ? { borderWidth: f.borderWidth, borderColor: keys.includes('textBorderColor') ? f.borderColor : (o.borderColor ?? f.borderColor) } : { borderWidth: undefined, borderColor: undefined });
+    } else if (keys.includes('textBorderColor') && Number(o.borderWidth) > 0) p.borderColor = s.textBorderColor || '#000000';
     if (keys.includes('textFill')) p.fill = f.fill;
     if (keys.includes('textPadding')) p.padding = f.padding;
     if (['font', 'fontSize', 'bold', 'italic', 'borderWidth', 'padding'].some((k) => k in p)) p.h = boxH(o.text, { ...o, ...p }, o.w, o.minH, o.runs);
@@ -584,13 +588,16 @@ function reEdit(tab, o) {
   const ed = openTextEditor(tab, o.page, o, {
     text: o.text, runs: o.runs, toggleFormat, movable: true, frame: frameOf(o),
     style: { font: o.font, fontSize: o.fontSize, bold: o.bold, italic: o.italic, color: o.color, align: o.align, lineHeight: o.lineHeight, underline: o.underline, strike: o.strike },
-    onCommit(text, b, s, runs) {
+    onCommit(text, b, s, runs, fr) {
       editingId = null;
       if (!text.trim()) { annotations.remove(tab, [o.id]); return; }
       const moved = b.x !== o.x || b.y !== o.y;
-      if (moved || text !== o.text || b.h !== o.h || JSON.stringify(runs) !== JSON.stringify(o.runs)) {
+      // Frame changes made while editing live in the editor only (setFrame) and are committed with the text: one undo step, Esc drops them.
+      const framePatch = {};
+      for (const k of FRAME_FIELDS) if (o[k] !== fr?.[k]) framePatch[k] = fr?.[k];
+      if (moved || text !== o.text || b.h !== o.h || Object.keys(framePatch).length || JSON.stringify(runs) !== JSON.stringify(o.runs)) {
         // `runs: undefined` clears the formatting: only when the core is there to say the text became uniform.
-        annotations.update(tab, o.id, { text, h: b.h, ...(moved ? { x: b.x, y: b.y } : {}), ...(runs !== undefined || core ? { runs } : {}) });
+        annotations.update(tab, o.id, { text, h: b.h, ...framePatch, ...(moved ? { x: b.x, y: b.y } : {}), ...(runs !== undefined || core ? { runs } : {}) });
       }
       else annotations.render(tab, [o.page]);
       annotations.select(tab, [o.id]);
@@ -809,6 +816,7 @@ function showTextOptions(o) {
   for (const k of TEXT_KEYS) state.toolStyle[k] = s[k];
   const f = frameOf(o);
   Object.assign(state.toolStyle, { textBorderWidth: f.borderWidth ?? 0, textBorderColor: f.borderColor ?? state.toolStyle.textBorderColor ?? '#000000', textFill: f.fill ?? null, textPadding: f.padding ?? 0 });
+  annotations.syncLastStyle(); // the next state:changed then diffs only what the user touches (not the first box's style against the others)
   const bar = document.querySelector('.options-bar');
   if (!bar) return;
   bar.replaceChildren();
@@ -869,7 +877,6 @@ export function initTextTools(app) {
       if (o) {
         const patch = {};
         for (const k of TEXT_KEYS) if (o[k] !== s[k]) patch[k] = s[k];
-        if (f) for (const k of FRAME_FIELDS) if (o[k] !== f[k]) patch[k] = f[k];
         if (Object.keys(patch).length) annotations.update(editor.tab, o.id, patch, { coalesce: `text-style:${o.id}` });
       }
     }
