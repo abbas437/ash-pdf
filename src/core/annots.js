@@ -12,6 +12,8 @@ import { calloutArrowHead } from './arrowhead.js';
 import { trailerSize } from './incremental.js';
 import { cloudArc } from './cloud.js';
 import { stampShape } from './stamps.js';
+import { runsOf, normalizeRuns } from './richtext.js';
+import { toRichContents, richFromRC } from './richxhtml.js';
 
 const N = (s) => PDFName.of(s);
 const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
@@ -349,6 +351,11 @@ function typeEntries(o, g, lay) {
       const inner = visRectToPdf(g, lay.inner);
       e.RD = [inner[0] - outer[0], outer[3] - inner[3], outer[2] - inner[2], inner[1] - outer[1]].map(r4);
       pick('font', 'bold', 'italic', 'align', 'lineHeight', 'padding');
+      if (o.underline) extra.underline = true;
+      if (o.strike) extra.strike = true;
+      const runs = normalizeRuns(runsOf(o), o);
+      if (runs) extra.runs = runs; // exact round trip here; /RC for other programs
+      if (runs || o.underline || o.strike) e.RC = text(toRichContents({ ...o, runs }));
       if (o.type === 'callout') {
         strokeColor = parseColor(o.stroke, '#ff0000');
         width = strokeColor ? sw : 0;
@@ -1007,6 +1014,31 @@ function dashFrom(bs) {
   return d.length >= 2 && d[0] < d[1] ? 'dotted' : 'dashed';
 }
 
+const RC_FAMILY = { arial: 'Helvetica', 'sans-serif': 'Helvetica', 'times new roman': 'Times', serif: 'Times', 'courier new': 'Courier', monospace: 'Courier' };
+const rcFamily = (name) => (['Helvetica', 'Times', 'Courier'].includes(name) ? name : fontFromName(name)?.[0] ?? RC_FAMILY[name.toLowerCase()]);
+
+/** Runs / underline / strike of a FreeText: our own private copy when it still fits the text, else /RC. */
+function richText(o, dict, extra) {
+  if (Array.isArray(extra.runs) && extra.runs.map((r) => String(r?.text ?? '')).join('') === o.text) {
+    if (extra.underline) o.underline = true;
+    if (extra.strike) o.strike = true;
+    const runs = normalizeRuns(extra.runs, o);
+    if (runs) o.runs = runs;
+    return;
+  }
+  const v = dict.lookup(N('RC'));
+  const rc = v instanceof PDFString || v instanceof PDFHexString ? v.decodeText() : v instanceof PDFRawStream ? new TextDecoder().decode(decodePDFRawStream(v).decode()) : undefined;
+  const got = rc ? richFromRC(rc, o, rcFamily) : null;
+  if (!got) {
+    if (extra.underline) o.underline = true;
+    if (extra.strike) o.strike = true;
+    return;
+  }
+  for (const [k, val] of Object.entries(got)) if (val !== undefined) o[k] = val;
+  if (!o.underline) delete o.underline;
+  if (!o.strike) delete o.strike;
+}
+
 /** One markup entry -> overlay object (throws on malformed dictionaries). */
 function toObject(doc, en, g) {
   const { dict } = en;
@@ -1101,6 +1133,7 @@ function toObject(doc, en, g) {
         const cl = readNums(dict, 'CL');
         if (cl && cl.length >= 4) [o.tx, o.ty] = visPt(g, cl[0], cl[1]);
       } else if (da.color) o.color = da.color;
+      richText(o, dict, extra);
       break;
     }
     case 'Stamp': {
