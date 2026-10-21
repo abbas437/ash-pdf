@@ -31,6 +31,7 @@ test('soleGroup: exactly one group of 2+ on one page', () => {
   assert.equal(soleGroup([{ group: 'g', page: 0 }]), null);
   assert.equal(soleGroup([{ group: 'g', page: 0 }, { group: 'h', page: 0 }]), null);
   assert.equal(soleGroup([{ group: 'g', page: 0 }, { page: 0 }]), null);
+  assert.equal(soleGroup([{ group: 'g', page: 0, sig: 's1' }, { group: 'g', page: 0 }]), null, 'signature block: no group handles');
   assert.equal(soleGroup([{ group: 'g', page: 0 }, { group: 'g', page: 1 }]), null);
 });
 

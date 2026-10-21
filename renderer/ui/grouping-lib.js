@@ -1,7 +1,7 @@
 // Group / Ungroup of selected objects and the group resize (renderer/ui/annotations.js): pure parts.
 //   canGroup(objs, readOnly) / canUngroup(objs, readOnly) -> bool
 //   groupPatches(objs, id) / ungroupPatches(objs) -> Map<id, patch> (one updateMany = one undo step)
-//   soleGroup(objs) -> group id when objs are exactly one group (>= 2 members, one page), else null
+//   soleGroup(objs) -> group id when objs are exactly one group (>= 2 members, one page, not a signature block), else null
 //   groupResizeBox(box, handle, dx, dy, keepAspect) -> the dragged group box (never flips)
 //   scaleMember(o, from, to, def) -> patch mapping object o from box `from` to box `to`
 // Signature blocks (objects with `sig`) keep their group: they are never regrouped or ungrouped.
@@ -26,7 +26,7 @@ export function ungroupPatches(objs) {
   return new Map(objs.filter((o) => o.group).map((o) => [o.id, { group: undefined }]));
 }
 export function soleGroup(objs) {
-  if (objs.length < 2) return null;
+  if (objs.length < 2 || hasSig(objs)) return null; // a signature block is never stretched as a group
   const { group, page } = objs[0];
   return group && objs.every((o) => o.group === group && o.page === page) ? group : null;
 }

@@ -566,7 +566,7 @@ M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => show
 
 function showShortcuts() {
   const keys = [['Ctrl+O', 'Open'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'], ['Ctrl+Shift+PageUp / PageDown', 'Move tab left / right'],
-    ['Ctrl+F', 'Find'], ['Ctrl+,', 'Preferences'], ['Ctrl+= / Ctrl+-', 'Zoom in / out'], ['Ctrl+0 / Ctrl+1', 'Fit page / Actual size'], ['Home / End', 'First / last page'], ['Page Up / Page Down', 'Previous / next page']];
+    ['Ctrl+F', 'Find'], ['Ctrl+G / Ctrl+Shift+G', 'Group / Ungroup objects'], ['Ctrl+,', 'Preferences'], ['Ctrl+= / Ctrl+-', 'Zoom in / out'], ['Ctrl+0 / Ctrl+1', 'Fit page / Actual size'], ['Home / End', 'First / last page'], ['Page Up / Page Down', 'Previous / next page']];
   showDialog({ title: 'Keyboard shortcuts', body: h('table.props', {}, keys.map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', {}, v)))) });
 }
 

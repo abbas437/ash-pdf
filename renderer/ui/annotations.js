@@ -790,7 +790,7 @@ function onKey(e) {
   if (ctrl && k === 'z' && !e.shiftKey) return run(() => router.undo(tab));
   if (ctrl && (k === 'y' || (k === 'z' && e.shiftKey))) return run(() => router.redo(tab));
   // Ctrl+X / C / V: copytext.js (object and system clipboard together).
-  if (ctrl && k === 'g') return run(() => (e.shiftKey ? ungroupSelection(tab) : groupSelection(tab)));
+  if (ctrl && k === 'g') return run(() => { if (!gesture) (e.shiftKey ? ungroupSelection(tab) : groupSelection(tab)); }); // not mid-drag: it would join the drag's undo step
   if (ctrl && k === 'd' && sel.length) return run(() => duplicate(tab));
   if (ctrl) return;
   if (e.key === 'Escape') {
