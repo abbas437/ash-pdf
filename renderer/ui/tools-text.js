@@ -188,6 +188,7 @@ function runCss(r, s, deco) {
   if (r.bold != null && !!r.bold !== !!s.bold) c.fontWeight = r.bold ? 'bold' : 'normal';
   if (r.italic != null && !!r.italic !== !!s.italic) c.fontStyle = r.italic ? 'italic' : 'normal';
   if (r.color) c.color = r.color;
+  c['--te-color'] = r.color || s.color; // the selection highlight keeps the run colour (styles.css .text-editor ::selection)
   const u = r.underline ?? deco.underline, k = r.strike ?? deco.strike;
   c.textDecorationLine = [u && 'underline', k && 'line-through'].filter(Boolean).join(' ') || 'none';
   return c;
@@ -200,7 +201,8 @@ const BLOCK = /^(DIV|P|LI|H[1-6])$/;
  * Open the in-place rich-text editor (a contenteditable div.text-editor) over boxPts {x, y, w, h?}
  * (points) on page `pageIndex`. opts: {text = '', runs, style ({font,fontSize,bold,italic,color,
  * align,lineHeight,underline,strike}, default state.toolStyle), onCommit(text, boxPts, style, runs),
- * onCancel(), toggleFormat(key) (Ctrl+B / I / U / Shift+X; default: applyStyle toggling key at the selection)}.
+ * onCancel(), toggleFormat(key) (Ctrl+B / I / U / Shift+X; default: applyStyle toggling key at the selection),
+ * movable (a frame around the box, with the move cursor, drags the box; onCommit gets the new x / y)}.
  * Ctrl+Enter or a click outside (other than the options bar / div.text-format-bar) commits, Esc cancels. boxPts.h passed to onCommit is the
  * height that fits the text; runs is undefined when the text is uniform.
  * Returns {el, commit(), cancel(), setStyle(style), getText(), getRuns(), getSelection() → {start, end},
@@ -208,7 +210,7 @@ const BLOCK = /^(DIV|P|LI|H[1-6])$/;
  * Edits go through `beforeinput` into a {text, runs} model (new text takes the style before the caret,
  * paste is plain text); IME composition and other native edits are read back from the DOM.
  */
-export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel, toggleFormat } = {}) {
+export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel, toggleFormat, movable = false } = {}) {
   editor?.commit();
   const layer = layerFor(tab, pageIndex);
   if (!layer) return null;
@@ -217,6 +219,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   const box = { x: boxPts.x, y: boxPts.y, w: Math.max(MIN_W, boxPts.w || 0) };
   const minH = boxPts.minH;
   const el = h('div.text-editor', { contenteditable: 'true', spellcheck: 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Text' });
+  // Grab frame: a ring just outside the box (move cursor); dragging it moves the box, the text inside keeps the text cursor.
+  const frame = movable ? h('div.text-editor-frame', { 'aria-hidden': 'true' }) : null;
   const warn = h('div.form-warn.text-editor-warn', { role: 'status', hidden: true }, 'Some characters cannot be saved with the standard PDF fonts and will appear as "?".');
   const obj = () => ({ type: 'text', ...s, ...deco, text: model.text, runs: model.runs });
   let model = { text: String(text ?? '') };
@@ -335,6 +339,11 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       fontWeight: s.bold ? 'bold' : 'normal', fontStyle: s.italic ? 'italic' : 'normal', color: s.color, textAlign: s.align,
       textDecorationLine: 'none', // on the run spans (runCss)
     });
+    el.style.setProperty('--te-color', s.color);
+    if (frame) {
+      const R = 6; // screen px outside the box
+      Object.assign(frame.style, { left: `calc(${px(box.x)} - ${R}px)`, top: `calc(${px(box.y)} - ${R}px)`, width: `calc(${px(box.w)} + ${2 * R}px)`, height: `calc(${px(box.h)} + ${2 * R}px)` });
+    }
     Object.assign(warn.style, { left: px(box.x), top: px(box.y + box.h + 2), minWidth: px(box.w) });
     checkWinAnsi(model.text, warn);
   };
@@ -347,6 +356,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     for (const fn of [...closeListeners]) fn();
     closeListeners.clear();
     el.remove();
+    frame?.remove();
     warn.remove();
     if (!layer.childElementCount) layer.remove();
   };
@@ -450,7 +460,36 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     // Window blur (switching apps) keeps the editor open.
     setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.(FORMAT_UI)) handle.commit(); }, 0);
   });
+  if (frame) {
+    let drag = null;
+    const at = (e) => { const p = viewer.clientToPage(tab, e.clientX, e.clientY); return p?.pageIndex === pageIndex ? p : null; };
+    frame.addEventListener('mousedown', (e) => e.preventDefault()); // the editor keeps the focus and its selection
+    frame.addEventListener('pointerdown', (e) => {
+      e.stopPropagation();
+      if (e.button !== 0) return;
+      e.preventDefault();
+      const p = at(e);
+      if (!p) return;
+      drag = { id: e.pointerId, p, x: box.x, y: box.y };
+      try { frame.setPointerCapture(e.pointerId); } catch { /* pointer already gone */ }
+    });
+    frame.addEventListener('pointermove', (e) => {
+      e.stopPropagation();
+      if (!drag || e.pointerId !== drag.id) return;
+      const p = at(e);
+      if (!p) return;
+      box.x = drag.x + p.x - drag.p.x;
+      box.y = drag.y + p.y - drag.p.y;
+      layout();
+    });
+    const end = (e) => { e.stopPropagation(); if (drag && e.pointerId === drag.id) drag = null; };
+    frame.addEventListener('pointerup', end);
+    frame.addEventListener('pointercancel', end);
+    frame.addEventListener('dblclick', (e) => e.stopPropagation());
+    frame.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
+  }
   render();
+  if (frame) layer.append(frame);
   layer.append(el, warn);
   layout();
   editor = handle;
@@ -467,7 +506,7 @@ export function setCoreForTests(m) { const prev = core; core = m; return prev; }
 function createAt(tab, page, box, extra = {}) {
   const style = styleFrom({ ...state.toolStyle, ...extra.style });
   return attachFormatBar(openTextEditor(tab, page, box, {
-    style, toggleFormat,
+    style, toggleFormat, movable: true,
     onCommit(text, b, s, runs) {
       if (!text.trim()) { extra.onEmpty?.(); return; }
       const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s, ...(runs ? { runs } : {}) });
@@ -498,14 +537,15 @@ function reEdit(tab, o) {
   showTextOptions(o);
   const restore = () => { editingId = null; annotations.render(tab, [o.page]); };
   const ed = openTextEditor(tab, o.page, o, {
-    text: o.text, runs: o.runs, toggleFormat,
+    text: o.text, runs: o.runs, toggleFormat, movable: true,
     style: { font: o.font, fontSize: o.fontSize, bold: o.bold, italic: o.italic, color: o.color, align: o.align, lineHeight: o.lineHeight, underline: o.underline, strike: o.strike },
     onCommit(text, b, s, runs) {
       editingId = null;
       if (!text.trim()) { annotations.remove(tab, [o.id]); return; }
-      if (text !== o.text || b.h !== o.h || JSON.stringify(runs) !== JSON.stringify(o.runs)) {
+      const moved = b.x !== o.x || b.y !== o.y;
+      if (moved || text !== o.text || b.h !== o.h || JSON.stringify(runs) !== JSON.stringify(o.runs)) {
         // `runs: undefined` clears the formatting: only when the core is there to say the text became uniform.
-        annotations.update(tab, o.id, { text, h: b.h, ...(runs !== undefined || core ? { runs } : {}) });
+        annotations.update(tab, o.id, { text, h: b.h, ...(moved ? { x: b.x, y: b.y } : {}), ...(runs !== undefined || core ? { runs } : {}) });
       }
       else annotations.render(tab, [o.page]);
       annotations.select(tab, [o.id]);
@@ -728,7 +768,7 @@ export function initTextTools(app) {
 
   // A click anywhere outside the open editor (and outside the options bar) commits it.
   document.addEventListener('pointerdown', (e) => {
-    if (!editor || editor.el.contains(e.target) || e.target.closest?.(`${FORMAT_UI}, .dialog, .menu`)) return;
+    if (!editor || editor.el.contains(e.target) || e.target.closest?.(`${FORMAT_UI}, .dialog, .menu, .text-editor-frame`)) return; // the frame moves the box
     editor.commit();
     swallow = e;
   }, true);

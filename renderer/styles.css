@@ -438,6 +438,11 @@ body.img-armed .viewer-host .page { cursor: copy; }
 .text-editor { position: absolute; box-sizing: border-box; margin: 0; padding: 0; border: 0; border-radius: 0; resize: none; overflow: hidden;
   white-space: pre-wrap; overflow-wrap: break-word; background: rgba(255, 255, 255, .55); outline: 1px dashed #1a73e8; outline-offset: 1px; pointer-events: auto; caret-color: #1a73e8; }
 .text-editor:focus { outline: 1px dashed #1a73e8; }
+/* Text cursor inside the box (the viewer's move cursor must not carry over); the grab frame around it moves the box. */
+.text-editor { cursor: text; }
+.text-editor-frame { position: absolute; box-sizing: border-box; pointer-events: auto; cursor: move; }
+/* Selected text keeps its own colour (Chromium otherwise paints it in the selection colour, hiding a colour change). */
+.text-editor::selection, .text-editor *::selection { color: var(--te-color); background: rgba(128, 128, 128, .3); }
 .ann-text text { white-space: pre; }
 body.text-tool .viewer-host .textLayer, body.text-tool .viewer-host .linkLayer { pointer-events: none; }
 body.text-tool .viewer-host { user-select: none; -webkit-user-select: none; }
