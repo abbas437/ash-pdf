@@ -72,11 +72,28 @@ function measure(text, s, maxWidth) {
   const lh = opts.fontSize * opts.lineHeight, lines = String(text ?? '').split('\n');
   return { lines, lineHeight: lh, height: lines.length * lh, firstBaseline: (lh - opts.fontSize * 0.93) / 2 + opts.fontSize * 0.72 };
 }
-/** Box height that fits the text (at least one line). */
+// Word-style frame of a text box: border (borderWidth / borderColor, drawn inside the outer box),
+// fill and inner margin (padding). The text sits in the box shrunk by insetOf on every side.
+/** padding + borderWidth (core.textInset; the same rule before the core has loaded). */
+const insetOf = (o) => (core ? core.textInset(o) : (Number(o?.padding) > 0 ? Number(o.padding) : 0) + (Number(o?.borderWidth) > 0 ? Number(o.borderWidth) : 0));
+/** The frame fields of `o` that are set (a plain box gives {}). */
+function frameOf(o) {
+  const f = {};
+  if (Number(o?.borderWidth) > 0) { f.borderWidth = Number(o.borderWidth); f.borderColor = o.borderColor || '#000000'; }
+  if (o?.fill) f.fill = o.fill;
+  if (Number(o?.padding) > 0) f.padding = Number(o.padding);
+  return f;
+}
+/** The Text tool's frame (state.toolStyle keys of their own: the rect tool owns toolStyle.fill). */
+const frameFromStyle = (s = state.toolStyle) => frameOf({ borderWidth: s.textBorderWidth, borderColor: s.textBorderColor, fill: s.textFill, padding: s.textPadding });
+const FRAME_FIELDS = ['borderWidth', 'borderColor', 'fill', 'padding'];
+/** Box height that fits the text (at least one line), measured inside the frame inset. */
 const fitH = (text, s, w, runs) => {
+  const i = insetOf(s);
+  if (i > 0) w = Math.max(1, w - 2 * i);
   const m = measure(text, s, w);
-  if (core && Array.isArray(runs) && runs.length) return Math.max(core.layoutRich({ ...s, text, runs }, w).height, m.lineHeight);
-  return Math.max(m.height, m.lineHeight);
+  if (core && Array.isArray(runs) && runs.length) return Math.max(core.layoutRich({ ...s, text, runs }, w).height, m.lineHeight) + 2 * i;
+  return Math.max(m.height, m.lineHeight) + 2 * i;
 };
 /** Box height: the text's, but never below the height the user dragged the box to (`minH`). */
 const boxH = (text, s, w, minH, runs) => Math.max(fitH(text, s, w, runs), Number(minH) > 0 ? Number(minH) : 0);
@@ -127,14 +144,22 @@ const textType = {
   render(o, parent) {
     const g = svgEl('g', { class: 'ann-text' }, parent);
     if (o.id && o.id === editingId) return g;
-    if (core && Array.isArray(o.runs) && o.runs.length) { renderRuns(o, g); return g; }
-    const m = measure(o.text, o, o.w);
+    // Frame (as the PDF appearance): fill + border inside the outer box, the stroke centred bw / 2 in.
+    const f = frameOf(o), bw = f.borderWidth ?? 0;
+    if (f.fill || bw) {
+      svgEl('rect', { class: 'ann-text-frame', x: r3(o.x + bw / 2), y: r3(o.y + bw / 2), width: r3(Math.max(0, o.w - bw)), height: r3(Math.max(0, o.h - bw)),
+        fill: f.fill ?? 'none', stroke: bw ? f.borderColor : null, 'stroke-width': bw ? r3(bw) : null, opacity: o.opacity }, g);
+    }
+    const i = insetOf(o);
+    const b = i > 0 ? { ...o, x: o.x + i, y: o.y + i, w: Math.max(1, o.w - 2 * i) } : o; // the text area
+    if (core && Array.isArray(o.runs) && o.runs.length) { renderRuns(b, g); return g; }
+    const m = measure(o.text, o, b.w);
     const align = o.align === 'center' || o.align === 'right' ? o.align : 'left';
-    const ax = align === 'center' ? o.x + o.w / 2 : align === 'right' ? o.x + o.w : o.x;
+    const ax = align === 'center' ? b.x + b.w / 2 : align === 'right' ? b.x + b.w : b.x;
     const t = svgEl('text', { ...fontAttrs(o), fill: o.color ?? '#000000', 'text-anchor': { left: 'start', center: 'middle', right: 'end' }[align], opacity: o.opacity }, g);
-    m.lines.forEach((line, i) => {
+    m.lines.forEach((line, k) => {
       if (line === '') return;
-      svgEl('tspan', { x: r3(ax), y: r3(o.y + m.firstBaseline + i * m.lineHeight) }, t).textContent = line;
+      svgEl('tspan', { x: r3(ax), y: r3(b.y + m.firstBaseline + k * m.lineHeight) }, t).textContent = line;
     });
     return g;
   },
@@ -149,7 +174,12 @@ const textType = {
     const p = {};
     const ns = styleFrom(s);
     for (const k of TEXT_KEYS) if (keys.includes(k)) p[k] = ns[k];
-    if (['font', 'fontSize', 'bold', 'italic'].some((k) => k in p)) p.h = boxH(o.text, { ...o, ...p }, o.w, o.minH, o.runs);
+    // Frame keys: cleared fields become undefined (the border colour goes with the border).
+    const f = frameFromStyle(s);
+    if (keys.includes('textBorderWidth') || keys.includes('textBorderColor')) Object.assign(p, { borderWidth: f.borderWidth, borderColor: f.borderColor });
+    if (keys.includes('textFill')) p.fill = f.fill;
+    if (keys.includes('textPadding')) p.padding = f.padding;
+    if (['font', 'fontSize', 'bold', 'italic', 'borderWidth', 'padding'].some((k) => k in p)) p.h = boxH(o.text, { ...o, ...p }, o.w, o.minH, o.runs);
     return p;
   },
 };
@@ -202,20 +232,23 @@ const BLOCK = /^(DIV|P|LI|H[1-6])$/;
  * (points) on page `pageIndex`. opts: {text = '', runs, style ({font,fontSize,bold,italic,color,
  * align,lineHeight,underline,strike}, default state.toolStyle), onCommit(text, boxPts, style, runs),
  * onCancel(), toggleFormat(key) (Ctrl+B / I / U / Shift+X; default: applyStyle toggling key at the selection),
- * movable (a frame around the box, with the move cursor, drags the box; onCommit gets the new x / y)}.
+ * movable (a frame around the box, with the move cursor, drags the box; onCommit gets the new x / y),
+ * frame ({borderWidth, borderColor, fill, padding}: a Text tool box frame shown as CSS border / padding /
+ * background; never taken from state.toolStyle; onCommit gets the set frame fields as a 5th argument)}.
  * Ctrl+Enter or a click outside (other than the options bar / div.text-format-bar) commits, Esc cancels. boxPts.h passed to onCommit is the
  * height that fits the text; runs is undefined when the text is uniform.
- * Returns {el, commit(), cancel(), setStyle(style), getText(), getRuns(), getSelection() → {start, end},
+ * Returns {el, commit(), cancel(), setStyle(style), setFrame(frame), getText(), getRuns(), getSelection() → {start, end},
  * setSelection(start, end), applyStyle(patch), styleAtSelection()}; any editor already open is committed.
  * Edits go through `beforeinput` into a {text, runs} model (new text takes the style before the caret,
  * paste is plain text); IME composition and other native edits are read back from the DOM.
  */
-export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel, toggleFormat, movable = false } = {}) {
+export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel, toggleFormat, movable = false, frame: frameIn } = {}) {
   editor?.commit();
   const layer = layerFor(tab, pageIndex);
   if (!layer) return null;
   let s = styleFrom({ ...state.toolStyle, ...style });
   let deco = { underline: !!style?.underline, strike: !!style?.strike };
+  let fr = frameOf(frameIn); // {} for callouts and plain boxes
   const box = { x: boxPts.x, y: boxPts.y, w: Math.max(MIN_W, boxPts.w || 0) };
   const minH = boxPts.minH;
   const el = h('div.text-editor', { contenteditable: 'true', spellcheck: 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Text' });
@@ -332,7 +365,14 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   };
 
   const layout = () => {
-    box.h = boxH(model.text, s, box.w, minH, model.runs);
+    box.h = boxH(model.text, { ...s, ...fr }, box.w, minH, model.runs);
+    // Frame: the text starts border + padding in (border-box sizing), where the SVG draws it. The border
+    // is an inset box-shadow: a CSS border width is snapped to whole device pixels and would move the
+    // text off the committed lines. No fill keeps the stylesheet's background.
+    const bw = fr.borderWidth ?? 0, ins = insetOf(fr);
+    Object.assign(el.style, {
+      padding: ins ? px(ins) : '', boxShadow: bw ? `inset 0 0 0 ${px(bw)} ${fr.borderColor}` : '', background: fr.fill ?? '',
+    });
     Object.assign(el.style, {
       left: px(box.x), top: px(box.y), width: px(box.w), height: px(box.h),
       fontFamily: FAMILY[s.font], fontSize: px(s.fontSize), lineHeight: px(s.fontSize * s.lineHeight),
@@ -390,12 +430,14 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       if (done) return;
       if (composing) model = parse();
       const value = model.text.replace(/\r\n?/g, '\n');
-      const b = { ...box, h: boxH(value, s, box.w, minH, model.runs) };
+      const b = { ...box, h: boxH(value, { ...s, ...fr }, box.w, minH, model.runs) };
       const r = model.runs;
       close();
-      onCommit?.(value, b, s, r);
+      onCommit?.(value, b, s, r, { ...fr });
     },
     cancel() { if (done) return; close(); onCancel?.(); },
+    /** Live frame change ({borderWidth, borderColor, fill, padding}; unset fields = none). */
+    setFrame(f) { fr = frameOf(f); layout(); },
     setStyle(ns) {
       s = styleFrom({ ...s, ...ns });
       deco = { underline: !!(ns.underline ?? deco.underline), strike: !!(ns.strike ?? deco.strike) };
@@ -505,15 +547,18 @@ export function setCoreForTests(m) { const prev = core; core = m; return prev; }
 // ---------------------------------------------------------------- create / re-edit
 function createAt(tab, page, box, extra = {}) {
   const style = styleFrom({ ...state.toolStyle, ...extra.style });
-  return attachFormatBar(openTextEditor(tab, page, box, {
-    style, toggleFormat, movable: true,
-    onCommit(text, b, s, runs) {
+  const ed = openTextEditor(tab, page, box, {
+    style, toggleFormat, movable: true, frame: extra.plain ? {} : frameFromStyle(),
+    onCommit(text, b, s, runs, frame) {
       if (!text.trim()) { extra.onEmpty?.(); return; }
-      const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s, ...(runs ? { runs } : {}) });
+      // Only the frame fields that are set: a plain box stays plain.
+      const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s, ...(runs ? { runs } : {}), ...frameOf(frame) });
       annotations.select(tab, [o.id]);
     },
     onCancel: () => extra.onEmpty?.(),
-  }));
+  });
+  if (ed && !extra.plain) ed.textBox = true; // follows the options bar's frame (state:changed)
+  return attachFormatBar(ed);
 }
 
 let widthCtx = null;
@@ -537,7 +582,7 @@ function reEdit(tab, o) {
   showTextOptions(o);
   const restore = () => { editingId = null; annotations.render(tab, [o.page]); };
   const ed = openTextEditor(tab, o.page, o, {
-    text: o.text, runs: o.runs, toggleFormat, movable: true,
+    text: o.text, runs: o.runs, toggleFormat, movable: true, frame: frameOf(o),
     style: { font: o.font, fontSize: o.fontSize, bold: o.bold, italic: o.italic, color: o.color, align: o.align, lineHeight: o.lineHeight, underline: o.underline, strike: o.strike },
     onCommit(text, b, s, runs) {
       editingId = null;
@@ -552,7 +597,7 @@ function reEdit(tab, o) {
     },
     onCancel: restore,
   });
-  if (ed) { ed.objectId = o.id; annotations.render(tab, [o.page]); attachFormatBar(ed); } else restore();
+  if (ed) { ed.objectId = o.id; ed.textBox = true; annotations.render(tab, [o.page]); attachFormatBar(ed); } else restore();
   return ed;
 }
 
@@ -608,7 +653,7 @@ function boxOf(a, b) { return { x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w:
 function replaceIn(tab, page, rect) {
   const wo = annotations.add(tab, { type: 'whiteout', page, ...rect, color: '#ffffff' });
   const fontSize = Math.max(6, Math.round(rect.h * 0.8 * 2) / 2);
-  createAt(tab, page, rect, { style: { fontSize }, onEmpty: () => annotations.remove(tab, [wo.id]) });
+  createAt(tab, page, rect, { style: { fontSize }, plain: true, onEmpty: () => annotations.remove(tab, [wo.id]) });
 }
 async function replaceTextDialog(app) {
   const tab = activeTab();
@@ -725,7 +770,31 @@ function alignCtl(c) {
   }
   c.append(seg);
 }
-const TEXT_OPTIONS = [fontCtl, sizeCtl, toggles, colorCtl, alignCtl];
+// Frame controls (state.toolStyle textBorderWidth / textBorderColor / textFill / textPadding): with an
+// editor open they hand the focus back to it; selected text boxes follow through textType.style.
+const BORDERS = [[0, 'None'], [0.5, '0.5 pt'], [1, '1 pt'], [1.5, '1.5 pt'], [2, '2 pt'], [3, '3 pt']];
+function borderCtl(c) {
+  const bw = Number(state.toolStyle.textBorderWidth) || 0;
+  const sel = h('select.opt-text-border', { 'aria-label': 'Border width', onchange: (e) => { setStyleKey('textBorderWidth', Number(e.target.value)); refocusEditor(); } },
+    BORDERS.map(([v, label]) => h('option', { value: String(v), selected: bw === v }, label)));
+  const col = h('input.opt-text-border-color', { type: 'color', 'aria-label': 'Border colour', value: state.toolStyle.textBorderColor || '#000000',
+    oninput: (e) => setStyleKey('textBorderColor', e.target.value), onchange: refocusEditor });
+  c.append(h('label.opt', {}, h('span', {}, 'Border'), sel, col));
+}
+let lastTextFill = '#ffffcc';
+function textFillCtl(c) {
+  const on = !!state.toolStyle.textFill;
+  const col = h('input.opt-text-fill-color', { type: 'color', 'aria-label': 'Fill colour', value: state.toolStyle.textFill || lastTextFill, disabled: !on,
+    oninput: (e) => { lastTextFill = e.target.value; setStyleKey('textFill', e.target.value); }, onchange: refocusEditor });
+  const cb = h('input.opt-text-fill', { type: 'checkbox', 'aria-label': 'Fill', checked: on,
+    onchange: (e) => { col.disabled = !e.target.checked; setStyleKey('textFill', e.target.checked ? col.value : null); refocusEditor(); } });
+  c.append(h('label.opt', {}, h('span', {}, 'Fill'), cb, col));
+}
+function marginCtl(c) {
+  c.append(h('label.opt', {}, h('span', {}, 'Margin'), h('input.opt-text-margin', { type: 'number', min: '0', max: '36', step: '0.5', 'aria-label': 'Inner margin (pt)', value: String(Number(state.toolStyle.textPadding) || 0),
+    onchange: (e) => { const v = Math.min(36, Math.max(0, Number(e.target.value) || 0)); e.target.value = String(v); setStyleKey('textPadding', v); refocusEditor(); } })));
+}
+const TEXT_OPTIONS = [fontCtl, sizeCtl, toggles, colorCtl, alignCtl, borderCtl, textFillCtl, marginCtl];
 
 /** Select tool with only text objects selected: show the text controls with their style. */
 function onSelection({ tab, ids }) {
@@ -738,6 +807,8 @@ function onSelection({ tab, ids }) {
 function showTextOptions(o) {
   const s = styleFrom(o);
   for (const k of TEXT_KEYS) state.toolStyle[k] = s[k];
+  const f = frameOf(o);
+  Object.assign(state.toolStyle, { textBorderWidth: f.borderWidth ?? 0, textBorderColor: f.borderColor ?? state.toolStyle.textBorderColor ?? '#000000', textFill: f.fill ?? null, textPadding: f.padding ?? 0 });
   const bar = document.querySelector('.options-bar');
   if (!bar) return;
   bar.replaceChildren();
@@ -755,6 +826,10 @@ export function initTextTools(app) {
   state.toolStyle.italic ??= false;
   state.toolStyle.align ??= 'left';
   state.toolStyle.fontSize ??= 12;
+  state.toolStyle.textBorderWidth ??= 0;
+  state.toolStyle.textBorderColor ??= '#000000';
+  state.toolStyle.textFill ??= null;
+  state.toolStyle.textPadding ??= 0;
   bus.emit('state:changed', { key: 'toolStyle', value: state.toolStyle });
 
   registerTool({
@@ -787,11 +862,14 @@ export function initTextTools(app) {
     if (key !== 'toolStyle' || !editor) return;
     const s = styleFrom();
     editor.setStyle(s);
+    const f = editor.textBox ? frameFromStyle() : null; // Text tool boxes only (not callouts)
+    if (f) editor.setFrame(f);
     if (editor.objectId) {
       const o = annotations.getObject(editor.tab, editor.objectId);
       if (o) {
         const patch = {};
         for (const k of TEXT_KEYS) if (o[k] !== s[k]) patch[k] = s[k];
+        if (f) for (const k of FRAME_FIELDS) if (o[k] !== f[k]) patch[k] = f[k];
         if (Object.keys(patch).length) annotations.update(editor.tab, o.id, patch, { coalesce: `text-style:${o.id}` });
       }
     }

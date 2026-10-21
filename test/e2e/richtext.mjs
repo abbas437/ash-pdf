@@ -351,6 +351,84 @@ try {
   near(o2.y - o.y, 30 / s1, 're-edit move y', 0.5);
   check(o2.text === 'Hello big world', 're-edit move keeps the text');
 
+  // Word-style frame: border / fill / margin from the options bar; the text sits inside the inset
+  // (border + margin) in the overlay and in the editor, and the four fields survive save + reopen.
+  step = 'text box frame';
+  await key('Escape');
+  await ev('an.select(tab, []);');
+  if (await ev('return app.state.tool;') !== 'text') await key('t');
+  await frames();
+  const setFrame = async (bw, fill, pad) => {
+    await page.selectOption('.options-bar .opt-text-border', String(bw));
+    const on = await page.isChecked('.options-bar .opt-text-fill');
+    if (!!fill !== on) await page.click('.options-bar .opt-text-fill');
+    if (fill) await page.$eval('.options-bar .opt-text-fill-color', (el, c) => { el.value = c; el.dispatchEvent(new Event('input', { bubbles: true })); }, fill);
+    await page.$eval('.options-bar .opt-text-margin', (el, p) => { el.value = String(p); el.dispatchEvent(new Event('change', { bubbles: true })); }, pad);
+  };
+  const FILL = '#ffff99';
+  await setFrame(2, FILL, 6);
+  await page.mouse.click(...await toClient(0, 60, 700));
+  await page.keyboard.type('Line one');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('Line two');
+  await page.keyboard.press('Control+Enter');
+  const fo = (await texts()).at(-1);
+  check(fo.text === 'Line one\nLine two' && fo.borderWidth === 2 && fo.borderColor === '#000000' && fo.fill === FILL && fo.padding === 6, `frame fields ${JSON.stringify(fo)}`);
+  const fm = await measure('Line one\nLine two', { ...fo, w: fo.w - 16 });
+  near(fo.h, fm.height + 16, 'framed box height = text + 2 * inset', 0.01);
+  const fsvg = await ev('const g = v.getOverlaySvg(tab, 0).querySelector(`[data-obj-id="${arg}"]`); const r = g.querySelector("rect.ann-text-frame"); return r && { fill: r.getAttribute("fill"), stroke: r.getAttribute("stroke"), sw: +r.getAttribute("stroke-width"), x: +r.getAttribute("x") };', fo.id);
+  check(fsvg && fsvg.fill === FILL && fsvg.stroke === '#000000' && fsvg.sw === 2 && fsvg.x === fo.x + 1, `SVG frame rect ${JSON.stringify(fsvg)}`);
+  const fts = await tspans([0, fo.id]);
+  check(fts.length === 2 && fts[0].x >= fo.x + 8 - 0.001, `first tspan not inset: ${JSON.stringify(fts)} box x ${fo.x}`);
+  near(fts[0].y, fo.y + 8 + fm.firstBaseline, 'first baseline inside the inset', 0.01);
+  // The editor's first line sits where the overlay draws it (ink of "Line one", inside the frame).
+  const sc = await ev('return v.scale(tab);');
+  const line1 = async () => { const c = await boxClient(0, { x: fo.x + 8, y: fo.y + 8, w: fo.w - 16, h: fm.lineHeight }); return inkBottom({ x: c.l, y: c.t, width: c.r - c.l, height: c.b - c.t }); };
+  const svgInk = await line1();
+  await key('Escape');
+  await key('v');
+  await frames();
+  await page.mouse.dblclick(...await toClient(0, fo.x + 20, fo.y + fo.h / 2));
+  check(await ed('return ed?.objectId;') === fo.id, 're-editing the framed box');
+  await frames();
+  const edInk = await line1();
+  check(svgInk != null && edInk != null, `no ink found: overlay ${svgInk}, editor ${edInk}`);
+  // Text area: the editor content box starts the inset (8 pt) inside the box (exact, any zoom); glyph ink agrees with the overlay to rendering noise.
+  const edTop = await ed("return ed.el.getBoundingClientRect().top + parseFloat(getComputedStyle(ed.el).paddingTop) + parseFloat(getComputedStyle(ed.el).borderTopWidth);");
+  near(edTop, (await boxClient(0, fo)).t + 8 * sc, "editor first line top = box top + inset (client px)", 0.5);
+  near(edInk, svgInk, "editor first line ink vs rendered first line (client px)", 1.5);
+  const er2 = await editorRect(), ob2 = await boxClient(0, fo);
+  sameRect(er2, ob2, 'editor = outer box', 1.5);
+  const fr2 = await ed('const r = ed.el.parentNode.querySelector(".text-editor-frame").getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom };');
+  check(fr2.l < er2.l && fr2.t < er2.t && fr2.r > er2.r && fr2.b > er2.b, `grab frame does not surround the box: ${JSON.stringify(fr2)} vs ${JSON.stringify(er2)}`);
+  check(sc > 0, 'scale');
+  await page.keyboard.press('Control+Enter');
+  const fo2 = (await objs()).find((x) => x.id === fo.id);
+  check(fo2.borderWidth === 2 && fo2.fill === FILL && fo2.padding === 6 && fo2.h === fo.h, `re-edit kept the frame: ${JSON.stringify(fo2)}`);
+  // A plain box made after clearing the options has none of the frame fields.
+  await key('Escape');
+  await ev('an.select(tab, []);');
+  await key('t');
+  await frames();
+  await setFrame(0, null, 0);
+  const fo3 = (await objs()).find((x) => x.id === fo.id);
+  check(fo3.borderWidth === 2 && fo3.fill === FILL && fo3.padding === 6, 'clearing the options changed an unselected box');
+  await page.mouse.click(...await toClient(0, 320, 700));
+  await page.keyboard.type('Plain');
+  await page.keyboard.press('Control+Enter');
+  const po = (await texts()).at(-1);
+  check(po.text === 'Plain' && ['borderWidth', 'borderColor', 'fill', 'padding'].every((k) => !(k in po)), `plain box has frame keys: ${JSON.stringify(po)}`);
+  // Save + reopen.
+  check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false');
+  const saved = await ev('return Array.from(await window.api.readFile(tab.path));');
+  const nTabs = await ev('return app.state.tabs.length;');
+  await ev('await app.openBytes({ name: "framed.pdf", bytes: new Uint8Array(arg) });', saved);
+  await page.waitForFunction((n) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return a.state.tabs.length > n && t?.objects?.some((o) => o.type === 'text'); }, nTabs, { timeout: 10_000 });
+  const ro = (await texts()).find((x) => x.text === 'Line one\nLine two');
+  check(ro && ro.borderWidth === 2 && ro.borderColor === '#000000' && ro.fill === FILL && ro.padding === 6, `reopened frame ${JSON.stringify(ro)}`);
+  const rp = (await texts()).find((x) => x.text === 'Plain');
+  check(rp && ['borderWidth', 'fill', 'padding'].every((k) => !(k in rp) || rp[k] == null), `reopened plain box ${JSON.stringify(rp)}`);
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {
