@@ -37,6 +37,7 @@ import { initExports } from './ui/exports.js';
 import { initCompress } from './ui/compress.js';
 import { initOcr } from './ui/ocr.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
+import { initTextMenu } from './ui/text-menu.js';
 import { initHandTool } from './ui/tools-hand.js';
 import { initTextEdit } from './ui/textedit.js';
 import { initSession } from './ui/session.js';
@@ -752,6 +753,7 @@ initCompress(app); // File > Reduce file size
 initOcr(app); // Tools > Recognize text (OCR)
 initAdvancedSearch(app);
 initCopyText(app);
+initTextMenu();
 initHandTool();
 initTextEdit(); // Edit text tool (D): original document text, line by line
 initSplitView({ host: viewerHost, activate, registerMenuItem });

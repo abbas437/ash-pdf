@@ -106,9 +106,9 @@ function svgEl(name, attrs, parent) {
 }
 const fontAttrs = (o) => ({ 'font-family': FAMILY[fontOf(o.font)], 'font-size': r3(o.fontSize > 0 ? o.fontSize : 12), 'font-weight': o.bold ? 'bold' : 'normal', 'font-style': o.italic ? 'italic' : 'normal' });
 
-/** Rich text: one tspan per layoutRich fragment, underline / strike as thin rects (same positions as the PDF appearance). */
-function renderRuns(o, g) {
-  const L = core.layoutRich(o, o.w, { x: o.x, y: o.y });
+/** Rich text: one tspan per layoutRich fragment, underline / strike as thin rects (same positions as the PDF appearance). Also used by callouts (with their padding). */
+export function renderRuns(o, g, lib = core) {
+  const L = lib.layoutRich(o, o.w, { x: o.x, y: o.y });
   const t = svgEl('text', { opacity: o.opacity, style: 'white-space: pre' }, g);
   for (const line of L.lines) for (const f of line.fragments) {
     if (f.text === '') continue;
@@ -417,9 +417,9 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   // Keep pointer events on the editor away from the tool dispatch (select tool would start a move).
   for (const t of ['pointerdown', 'pointermove', 'pointerup', 'dblclick']) el.addEventListener(t, (e) => e.stopPropagation());
   el.addEventListener('blur', (e) => {
-    if (e.relatedTarget?.closest?.('.options-bar') || !el.isConnected) return;
+    if (e.relatedTarget?.closest?.('.options-bar, .menu') || !el.isConnected) return;
     // Window blur (switching apps) keeps the editor open.
-    setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.('.options-bar')) handle.commit(); }, 0);
+    setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.('.options-bar, .menu')) handle.commit(); }, 0);
   });
   render();
   layer.append(el, warn);
