@@ -10,6 +10,14 @@ import {
   popGraphicsState,
   concatTransformationMatrix,
   setLineJoin,
+  setGraphicsState,
+  beginText,
+  endText,
+  setFillingColor,
+  setFontAndSize,
+  setTextMatrix,
+  PDFOperator,
+  PDFOperatorNames,
   rgb,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreError, ContentMap } from './internal.js';
@@ -449,6 +457,43 @@ class PagePainter {
     });
   }
 
+  /**
+   * One line of text at (x, y) (y-up) with the font's kerning applied as TJ adjustments, so its advance
+   * equals font.widthOfTextAtSize (which includes the kerning pairs).
+   */
+  kernedText(str, { x, y, size, font, color, opacity }) {
+    const m = metricsFor(font.name);
+    const glyphs = m.encodeTextAsGlyphs(str);
+    const parts = [];
+    let piece = '';
+    let i = 0;
+    for (const ch of str) {
+      piece += ch;
+      const k = m.font.getXAxisKerningForPair(glyphs[i].name, glyphs[i + 1]?.name) || 0;
+      i++;
+      if (k && i < glyphs.length) {
+        parts.push(font.encodeText(piece), -k); // TJ numbers are subtracted from the advance
+        piece = '';
+      }
+    }
+    if (piece) parts.push(font.encodeText(piece));
+    const key = this.page.node.newFontDictionary(font.name, font.ref);
+    const gs = opacity === undefined ? undefined : this.page.node.newExtGState('GS', this.doc.context.obj({ Type: 'ExtGState', ca: opacity }));
+    this.page.pushOperators(
+      ...[
+        pushGraphicsState(),
+        gs && setGraphicsState(gs),
+        beginText(),
+        setFillingColor(color),
+        setFontAndSize(key, size),
+        setTextMatrix(1, 0, 0, 1, x, y),
+        PDFOperator.of(PDFOperatorNames.ShowTextAdjusted, [this.doc.context.obj(parts)]),
+        endText(),
+        popGraphicsState(),
+      ].filter(Boolean),
+    );
+  }
+
   /** Draw the layoutRich fragments of `o` in `box`: per-fragment font, size, colour, underline / strike bars. */
   textBlock(o, box) {
     const L = layoutRich(o, box.w, box);
@@ -461,15 +506,22 @@ class PagePainter {
     };
     colorOf(base.color);
     const opacity = opacityOf(o.opacity);
+    // Fragments are measured with the fonts' kerning. With more than one style the fragments are drawn
+    // kerned too (TJ), so each one ends where the next starts; a single-style box keeps its plain Tj
+    // (output byte-identical to before runs).
+    const frs = L.lines.flatMap((l) => l.fragments);
+    const kerned = frs.some((f) => !sameRunStyle(f.style, frs[0].style));
     for (const line of L.lines) {
       for (const fr of line.fragments) {
         const s = fr.style;
         const color = colorOf(s.color);
-        this.page.drawText(fr.text, {
+        const font = this.font(standardFontName(s.font, s.bold, s.italic));
+        if (kerned) this.kernedText(fr.text, { x: fr.x, y: this.uy(fr.baseline), size: s.fontSize, font, color, opacity });
+        else this.page.drawText(fr.text, {
           x: fr.x,
           y: this.uy(fr.baseline),
           size: s.fontSize,
-          font: this.font(standardFontName(s.font, s.bold, s.italic)),
+          font,
           color,
           opacity,
         });

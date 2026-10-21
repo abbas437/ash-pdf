@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, PDFName, decodePDFRawStream } from 'pdf-lib';
+import { PDFDocument, PDFName, decodePDFRawStream, StandardFontEmbedder } from 'pdf-lib';
 import { layoutRich, measureText, flattenObjects, writeAnnotations } from '../src/core/index.js';
 import { makePdf, pageContent, near } from './helpers.js';
 
@@ -125,4 +125,51 @@ test('FreeText appearance draws runs the same way', async () => {
   const ap = doc.context.lookup(doc.getPage(0).node.Annots().asArray()[0]).lookup(PDFName.of('AP')).lookup(PDFName.of('N'));
   const bbox = ap.dict.lookup(PDFName.of('BBox')).asArray().map((n) => n.asNumber());
   expectRich(Buffer.from(decodePDFRawStream(ap).decode()).toString('latin1'), fontNames(ap.dict.lookup(PDFName.of('Resources'))), 0, 0, bbox[3]);
+});
+
+// Kerning: fragments are measured with the font's kerning pairs, so they must be drawn with them too.
+const KERN = { id: 'k', page: 0, type: 'text', x: 50, y: 60, w: 300, h: 40, fontSize: 12, text: 'AVAVTo', runs: [{ text: 'AVAV' }, { text: 'To', bold: true }] };
+
+/** The BT blocks of a content stream: Tm x, font size and the drawn advance (glyph widths minus TJ adjustments). */
+function textAdvances(content) {
+  const out = [];
+  for (const [, block] of content.matchAll(/BT\n([\s\S]*?)\nET/g)) {
+    const font = /\/(Helvetica[-A-Za-z]*)-\d+ ([\d.]+) Tf/.exec(block);
+    const tm = /1 0 0 1 ([-\d.]+) ([-\d.]+) Tm/.exec(block);
+    const m = StandardFontEmbedder.for(font[1]);
+    const size = Number(font[2]);
+    const tj = /\[(.*)\] TJ/.exec(block);
+    const items = tj ? [...tj[1].matchAll(/<([0-9A-F]*)>|(-?[\d.]+)/g)] : [[null, /<([0-9A-F]*)> Tj/.exec(block)[1]]];
+    let adv = 0, text = '';
+    for (const [, hex, n] of items) {
+      if (hex !== undefined && hex !== null) {
+        const s = Buffer.from(hex, 'hex').toString('latin1');
+        text += s;
+        for (const g of m.encodeTextAsGlyphs(s)) adv += m.widthOfGlyph(g.name);
+      } else adv -= Number(n);
+    }
+    out.push({ text, x: Number(tm[1]), advance: (adv * size) / 1000 });
+  }
+  return out;
+}
+
+test('kerning: a fragment after a style change starts where the kerned previous fragment ends', async () => {
+  const L = layoutRich(KERN, KERN.w, KERN);
+  const [a, b] = L.lines[0].fragments;
+  assert.deepEqual([a.text, b.text], ['AVAV', 'To']);
+  near(b.x, a.x + a.width, 1e-9, 'layout: second fragment at the measured width of the first');
+  const ap = await writeAnnotations(await makePdf(1, [400, 400]), { add: [KERN] }, { author: 'A', now: '2026-10-07T10:00:00.000Z' });
+  const apDoc = await PDFDocument.load(ap);
+  const apStream = apDoc.context.lookup(apDoc.getPage(0).node.Annots().asArray()[0]).lookup(PDFName.of('AP')).lookup(PDFName.of('N'));
+  const contents = {
+    flatten: await pageContent(await flattenObjects(await makePdf(1, [400, 400]), [KERN])),
+    appearance: Buffer.from(decodePDFRawStream(apStream).decode()).toString('latin1'),
+  };
+  for (const [where, content] of Object.entries(contents)) {
+    const frs = textAdvances(content).filter((t) => t.text === 'AVAV' || t.text === 'To');
+    assert.deepEqual(frs.map((t) => t.text), ['AVAV', 'To'], where);
+    near(frs[0].advance, a.width, 1e-9, `${where}: drawn advance of AVAV equals its measured (kerned) width`);
+    near(frs[1].x, frs[0].x + frs[0].advance, 1e-9, `${where}: To starts where AVAV ends`);
+    near(frs[1].x - frs[0].x, b.x - a.x, 1e-9, `${where}: fragment offset as laid out`);
+  }
 });
