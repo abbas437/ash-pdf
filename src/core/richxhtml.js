@@ -1,5 +1,5 @@
 // FreeText rich text (/RC, PDF 32000 §12.7.3.4): XHTML <-> a text object's box style + runs.
-import { boxStyle, runsOf, normalizeRuns } from './richtext.js';
+import { boxStyle, runsOf, normalizeRuns, isImageRun } from './richtext.js';
 
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 /** XML 1.0 forbids these (controls, U+FFFE/F, lone surrogates); they are dropped from /RC text. */
@@ -27,6 +27,7 @@ export function toRichContents(obj) {
   const box = boxStyle(obj);
   const paras = [[]];
   for (const r of runsOf(obj)) {
+    if (isImageRun(r)) continue; // inline images are not in /RC (other viewers get the text; ours read the private copy)
     const s = { ...box };
     for (const k of Object.keys(box)) if (r[k] !== undefined && r[k] !== null) s[k] = r[k];
     r.text.split('\n').forEach((raw, i) => {

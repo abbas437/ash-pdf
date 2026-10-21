@@ -18,7 +18,7 @@ import { toast, dialogOpen } from './dialogs.js';
 import { activeTab } from '../state.js';
 import { viewer } from './viewer.js';
 import { annotations, copyObjects, cutObjects, pasteObjects, objectClipboardSummary, objectAtPoint } from './annotations.js';
-import { addTextBox } from './tools-text.js';
+import { addTextBox, activeTextEditor } from './tools-text.js';
 import { placeImage, sniffImage } from './tools-stamp.js';
 import { clipboardMatches, isCountSummary } from './clipboard-lib.js';
 
@@ -126,7 +126,10 @@ function fieldClipboard(e, k) {
   const selected = field ? el.value.slice(el.selectionStart, el.selectionEnd) : (window.getSelection()?.toString() ?? '');
   if (k === 'v') {
     if (el.readOnly) return;
-    window.api.readText().then((text) => { if (text && document.activeElement === el) document.execCommand('insertText', false, text); },
+    window.api.readText().then((text) => {
+      if (text && document.activeElement === el) document.execCommand('insertText', false, text);
+      else if (!text) { const ed = activeTextEditor(); if (ed?.el === el) ed.pasteClipboardImage(); } // a picture into a text box
+    },
       (err) => toast(`Could not paste: ${err?.message ?? err}`));
     return;
   }

@@ -498,6 +498,74 @@ try {
   check(B4.padding === 12 && B4.borderWidth === 2, `Ctrl+Enter frame ${JSON.stringify(B4)}`);
   near(B4.h, m4.height + 2 * (12 + 2), 'B height fits text + 2 * inset after the margin change', 0.01);
 
+  // Inline picture: a pasted PNG file is one character of the text, kept through undo, commit, re-edit and save.
+  step = 'inline picture';
+  await key('Escape');
+  await ev('an.select(tab, []);');
+  if (await ev('return app.state.tool;') !== 'text') await key('t');
+  await frames();
+  await setFrame(0, null, 0); // the previous step leaves a framed text style
+  await page.mouse.click(...await toClient(0, 320, 100));
+  await page.keyboard.type('AB');
+  await ed('ed.setSelection(1, 1);');
+  // 40 x 30 pt = 53.33 x 40 px at 96 dpi; draw it at that size so the natural size is 40 x 30 pt.
+  await ed(`const c = new OffscreenCanvas(160, 120); const x = c.getContext('2d'); x.fillStyle = '#d62828'; x.fillRect(0, 0, 160, 120);
+    const b = new Uint8Array(await (await c.convertToBlob({ type: 'image/png' })).arrayBuffer());
+    globalThis.__pngLen = b.length;
+    const dt = new DataTransfer(); dt.items.add(new File([b], 'p.png', { type: 'image/png' }));
+    ed.el.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));`);
+  await page.waitForFunction(async () => (await import('/renderer/ui/tools-text.js')).activeTextEditor()?.getText().length === 3, null, { timeout: 5000 });
+  check(await ed('return ed.getText();') === 'A\uFFFCB', `picture text ${JSON.stringify(await ed('return ed.getText();'))}`);
+  let pr = (await ed('return ed.getRuns();')).find((r) => r.img);
+  near(pr?.imgW, 120, 'picture natural width (pt)', 0.01);
+  near(pr?.imgH, 90, 'picture natural height (pt)', 0.01);
+  check(await ed('return ed.el.querySelectorAll("img").length;') === 1, 'no <img> in the editor');
+  check(JSON.stringify(await ed('return ed.getSelection();')) === '{"start":2,"end":2}', 'caret after the picture');
+  await page.keyboard.press('Backspace');
+  check(await ed('return ed.getText();') === 'AB' && !(await ed('return ed.el.querySelector("img");')), `Backspace removes the picture as one character: ${JSON.stringify(await ed('return ed.getText();'))}`);
+  await page.keyboard.press('Control+z');
+  check(await ed('return ed.getText();') === 'A\uFFFCB' && await ed('return !!ed.el.querySelector("img")?.src;'), 'Ctrl+Z restores the picture');
+  await ed('ed.setSelection(1, 2);');
+  await page.keyboard.type('x');
+  check(await ed('return ed.getText();') === 'AxB', 'typing over a selected picture replaces it');
+  await page.keyboard.press('Control+z');
+  check(await ed('return ed.getText();') === 'A\uFFFCB', 'undo the replacement');
+  await page.keyboard.press('Control+Enter');
+  const io = (await texts()).at(-1);
+  const ik = io.runs?.find((r) => r.img)?.img;
+  check(io.text === 'A\uFFFCB' && ik && Object.keys(io.images ?? {}).join() === ik && io.images[ik].mime === 'image/png', `committed images ${JSON.stringify(Object.keys(io.images ?? {}))} runs ${JSON.stringify(io.runs)}`);
+  near(io.h, 90 + 12 * 1.2 * 0.5, 'box grew for the picture line', 12);
+  await frames();
+  const si = await ev('const g = v.getOverlaySvg(tab, 0).querySelector(`[data-obj-id="${arg}"]`); const i = g?.querySelector("image"); return i && { w: +i.getAttribute("width"), h: +i.getAttribute("height"), href: i.getAttribute("href") };', io.id);
+  check(si && Math.abs(si.w - 120) < 0.01 && Math.abs(si.h - 90) < 0.01 && si.href, `SVG <image> ${JSON.stringify(si)}`);
+  await key('Escape');
+  await key('v');
+  await frames();
+  await page.mouse.dblclick(...await toClient(0, io.x + 3, io.y + io.h - 4));
+  check(await ed('return ed?.objectId;') === io.id && await ed('return ed.el.querySelectorAll("img").length;') === 1, 're-edit shows the picture');
+  await ed('ed.setSelection(3, 3);');
+  await page.keyboard.type('C');
+  await page.keyboard.press('Control+Enter');
+  const io2 = (await objs()).find((x) => x.id === io.id);
+  check(io2.text === 'A\uFFFCBC' && io2.images?.[ik]?.bytes?.length === io.images[ik].bytes.length, 're-edit kept the picture');
+  // A box whose picture was deleted has no images field.
+  await page.mouse.dblclick(...await toClient(0, io.x + 3, io.y + io.h - 4));
+  await ed('ed.setSelection(1, 2);');
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Control+Enter');
+  check(!('images' in (await objs()).find((x) => x.id === io.id)) || (await objs()).find((x) => x.id === io.id).images === undefined, 'unused images dropped on commit');
+  await page.keyboard.press('Control+z');
+  check((await objs()).find((x) => x.id === io.id).images?.[ik], 'undo brings the picture back');
+  // Save + reopen keeps the bytes and the run size.
+  check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false (picture)');
+  const saved2 = await ev('return Array.from(await window.api.readFile(tab.path));');
+  const nTabs2 = await ev('return app.state.tabs.length;');
+  await ev('await app.openBytes({ name: "picture.pdf", bytes: new Uint8Array(arg) });', saved2);
+  await page.waitForFunction((n) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return a.state.tabs.length > n && t?.objects?.some((o) => o.type === 'text' && o.text?.includes('\uFFFC')); }, nTabs2, { timeout: 10_000 });
+  const ri = (await texts()).find((x) => x.text?.includes('\uFFFC'));
+  const rr = ri.runs?.find((r) => r.img);
+  check(rr && ri.images?.[rr.img]?.bytes?.length === io.images[ik].bytes.length && Math.abs(rr.imgW - 120) < 0.01 && Math.abs(rr.imgH - 90) < 0.01, `reopened picture ${JSON.stringify(rr)} ${ri.images?.[rr?.img]?.bytes?.length}`);
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {

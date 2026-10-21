@@ -24,7 +24,7 @@ import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreErr
 import { calloutArrowHead } from './arrowhead.js';
 import { stampLayout } from './stamps.js';
 import { cloudPath } from './cloud.js';
-import { STYLE_KEYS, boxStyle, runsOf } from './richtext.js';
+import { STYLE_KEYS, OBJ_CHAR, boxStyle, runsOf, isImageRun } from './richtext.js';
 
 // ---------------------------------------------------------------- fonts & text
 
@@ -153,6 +153,11 @@ const sameRunStyle = (a, b) => STYLE_KEYS.every((k) => a[k] === b[k]);
  * Returns { width, height, lines: [{ top, height, baseline, width, x, fragments }] } with
  * fragments [{ text, x, width, baseline, style: {font, fontSize, bold, italic, underline, strike, color},
  * decorations: [{ type: 'underline'|'strike', y, thickness }] }] (decoration y = centre of the bar).
+ * Inline images (image runs, see richtext.js) are one unbreakable "character" imgW wide, a break
+ * opportunity on both sides; their bottom sits on the baseline and a picture taller than the line's
+ * ascent raises the line (height = imgH + descent + the line's leading). Their fragments are
+ * { text: '\uFFFC', img: <key>, x, width: imgW, height: imgH, top, baseline, style: <box style>,
+ * decorations: [] } (top = baseline - imgH).
  */
 export function layoutRich(obj, maxWidth, { x: ox = 0, y: oy = 0 } = {}) {
   const box = boxStyle(obj);
@@ -163,10 +168,17 @@ export function layoutRich(obj, maxWidth, { x: ox = 0, y: oy = 0 } = {}) {
   const at = [];
   let text = '';
   for (const r of runsOf(obj)) {
+    if (isImageRun(r)) {
+      // its own style entry (never shared), so segments never join it with a neighbour
+      styles.push({ s: box, m: metricsFor(standardFontName(box.font, box.bold, box.italic)), img: { key: r.img, w: num(r.imgW, 12), h: num(r.imgH, 12) } });
+      text += OBJ_CHAR;
+      at.push(styles.length - 1);
+      continue;
+    }
     const t = sanitizeText(r.text);
     if (!t) continue;
     const s = runStyle(r, box);
-    if (!styles.length || !sameRunStyle(styles[styles.length - 1], s)) {
+    if (!styles.length || styles[styles.length - 1].img || !sameRunStyle(styles[styles.length - 1], s)) {
       const m = metricsFor(standardFontName(s.font, s.bold, s.italic));
       styles.push({ s, m });
     }
@@ -183,7 +195,8 @@ export function layoutRich(obj, maxWidth, { x: ox = 0, y: oy = 0 } = {}) {
     }
     return out;
   };
-  const widthOf = (a, b) => segments(a, b).reduce((w, [i, j, { s, m }]) => w + m.widthOfTextAtSize(text.slice(i, j), s.fontSize), 0);
+  const segWidth = (i, j, { s, m, img }) => (img ? img.w : m.widthOfTextAtSize(text.slice(i, j), s.fontSize));
+  const widthOf = (a, b) => segments(a, b).reduce((w, [i, j, st]) => w + segWidth(i, j, st), 0);
   const boxMetrics = { s: box, m: metricsFor(standardFontName(box.font, box.bold, box.italic)) };
   const styleAtPos = (i) => (text.length ? styles[at[Math.min(i, text.length - 1)]] : boxMetrics);
 
@@ -197,14 +210,20 @@ export function layoutRich(obj, maxWidth, { x: ox = 0, y: oy = 0 } = {}) {
   const lines = ranges.map(([a, b]) => {
     const frags = segments(a, b);
     const used = frags.length ? frags.map(([, , st]) => st) : [styleAtPos(a)];
-    let size = 0, ascent = 0, descent = 0;
-    for (const { s, m } of used) {
+    let size = 0, ascent = 0, descent = 0, imgH = 0;
+    for (const { s, m, img } of used) {
+      if (img) imgH = Math.max(imgH, img.h);
       const asc = m.heightOfFontAtSize(s.fontSize, { descender: false });
       size = Math.max(size, s.fontSize);
       ascent = Math.max(ascent, asc);
       descent = Math.max(descent, m.heightOfFontAtSize(s.fontSize) - asc);
     }
-    const lh = size * lineHeight;
+    let lh = size * lineHeight;
+    if (imgH > ascent) {
+      // a picture taller than the text: it is the line's ascent, the leading stays
+      lh = imgH + descent + Math.max(0, lh - (ascent + descent));
+      ascent = imgH;
+    }
     return { frags, height: lh, inner: (lh - (ascent + descent)) / 2 + ascent, width: frags.length ? widthOf(a, b) : 0 };
   });
   // equal line heights: line i at i * lineHeight (the arithmetic measureText / the old drawing used)
@@ -221,7 +240,12 @@ export function layoutRich(obj, maxWidth, { x: ox = 0, y: oy = 0 } = {}) {
     if (align === 'center') x = ox + (alignWidth - l.width) / 2;
     else if (align === 'right') x = ox + alignWidth - l.width;
     let cx = x;
-    const fragments = l.frags.map(([fa, fb, { s, m }]) => {
+    const fragments = l.frags.map(([fa, fb, { s, m, img }]) => {
+      if (img) {
+        const fr = { text: OBJ_CHAR, img: img.key, x: cx, width: img.w, height: img.h, top: baseline - img.h, baseline, style: { ...s }, decorations: [] };
+        cx += img.w;
+        return fr;
+      }
       const w = m.widthOfTextAtSize(text.slice(fa, fb), s.fontSize);
       const decorations = [];
       const thickness = (m.font.UnderlineThickness / 1000) * s.fontSize;
@@ -259,7 +283,8 @@ function wrapRange(a0, b0, text, widthOf, maxWidth) {
   for (let i = a0; i < b0; ) {
     const space = text[i] === ' ';
     let j = i + 1;
-    while (j < b0 && (text[j] === ' ') === space) j++;
+    // an inline image (U+FFFC: sanitized text has no other) is a token of its own: a break opportunity on both sides
+    if (text[i] !== OBJ_CHAR) while (j < b0 && (text[j] === ' ') === space && text[j] !== OBJ_CHAR) j++;
     if (space) {
       if (cur) cur[1] = j;
     } else if (!cur) cur = [pushWord(i, j), j];
@@ -522,10 +547,15 @@ class PagePainter {
     // Fragments are measured with the fonts' kerning. With more than one style the fragments are drawn
     // kerned too (TJ), so each one ends where the next starts; a single-style box keeps its plain Tj
     // (output byte-identical to before runs).
-    const frs = L.lines.flatMap((l) => l.fragments);
+    const frs = L.lines.flatMap((l) => l.fragments).filter((f) => !f.img);
     const kerned = frs.some((f) => !sameRunStyle(f.style, frs[0].style));
     for (const line of L.lines) {
       for (const fr of line.fragments) {
+        if (fr.img) { // inline image: bottom on the baseline (a key without an image in o.images: left blank)
+          const img = this.images(o, fr.img);
+          if (img) this.page.drawImage(img, { x: fr.x, y: this.uy(fr.baseline), width: fr.width, height: fr.height, opacity });
+          continue;
+        }
         const s = fr.style;
         const color = colorOf(s.color);
         const font = this.font(standardFontName(s.font, s.bold, s.italic));
@@ -798,23 +828,30 @@ export async function flattenObjects(pdfBytes, objects, { skipUnknown = false } 
   const apPages = new ContentMap(); // apStamp appearance -> embedded page, one per distinct content (a seal on every page: one copy)
   for (const o of objects) {
     if (o.type === 'apStamp' && o.ap instanceof Uint8Array && !apPages.get(o.ap)) apPages.set(o.ap, (await doc.embedPdf(o.ap, [0]))[0]);
-    if (o.type !== 'image') continue;
-    if (!(o.bytes instanceof Uint8Array) && !(o.bytes instanceof ArrayBuffer)) {
+    if (o.type === 'image') await embed(o, o.bytes, o.mime);
+    else if (o.images && typeof o.images === 'object') {
+      // a text box's inline images: only those its runs use
+      for (const r of runsOf(o)) if (isImageRun(r) && o.images[r.img]) await embed(o, o.images[r.img].bytes, o.images[r.img].mime);
+    }
+  }
+  async function embed(o, bytes, mime) {
+    if (!(bytes instanceof Uint8Array) && !(bytes instanceof ArrayBuffer)) {
       throw new TypeError(`image object ${o.id ?? ''} needs bytes`);
     }
-    if (embedded.has(o.bytes)) continue;
+    if (embedded.has(bytes)) return;
     let img;
     try {
-      if (o.mime === 'image/png') img = await doc.embedPng(o.bytes);
-      else if (o.mime === 'image/jpeg') img = await doc.embedJpg(o.bytes);
-      else throw new TypeError(`image object ${o.id ?? ''} has unsupported mime "${o.mime}"`);
+      if (mime === 'image/png') img = await doc.embedPng(bytes);
+      else if (mime === 'image/jpeg') img = await doc.embedJpg(bytes);
+      else throw new TypeError(`image object ${o.id ?? ''} has unsupported mime "${mime}"`);
     } catch (e) {
       if (e instanceof TypeError) throw e;
       throw coreError('INVALID_IMAGE', `Could not decode image for object ${o.id ?? ''}: ${e.message}`, e);
     }
-    embedded.set(o.bytes, img);
+    embedded.set(bytes, img);
   }
-  const images = (o) => (o.type === 'apStamp' ? apPages.get(o.ap) : embedded.get(o.bytes));
+  // (o) -> the object's image / apStamp page; (o, key) -> the PDFImage of inline image `key` of a text box
+  const images = (o, key) => (key !== undefined ? embedded.get(o.images?.[key]?.bytes) : o.type === 'apStamp' ? apPages.get(o.ap) : embedded.get(o.bytes));
   const byPage = new Map();
   for (const o of objects) {
     if (!byPage.has(o.page)) byPage.set(o.page, []);
