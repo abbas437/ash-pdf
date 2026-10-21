@@ -16,6 +16,7 @@ import { loadPdf, saveEdited, pageGeometry, visibleUpMatrix, parseColor, coreErr
 import { calloutArrowHead } from './arrowhead.js';
 import { stampLayout } from './stamps.js';
 import { cloudPath } from './cloud.js';
+import { STYLE_KEYS, boxStyle, runsOf } from './richtext.js';
 
 // ---------------------------------------------------------------- fonts & text
 
@@ -112,6 +113,157 @@ export function measureText(text, { font = 'Helvetica', bold = false, italic = f
     descent,
     firstBaseline: (lh - (ascent + descent)) / 2 + ascent,
   };
+}
+
+// ---------------------------------------------------------------- rich text layout
+
+const BOOL_KEYS = new Set(['bold', 'italic', 'underline', 'strike']);
+
+/** Effective style of a run: the box style with the run's overrides (a non-positive size keeps the box size). */
+function runStyle(run, box) {
+  const s = { ...box };
+  for (const k of STYLE_KEYS) {
+    const v = run[k];
+    if (v === undefined || v === null) continue;
+    if (k === 'fontSize') {
+      if (Number.isFinite(v) && v > 0) s.fontSize = v;
+    } else if (BOOL_KEYS.has(k)) s[k] = !!v;
+    else s[k] = k === 'color' ? String(v).trim().toLowerCase() : String(v);
+  }
+  return s;
+}
+
+const sameRunStyle = (a, b) => STYLE_KEYS.every((k) => a[k] === b[k]);
+
+/**
+ * Lay out a text / callout object's text, runs-aware (see richtext.js), exactly as flattenObjects
+ * draws it. Coordinates are visible (y down), relative to `origin` (the box's top-left, default 0,0).
+ * Lines wrap at spaces within `maxWidth` (a word longer than the box is hard-broken), across run
+ * boundaries; '\n' starts a new line; the line height is the largest font size on the line x
+ * lineHeight; `align` (left/center/right) applies per line within maxWidth. Without runs this is
+ * exactly measureText's wrapping.
+ * Returns { width, height, lines: [{ top, height, baseline, width, x, fragments }] } with
+ * fragments [{ text, x, width, baseline, style: {font, fontSize, bold, italic, underline, strike, color},
+ * decorations: [{ type: 'underline'|'strike', y, thickness }] }] (decoration y = centre of the bar).
+ */
+export function layoutRich(obj, maxWidth, { x: ox = 0, y: oy = 0 } = {}) {
+  const box = boxStyle(obj);
+  if (!(box.fontSize > 0)) throw new RangeError('fontSize must be > 0');
+  const lineHeight = num(obj.lineHeight, 1.2);
+  // the sanitized text, one style per code unit (adjacent equal styles share one entry)
+  const styles = [];
+  const at = [];
+  let text = '';
+  for (const r of runsOf(obj)) {
+    const t = sanitizeText(r.text);
+    if (!t) continue;
+    const s = runStyle(r, box);
+    if (!styles.length || !sameRunStyle(styles[styles.length - 1], s)) {
+      const m = metricsFor(standardFontName(s.font, s.bold, s.italic));
+      styles.push({ s, m });
+    }
+    text += t;
+    for (let i = 0; i < t.length; i++) at.push(styles.length - 1);
+  }
+  const segments = (a, b) => {
+    const out = [];
+    for (let i = a; i < b; ) {
+      let j = i + 1;
+      while (j < b && at[j] === at[i]) j++;
+      out.push([i, j, styles[at[i]]]);
+      i = j;
+    }
+    return out;
+  };
+  const widthOf = (a, b) => segments(a, b).reduce((w, [i, j, { s, m }]) => w + m.widthOfTextAtSize(text.slice(i, j), s.fontSize), 0);
+  const boxMetrics = { s: box, m: metricsFor(standardFontName(box.font, box.bold, box.italic)) };
+  const styleAtPos = (i) => (text.length ? styles[at[Math.min(i, text.length - 1)]] : boxMetrics);
+
+  const ranges = [];
+  let start = 0;
+  for (const par of text.split('\n')) {
+    ranges.push(...wrapRange(start, start + par.length, text, widthOf, maxWidth));
+    start += par.length + 1;
+  }
+
+  const lines = ranges.map(([a, b]) => {
+    const frags = segments(a, b);
+    const used = frags.length ? frags.map(([, , st]) => st) : [styleAtPos(a)];
+    let size = 0, ascent = 0, descent = 0;
+    for (const { s, m } of used) {
+      const asc = m.heightOfFontAtSize(s.fontSize, { descender: false });
+      size = Math.max(size, s.fontSize);
+      ascent = Math.max(ascent, asc);
+      descent = Math.max(descent, m.heightOfFontAtSize(s.fontSize) - asc);
+    }
+    const lh = size * lineHeight;
+    return { frags, height: lh, inner: (lh - (ascent + descent)) / 2 + ascent, width: frags.length ? widthOf(a, b) : 0 };
+  });
+  // equal line heights: line i at i * lineHeight (the arithmetic measureText / the old drawing used)
+  const uniform = lines.every((l) => l.height === lines[0].height);
+  const width = Math.max(0, ...lines.map((l) => l.width));
+  const alignWidth = maxWidth > 0 ? maxWidth : width;
+  const align = obj.align || 'left';
+  let top = 0;
+  const out = lines.map((l, i) => {
+    const lineTop = uniform ? i * l.height : top;
+    top += l.height;
+    const baseline = oy + l.inner + lineTop;
+    let x = ox;
+    if (align === 'center') x = ox + (alignWidth - l.width) / 2;
+    else if (align === 'right') x = ox + alignWidth - l.width;
+    let cx = x;
+    const fragments = l.frags.map(([fa, fb, { s, m }]) => {
+      const w = m.widthOfTextAtSize(text.slice(fa, fb), s.fontSize);
+      const decorations = [];
+      const thickness = (m.font.UnderlineThickness / 1000) * s.fontSize;
+      if (s.underline) decorations.push({ type: 'underline', y: baseline - (m.font.UnderlinePosition / 1000) * s.fontSize, thickness });
+      if (s.strike) decorations.push({ type: 'strike', y: baseline - (m.font.XHeight / 2000) * s.fontSize, thickness });
+      const fr = { text: text.slice(fa, fb), x: cx, width: w, baseline, style: { ...s }, decorations };
+      cx += w;
+      return fr;
+    });
+    return { top: oy + lineTop, height: l.height, baseline, width: l.width, x, fragments };
+  });
+  return { width, height: uniform ? lines.length * (lines[0]?.height ?? 0) : top, lines: out };
+}
+
+/** wrapParagraph over the character range [a0, b0) of `text`: returns line ranges [a, b). */
+function wrapRange(a0, b0, text, widthOf, maxWidth) {
+  if (!(maxWidth > 0) || widthOf(a0, b0) <= maxWidth) return [[a0, b0]];
+  const lines = [];
+  const trimEnd = ([a, b]) => {
+    while (b > a && text[b - 1] === ' ') b--;
+    return [a, b];
+  };
+  const pushWord = (a, b) => {
+    // Hard-break a word that is wider than the box on its own.
+    let rest = a;
+    while (widthOf(rest, b) > maxWidth && b - rest > 1) {
+      let k = 1;
+      while (k < b - rest && widthOf(rest, rest + k + 1) <= maxWidth) k++;
+      lines.push([rest, rest + k]);
+      rest += k;
+    }
+    return rest;
+  };
+  let cur = null;
+  for (let i = a0; i < b0; ) {
+    const space = text[i] === ' ';
+    let j = i + 1;
+    while (j < b0 && (text[j] === ' ') === space) j++;
+    if (space) {
+      if (cur) cur[1] = j;
+    } else if (!cur) cur = [pushWord(i, j), j];
+    else if (widthOf(cur[0], j) <= maxWidth) cur[1] = j;
+    else {
+      lines.push(trimEnd(cur));
+      cur = [pushWord(i, j), j];
+    }
+    i = j;
+  }
+  lines.push(cur ? trimEnd(cur) : [a0, a0]);
+  return lines;
 }
 
 // ---------------------------------------------------------------- helpers
@@ -297,35 +449,35 @@ class PagePainter {
     });
   }
 
+  /** Draw the layoutRich fragments of `o` in `box`: per-fragment font, size, colour, underline / strike bars. */
   textBlock(o, box) {
-    const fontSize = num(o.fontSize, 12);
-    const name = standardFontName(o.font || 'Helvetica', !!o.bold, !!o.italic);
-    const m = measureText(o.text, {
-      font: o.font || 'Helvetica',
-      bold: !!o.bold,
-      italic: !!o.italic,
-      fontSize,
-      maxWidth: box.w,
-      lineHeight: num(o.lineHeight, 1.2),
-    });
-    const font = this.font(name);
-    const color = parseColor(o.color, '#000000') || rgb(0, 0, 0);
-    const align = o.align || 'left';
-    m.lines.forEach((line, i) => {
-      if (line === '') return;
-      const lw = font.widthOfTextAtSize(line, fontSize);
-      let x = box.x;
-      if (align === 'center') x = box.x + (box.w - lw) / 2;
-      else if (align === 'right') x = box.x + box.w - lw;
-      this.page.drawText(line, {
-        x,
-        y: this.uy(box.y + m.firstBaseline + i * m.lineHeight),
-        size: fontSize,
-        font,
-        color,
-        opacity: opacityOf(o.opacity),
-      });
-    });
+    const L = layoutRich(o, box.w, box);
+    const base = boxStyle(o);
+    this.font(standardFontName(base.font, base.bold, base.italic)); // the box font, embedded even when nothing is drawn (as before runs)
+    const colors = new Map();
+    const colorOf = (c) => {
+      if (!colors.has(c)) colors.set(c, parseColor(c, '#000000') || rgb(0, 0, 0));
+      return colors.get(c);
+    };
+    colorOf(base.color);
+    const opacity = opacityOf(o.opacity);
+    for (const line of L.lines) {
+      for (const fr of line.fragments) {
+        const s = fr.style;
+        const color = colorOf(s.color);
+        this.page.drawText(fr.text, {
+          x: fr.x,
+          y: this.uy(fr.baseline),
+          size: s.fontSize,
+          font: this.font(standardFontName(s.font, s.bold, s.italic)),
+          color,
+          opacity,
+        });
+        for (const d of fr.decorations) {
+          this.page.drawRectangle({ x: fr.x, y: this.uy(d.y) - d.thickness / 2, width: fr.width, height: d.thickness, color, opacity });
+        }
+      }
+    }
   }
 
   draw(o) {

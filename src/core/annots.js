@@ -7,7 +7,7 @@ import {
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError, ContentMap, bytesKey } from './internal.js';
-import { flattenObjects, measureText, standardFontName, DEFAULT_COLOR } from './annotate.js';
+import { flattenObjects, layoutRich, standardFontName, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
 import { trailerSize } from './incremental.js';
 import { cloudArc } from './cloud.js';
@@ -142,10 +142,7 @@ function layout(o) {
     case 'text':
     case 'callout': {
       const pad = o.type === 'callout' ? num(o.padding, 4) : 0;
-      const m = measureText(o.text, {
-        font: o.font || 'Helvetica', bold: !!o.bold, italic: !!o.italic,
-        fontSize: num(o.fontSize, o.type === 'callout' ? 10 : 12), maxWidth: Math.max(1, o.w - 2 * pad), lineHeight: num(o.lineHeight, 1.2),
-      });
+      const m = layoutRich(o, Math.max(1, o.w - 2 * pad)); // runs-aware: mixed sizes change the height
       const inner = { x: o.x, y: o.y, w: o.w, h: o.h };
       let bbox = union(inner, { x: o.x, y: o.y, w: Math.max(o.w, m.width + 2 * pad), h: m.height + 2 * pad });
       if (o.type === 'callout') {
