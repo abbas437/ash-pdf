@@ -279,6 +279,17 @@ try {
   ob = (await objs()).find((x) => x.id === o.id);
   check(ob.text === 'Hello bXYig worldZ' && sortRuns(ob.runs) === finalRuns, `committed ${JSON.stringify(ob)}`);
 
+  step = 're-edit with the core not loaded';
+  const before = JSON.stringify(ob.runs);
+  await ev('globalThis.__prevCore = (await import("/renderer/ui/tools-text.js")).setCoreForTests(null);');
+  await reopen();
+  await ed('ed.setSelection(ed.getText().length, ed.getText().length);');
+  await page.keyboard.type('Q');
+  await page.keyboard.press('Control+Enter');
+  await ev('(await import("/renderer/ui/tools-text.js")).setCoreForTests(globalThis.__prevCore);');
+  ob = (await objs()).find((x) => x.id === o.id);
+  check(ob.text.endsWith('Q') && JSON.stringify(ob.runs) === before, `runs kept without the core: ${JSON.stringify(ob)}`);
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {
