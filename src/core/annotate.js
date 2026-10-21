@@ -274,6 +274,19 @@ function wrapRange(a0, b0, text, widthOf, maxWidth) {
   return lines;
 }
 
+// ---------------------------------------------------------------- text box frame
+
+/**
+ * Inset of a 'text' object's text from its box (x/y/w/h = the outer box): padding + borderWidth,
+ * both in points (absent / non-positive = 0). The border is drawn inside the box (its centre line
+ * borderWidth / 2 in from the edge), so the text area is the box shrunk by this on every side.
+ * A plain box (no frame fields) has 0: it lays out, draws and saves exactly as before frames.
+ */
+export function textInset(o) {
+  const p = Number(o?.padding), b = Number(o?.borderWidth);
+  return (p > 0 ? p : 0) + (b > 0 ? b : 0);
+}
+
 // ---------------------------------------------------------------- helpers
 
 function num(v, d) {
@@ -536,7 +549,19 @@ class PagePainter {
     switch (o.type) {
       case 'text': {
         requireBox(o);
-        this.textBlock(o, o);
+        const fill = parseColor(o.fill, null);
+        const bw = num(o.borderWidth, 0) > 0 ? o.borderWidth : 0;
+        const stroke = bw ? parseColor(o.borderColor, '#000000') || rgb(0, 0, 0) : null;
+        if (fill || stroke) {
+          const opacity = opacityOf(o.opacity);
+          this.page.drawRectangle({
+            x: o.x + bw / 2, y: this.uy(o.y + o.h - bw / 2), width: Math.max(0, o.w - bw), height: Math.max(0, o.h - bw),
+            color: fill || undefined, borderColor: stroke || undefined, borderWidth: bw,
+            opacity: fill ? opacity : undefined, borderOpacity: stroke ? opacity : undefined,
+          });
+        }
+        const i = textInset(o);
+        this.textBlock(o, i ? { x: o.x + i, y: o.y + i, w: Math.max(1, o.w - 2 * i), h: o.h - 2 * i } : o);
         break;
       }
       case 'rect':

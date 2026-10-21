@@ -7,7 +7,7 @@ import {
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError, ContentMap, bytesKey } from './internal.js';
-import { flattenObjects, layoutRich, standardFontName, DEFAULT_COLOR } from './annotate.js';
+import { flattenObjects, layoutRich, standardFontName, textInset, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
 import { trailerSize } from './incremental.js';
 import { cloudArc } from './cloud.js';
@@ -143,7 +143,7 @@ function layout(o) {
       return { bbox: boxOfPoints(inkPaths(o).flat(), sw / 2 + 2) };
     case 'text':
     case 'callout': {
-      const pad = o.type === 'callout' ? num(o.padding, 4) : 0;
+      const pad = o.type === 'callout' ? num(o.padding, 4) : textInset(o);
       const m = layoutRich(o, Math.max(1, o.w - 2 * pad)); // runs-aware: mixed sizes change the height
       const inner = { x: o.x, y: o.y, w: o.w, h: o.h };
       let bbox = union(inner, { x: o.x, y: o.y, w: Math.max(o.w, m.width + 2 * pad), h: m.height + 2 * pad });
@@ -296,8 +296,10 @@ function fontEntry(o, defSize) {
   const size = num(o.fontSize, defSize);
   const c = parseColor(o.type === 'callout' ? (o.color ?? o.stroke ?? '#000000') : o.color, '#000000') || rgb(0, 0, 0);
   const hex = hexColor(colorArr(c));
+  // A text box's border colour: the stroking colour in /DA (Acrobat's FreeText convention).
+  const border = o.type === 'text' && num(o.borderWidth, 0) > 0 ? parseColor(o.borderColor, '#000000') || rgb(0, 0, 0) : null;
   return {
-    DA: PDFString.of(`/${ps} ${size} Tf ${colorArr(c).join(' ')} rg`),
+    DA: PDFString.of(`/${ps} ${size} Tf ${colorArr(c).join(' ')} rg${border ? ` ${colorArr(border).join(' ')} RG` : ''}`),
     DS: PDFString.of(`font: ${size}pt ${o.font || 'Helvetica'}; color:${hex}`),
     Q: { left: 0, center: 1, right: 2 }[o.align || 'left'] ?? 0,
   };
@@ -369,6 +371,18 @@ function typeEntries(o, g, lay) {
           e.LE = N('ClosedArrow');
         }
         if (o.color !== undefined) extra.color = o.color;
+      } else {
+        // Text box frame. Standard keys for other viewers (Acrobat's FreeText convention): /C = the
+        // background (fill) colour, /BS /W = the border width, the border colour = 'RG' in /DA
+        // (fontEntry). /IC is not a FreeText key before PDF 2.0, so it is not used here (callouts keep
+        // their own /C stroke + /IC fill). The inner margin has no standard key: /RD keeps marking the
+        // bordered box (as for callouts), the padding travels in the private extra only.
+        const bw = num(o.borderWidth, 0) > 0 ? o.borderWidth : 0;
+        const fill = parseColor(o.fill, null);
+        width = bw;
+        if (fill) e.C = colorArr(fill);
+        if (bw) Object.assign(extra, { borderWidth: bw, borderColor: o.borderColor ?? '#000000' });
+        if (fill) extra.fill = o.fill;
       }
       break;
     }
@@ -995,6 +1009,8 @@ function parseDA(da) {
   }
   const c = /([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+rg/.exec(da) || /([\d.]+)\s+g\b/.exec(da);
   if (c) out.color = hexColor(c.slice(1).map(Number));
+  const bc = /([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+RG/.exec(da);
+  if (bc) out.borderColor = hexColor(bc.slice(1).map(Number));
   return out;
 }
 
@@ -1132,10 +1148,17 @@ function toObject(doc, en, g) {
         o.color = extra.color ?? da.color;
         const cl = readNums(dict, 'CL');
         if (cl && cl.length >= 4) [o.tx, o.ty] = visPt(g, cl[0], cl[1]);
-      } else if (da.color) o.color = da.color;
+      } else {
+        if (da.color) o.color = da.color;
+        // Frame: the private copy first, else the standard keys (a border only with its colour in /DA).
+        const bw = extra.borderWidth ?? (bs && width > 0 && da.borderColor ? width : 0);
+        if (bw > 0) Object.assign(o, { borderWidth: bw, borderColor: extra.borderColor ?? da.borderColor ?? '#000000' });
+        const fill = extra.fill !== undefined ? extra.fill : C;
+        if (fill) o.fill = fill;
+      }
       richText(o, dict, extra);
       // A box taller than its text keeps that height as the user's minimum (see the editor's `minH`).
-      const pad = callout ? num(o.padding, 4) : 0;
+      const pad = callout ? num(o.padding, 4) : textInset(o);
       const fm = layoutRich({ ...o, font: o.font || 'Helvetica', fontSize: num(o.fontSize, callout ? 10 : 12), lineHeight: num(o.lineHeight, 1.2) }, Math.max(1, o.w - 2 * pad));
       const need = Math.max(fm.height, num(o.fontSize, callout ? 10 : 12) * num(o.lineHeight, 1.2)) + 2 * pad; // runs-aware; an empty box still has one line
       if (o.h > need + 0.5) o.minH = o.h;
