@@ -338,6 +338,19 @@ try {
   await page.keyboard.press('Escape');
   check((await objs()).length === n + 2 && !(await editorRect()), 'cancelled replace kept its whiteout');
 
+  // ------------------------------------------------------------ runs: per-fragment tspans + decorations
+  step = 'runs render';
+  const rich = await ev(`const o = an.add(tab, { type: 'text', page: 0, x: 60, y: 600, w: 300, h: 14.4, text: 'Hello big world', font: 'Helvetica', fontSize: 12, color: '#000000',
+    runs: [{ text: 'Hello ' }, { text: 'big', bold: true, color: '#ff0000', underline: true }, { text: ' world' }] }); return { ...o };`);
+  const rt = await ev('const g = v.getOverlaySvg(tab, 0).querySelector(`[data-obj-id="${arg}"]`); return { ts: [...g.querySelectorAll("tspan")].map((t) => ({ s: t.textContent, x: +t.getAttribute("x"), y: +t.getAttribute("y"), w: t.getAttribute("font-weight"), f: t.getAttribute("fill") })), u: [...g.querySelectorAll("rect.ann-text-underline")].map((r) => ({ x: +r.getAttribute("x"), w: +r.getAttribute("width") })) };', rich.id);
+  const rl = await ev('const core = await import("/src/core/index.js"); return core.layoutRich(arg, arg.w, { x: arg.x, y: arg.y }).lines[0].fragments.map((f) => ({ x: f.x, b: f.baseline, w: f.width }));', rich);
+  check(rt.ts.map((t) => t.s).join('|') === 'Hello |big| world', `runs tspans ${JSON.stringify(rt.ts)}`);
+  check(rt.ts[1].w === 'bold' && rt.ts[1].f === '#ff0000' && rt.ts[0].w === 'normal' && rt.ts[0].f === '#000000' && rt.ts[2].f === '#000000', `runs styles ${JSON.stringify(rt.ts)}`);
+  rt.ts.forEach((t, i) => { near(t.x, rl[i].x, `fragment ${i} x`, 1e-3); near(t.y, rl[i].b, `fragment ${i} baseline`, 1e-3); });
+  check(rt.u.length === 1, `underline rects ${JSON.stringify(rt.u)}`);
+  near(rt.u[0].x, rl[1].x, 'underline x', 1e-3); near(rt.u[0].w, rl[1].w, 'underline width', 1e-3);
+  await key('Control+z');
+
   // ------------------------------------------------------------ screenshot
   step = 'screenshot';
   await key('Escape');
