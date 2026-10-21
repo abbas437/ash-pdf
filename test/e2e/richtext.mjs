@@ -301,6 +301,56 @@ try {
   check(JSON.stringify(await ed('return ed.getRuns();')) === runsBefore, `one Ctrl+Z restores the colour before the first change: ${JSON.stringify(await ed('return ed.getRuns();'))}`);
   await page.keyboard.press('Control+Enter');
 
+  step = 'selected text shows its colour; text cursor inside, move frame around';
+  await key('Escape');
+  await key('t');
+  await frames();
+  await frames();
+  await page.mouse.click(...await toClient(0, 300, 600)); // clear of the boxes above, below the options bar
+  await page.keyboard.type('Hello big world');
+  await ed('ed.setSelection(6, 9);');
+  await page.click('.text-format-bar .tfb-swatch >> nth=2'); // blue swatch: the selection stays
+  await frames();
+  check(JSON.stringify(await ed('return ed.getSelection();')) === '{"start":6,"end":9}', 'selection kept after the swatch');
+  const bigRect = await ed('const sp = [...ed.el.querySelectorAll("span")].find((x) => x.textContent === "big"); const r = sp.getBoundingClientRect(); return { x: r.left, y: r.top, width: r.width, height: r.height };');
+  const shot = await page.screenshot({ clip: bigRect });
+  const blue = await ev(`
+    const img = await createImageBitmap(new Blob([Uint8Array.from(atob(arg), (c) => c.charCodeAt(0))], { type: 'image/png' }));
+    const c = new OffscreenCanvas(img.width, img.height), ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+    const D = ctx.getImageData(0, 0, img.width, img.height).data; let n = 0;
+    for (let k = 0; k < D.length; k += 4) if (D[k + 2] > 150 && D[k] < 110 && D[k + 1] < 140) n++;
+    return n;`, shot.toString('base64'));
+  check(blue >= 10, `the selected word is drawn in its new colour while still selected (blue pixels: ${blue})`);
+  const r0 = await editorRect();
+  await drag([[r0.l - 3, (r0.t + r0.b) / 2], [r0.l + 37, (r0.t + r0.b) / 2 + 20]]);
+  const r1m = await editorRect();
+  near(r1m.l - r0.l, 40, 'frame drag moves the editor (x)', 1.5);
+  near(r1m.t - r0.t, 20, 'frame drag moves the editor (y)', 1.5);
+  check(r1m.focused && await ed('return ed.getText();') === 'Hello big world', 'still editing after the move');
+  await page.keyboard.press('Control+Enter');
+  o = (await texts()).at(-1);
+  const want = await toPage([r1m.l, r1m.t]);
+  near(o.x, want.x, 'new box x after the move', 1.5);
+  near(o.y, want.y, 'new box y after the move', 1.5);
+  // Re-edit: dragging the frame moves the existing box (one update with the text).
+  await key('Escape');
+  await key('v');
+  await frames();
+  await page.mouse.dblclick(...await toClient(0, o.x + 5, o.y + o.h / 2));
+  check(await ed('return ed?.objectId;') === o.id, 're-editing the moved box');
+  // Select tool: the viewer shows the move cursor over the box; inside the editor it is the text cursor, on the frame the move cursor.
+  await page.mouse.move(...await toClient(0, o.x + 20, o.y + o.h / 2));
+  const cur = await ed('const f = ed.el.parentNode.querySelector(".text-editor-frame"); return { sc: v.getScrollEl(tab).style.cursor, text: getComputedStyle(ed.el).cursor, frame: f && getComputedStyle(f).cursor };');
+  check(cur.sc === 'move' && cur.text === 'text' && cur.frame === 'move', `cursors ${JSON.stringify(cur)}`);
+  const r2 = await editorRect();
+  await drag([[(r2.l + r2.r) / 2, r2.t - 3], [(r2.l + r2.r) / 2 + 15, r2.t + 27]]);
+  await page.keyboard.press('Control+Enter');
+  const o2 = (await objs()).find((x) => x.id === o.id);
+  const s1 = await ev('return v.scale(tab);');
+  near(o2.x - o.x, 15 / s1, 're-edit move x', 0.5);
+  near(o2.y - o.y, 30 / s1, 're-edit move y', 0.5);
+  check(o2.text === 'Hello big world', 're-edit move keeps the text');
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {
