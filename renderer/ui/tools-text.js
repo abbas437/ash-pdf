@@ -17,6 +17,7 @@ import { viewer } from './viewer.js';
 import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { annotations, resizeBox } from './annotations.js';
+import { sniffImage } from './tools-stamp.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MIN_W = 40;          // points
@@ -64,6 +65,47 @@ let swallow = null;        // pointerdown event that only committed an open edit
 const px = (n) => `calc(var(--scale-factor) * ${Math.round(n * 1000) / 1000}px)`;
 const r3 = (n) => Math.round(n * 1000) / 1000;
 const fontOf = (f) => (FONTS.includes(f) ? f : 'Helvetica');
+const OBJ = '\uFFFC'; // core OBJ_CHAR: one inline picture
+
+// ---- inline pictures (image runs { text: OBJ, img, imgW, imgH } + the object's images map)
+const urls = new WeakMap(); // image bytes (immutable, shared between copies) -> object URL
+/** Object URL for an images entry { bytes, mime } (one per bytes array). */
+function imageUrl(im) {
+  let u = urls.get(im.bytes);
+  if (!u) { u = URL.createObjectURL(new Blob([im.bytes], { type: im.mime })); urls.set(im.bytes, u); }
+  return u;
+}
+/** The entries of `images` that `runs` use, or undefined when none is used. */
+export function usedImages(runs, images) {
+  const out = {};
+  for (const r of runs ?? []) if (r.text === OBJ && typeof r.img === 'string' && images?.[r.img]) out[r.img] = images[r.img];
+  return Object.keys(out).length ? out : undefined;
+}
+const MAX_IMG_PX = 2000; // long side of a stored picture
+/** PNG / JPEG bytes ready to store: { bytes, mime, w, h (natural size in points) }, downscaled above MAX_IMG_PX; null if not an image. */
+async function preparePicture(bytes) {
+  const mime = sniffImage(bytes);
+  if (!mime) return null;
+  let bmp;
+  try { bmp = await createImageBitmap(new Blob([bytes], { type: mime })); } catch { return null; }
+  let { width: w, height: hh } = bmp;
+  if (Math.max(w, hh) > MAX_IMG_PX) {
+    const k = MAX_IMG_PX / Math.max(w, hh);
+    w = Math.max(1, Math.round(w * k)); hh = Math.max(1, Math.round(hh * k));
+    const c = new OffscreenCanvas(w, hh), ctx = c.getContext('2d');
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(bmp, 0, 0, w, hh);
+    bytes = new Uint8Array(await (await c.convertToBlob({ type: mime, quality: 0.9 })).arrayBuffer());
+  }
+  bmp.close();
+  return { bytes, mime, w: (w * 72) / 96, h: (hh * 72) / 96 };
+}
+/** Picture file from the open dialog (PNG / JPEG), as bytes, or null. */
+async function pickPictureFile() {
+  const files = await window.api.openFiles({ filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }] });
+  const f = files?.[0];
+  return f ? (f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(f.bytes)) : null;
+}
 
 /** Lines and metrics exactly as the core lays them out (fallback before the core has loaded). */
 function measure(text, s, maxWidth) {
@@ -133,6 +175,11 @@ export function renderRuns(o, g, lib = core) {
   const t = svgEl('text', { opacity: o.opacity, style: 'white-space: pre' }, g);
   for (const line of L.lines) for (const f of line.fragments) {
     if (f.text === '') continue;
+    if (f.img) {
+      const im = o.images?.[f.img];
+      if (im?.bytes) svgEl('image', { href: imageUrl(im), x: r3(f.x), y: r3(f.top), width: r3(f.width), height: r3(f.height), preserveAspectRatio: 'none', opacity: o.opacity }, g);
+      continue;
+    }
     svgEl('tspan', { x: r3(f.x), y: r3(f.baseline), ...fontAttrs(f.style), fill: f.style.color }, t).textContent = f.text;
     for (const d of f.decorations) {
       svgEl('rect', { class: `ann-text-${d.type}`, x: r3(f.x), y: r3(d.y - d.thickness / 2), width: r3(f.width), height: r3(d.thickness), fill: f.style.color, opacity: o.opacity }, g);
@@ -242,7 +289,7 @@ const BLOCK = /^(DIV|P|LI|H[1-6])$/;
  * Edits go through `beforeinput` into a {text, runs} model (new text takes the style before the caret,
  * paste is plain text); IME composition and other native edits are read back from the DOM.
  */
-export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel, toggleFormat, movable = false, frame: frameIn } = {}) {
+export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel, toggleFormat, movable = false, frame: frameIn, images, pictures = false } = {}) {
   editor?.commit();
   const layer = layerFor(tab, pageIndex);
   if (!layer) return null;
@@ -255,8 +302,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   // Grab frame: a ring just outside the box (move cursor); dragging it moves the box, the text inside keeps the text cursor.
   const frame = movable ? h('div.text-editor-frame', { 'aria-hidden': 'true' }) : null;
   const warn = h('div.form-warn.text-editor-warn', { role: 'status', hidden: true }, 'Some characters cannot be saved with the standard PDF fonts and will appear as "?".');
-  const obj = () => ({ type: 'text', ...s, ...deco, text: model.text, runs: model.runs });
-  let model = { text: String(text ?? '') };
+  const obj = () => ({ type: 'text', ...s, ...deco, text: model.text, runs: model.runs, images: model.images });
+  let model = { text: String(text ?? ''), images: images ?? {} };
   // Without the core the incoming runs cannot be normalised: keep them as they are (never drop the formatting).
   model.runs = core ? (runs ? core.normalizeRuns(core.runsOf({ ...obj(), runs }), obj()) : undefined) : runs;
   const undo = [], redo = [];
@@ -271,7 +318,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
         if (c.nodeType === 3) { out.push({ node: c, start: pos, len: c.data.length }); pos += c.data.length; } else if (c.nodeName === 'BR') {
           if (c.classList.contains('te-end')) continue;
           out.push({ node: c, start: pos, len: 1, br: true }); pos += 1;
-        } else if (c.nodeType === 1) {
+        } else if (c.nodeName === 'IMG') { out.push({ node: c, start: pos, len: 1, img: c.dataset.img ?? '' }); pos += 1; } else if (c.nodeType === 1) {
           if (BLOCK.test(c.nodeName) && pos > 0 && !out.at(-1)?.br) { out.push({ node: c, start: pos, len: 1, block: true }); pos += 1; }
           walk(c);
         }
@@ -293,9 +340,12 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     return pos;
   };
   const toPoint = (i) => {
-    const P = pieces().filter((p) => p.node.nodeType === 3);
+    const P = pieces().filter((p) => p.node.nodeType === 3 || p.img != null);
     const p = P.find((q) => i > q.start && i <= q.start + q.len) ?? P.find((q) => i <= q.start);
-    return p ? [p.node, Math.max(0, i - p.start)] : [el, el.childNodes.length];
+    if (!p) return [el, el.childNodes.length];
+    // A picture: the element boundary before (i at its start) or after it.
+    if (p.img != null) { const n = p.node, k = [...n.parentNode.childNodes].indexOf(n); return [n.parentNode, i > p.start ? k + 1 : k]; }
+    return [p.node, Math.max(0, i - p.start)];
   };
   const selIn = () => {
     const sel = window.getSelection();
@@ -313,14 +363,20 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   // ---- model -> DOM, DOM -> model
   const render = () => {
     const parts = core ? core.runsOf(obj()) : [{ text: model.text }];
-    el.replaceChildren(...parts.filter((r) => r.text).map((r) => h('span', { style: runCss(r, s, deco) }, r.text)));
+    el.replaceChildren(...parts.filter((r) => r.text).map((r) => (r.img && r.text === OBJ ? pictureEl(r) : h('span', { style: runCss(r, s, deco) }, r.text))));
     if (!model.text || model.text.endsWith('\n')) el.append(h('br.te-end'));
   };
+  /** An image run in the editor: one non-editable <img> sized like the text (points x scale). */
+  const pictureEl = (r) => {
+    const im = model.images?.[r.img];
+    return h('img.te-img', { contenteditable: 'false', draggable: 'false', alt: '', src: im?.bytes ? imageUrl(im) : null, dataset: { img: r.img, w: String(r.imgW), h: String(r.imgH) }, style: { width: px(r.imgW), height: px(r.imgH) } });
+  };
   const parse = () => {
-    if (!core) return { text: pieces().map((p) => (p.node.nodeType === 3 ? p.node.data : '\n')).join('') };
+    if (!core) return { text: pieces().map((p) => (p.node.nodeType === 3 ? p.node.data : p.img != null ? OBJ : '\n')).join(''), images: model.images };
     const base = getComputedStyle(el), basePx = parseFloat(base.fontSize) || 1;
     const out = [];
     for (const p of pieces()) {
+      if (p.img != null) { out.push({ text: OBJ, img: p.img, imgW: Number(p.node.dataset.w), imgH: Number(p.node.dataset.h) }); continue; }
       const t = p.node.nodeType === 3 ? p.node.data : '\n';
       if (p.node.nodeType !== 3) { out.push({ ...(out.at(-1) ?? {}), text: t }); continue; }
       const cs = getComputedStyle(p.node.parentNode);
@@ -338,9 +394,10 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       out.push({ text: t, font: fam, fontSize: Math.abs(pt - s.fontSize) < 0.01 ? s.fontSize : pt, bold: Number(cs.fontWeight) >= 600, italic: cs.fontStyle !== 'normal', color: cssHex(cs.color), underline: lines.has('underline'), strike: lines.has('line-through') });
     }
     const t = out.map((r) => r.text).join('');
-    return { text: t, runs: core.normalizeRuns(out, { ...obj(), text: t }) };
+    return { text: t, runs: core.normalizeRuns(out, { ...obj(), text: t }), images: model.images };
   };
-  const snapshot = () => ({ text: model.text, runs: model.runs, sel: domSel() ?? lastSel });
+  // Pictures' bytes are immutable: snapshots share the images map (every change makes a new one).
+  const snapshot = () => ({ text: model.text, runs: model.runs, images: model.images, sel: domSel() ?? lastSel });
   const push = (kind, at) => {
     if (!(kind === 'type' && lastKind === 'type' && at === lastSel.end) && !(kind.startsWith('color:') && kind === lastKind)) undo.push(snapshot());
     redo.length = 0;
@@ -352,14 +409,14 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     const keep = a < b && core ? core.styleAt(obj(), a) : undefined;
     let m = a < b && core ? core.deleteRange(obj(), a, b) : { text: model.text.slice(0, a) + model.text.slice(b), runs: model.runs };
     if (str) m = core ? core.insertText({ ...obj(), ...m }, a, str, keep) : { text: m.text.slice(0, a) + str + m.text.slice(a) };
-    model = m;
+    model = { ...m, images: model.images };
     show({ start: a + str.length, end: a + str.length });
   };
   const history = (from, to) => {
     if (!from.length) return;
     to.push(snapshot());
     const st = from.pop();
-    model = { text: st.text, runs: st.runs };
+    model = { text: st.text, runs: st.runs, images: st.images };
     lastKind = null;
     show(st.sel);
   };
@@ -385,7 +442,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       Object.assign(frame.style, { left: `calc(${px(box.x)} - ${R}px)`, top: `calc(${px(box.y)} - ${R}px)`, width: `calc(${px(box.w)} + ${2 * R}px)`, height: `calc(${px(box.h)} + ${2 * R}px)` });
     }
     Object.assign(warn.style, { left: px(box.x), top: px(box.y + box.h + 2), minWidth: px(box.w) });
-    checkWinAnsi(model.text, warn);
+    checkWinAnsi(core ? core.runsOf(obj()).filter((r) => !core.isImageRun(r)).map((r) => r.text).join('') : model.text, warn);
   };
   let done = false;
   const closeListeners = new Set();
@@ -423,7 +480,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       const [a, b] = sel.end > sel.start ? [sel.start, sel.end] : [0, model.text.length];
       // Consecutive colour changes on the same selection (dragging the colour input) are one undo step.
       push(Object.keys(patch).length === 1 && 'color' in patch ? `color:${a}-${b}` : 'style');
-      model = core.applyStyleToRange(obj(), a, b, patch);
+      model = { ...core.applyStyleToRange(obj(), a, b, patch), images: model.images };
       show(sel);
     },
     commit() {
@@ -433,9 +490,38 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       const b = { ...box, h: boxH(value, { ...s, ...fr }, box.w, minH, model.runs) };
       const r = model.runs;
       close();
-      onCommit?.(value, b, s, r, { ...fr });
+      onCommit?.(value, b, s, r, { ...fr }, usedImages(r, model.images));
     },
     cancel() { if (done) return; close(); onCancel?.(); },
+    /** Pictures allowed (Text tool boxes; callouts stay text-only). */
+    pictures: !!pictures,
+    getImages: () => model.images,
+    /**
+     * Insert a picture (PNG / JPEG bytes) at the selection, replacing it: natural size (96 dpi) scaled
+     * down to the text width, stored downscaled to MAX_IMG_PX. Resolves true when inserted.
+     */
+    async insertPicture(bytes) {
+      if (!pictures || !core || done) return false;
+      const pic = await preparePicture(bytes);
+      if (!pic || done) return false;
+      const sel = handle.getSelection();
+      const maxW = Math.max(1, box.w - 2 * insetOf(fr)), k = pic.w > maxW ? maxW / pic.w : 1;
+      let key = 1;
+      while (model.images?.[`img${key}`]) key++;
+      push('insert');
+      const m = sel.end > sel.start ? core.deleteRange(obj(), sel.start, sel.end) : model;
+      const images = { ...model.images, [`img${key}`]: { bytes: pic.bytes, mime: pic.mime } };
+      model = { ...core.insertImage({ ...obj(), ...m }, sel.start, `img${key}`, pic.w * k, pic.h * k), images };
+      show({ start: sel.start + 1, end: sel.start + 1 });
+      return true;
+    },
+    /** The system clipboard's image (Electron api.readImage) as a picture at the selection. */
+    async pasteClipboardImage() {
+      if (!pictures) return false;
+      let png = null;
+      try { png = await window.api.readImage?.(); } catch { return false; }
+      return png?.length ? handle.insertPicture(png instanceof Uint8Array ? png : new Uint8Array(png)) : false;
+    },
     /** Live frame change ({borderWidth, borderColor, fill, padding}; unset fields = none). */
     setFrame(f) { fr = frameOf(f); layout(); },
     setStyle(ns) {
@@ -466,10 +552,13 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   el.addEventListener('paste', (e) => {
     e.preventDefault();
     const dt = e.clipboardData;
+    const file = pictures ? [...(dt?.items ?? [])].find((it) => it.kind === 'file' && /^image\/(png|jpeg)$/.test(it.type))?.getAsFile() : null;
+    if (file) { file.arrayBuffer().then((b) => handle.insertPicture(new Uint8Array(b))); return; }
     let str = dt?.getData('text/plain') ?? '';
     if (!str && dt?.getData('text/html')) str = new DOMParser().parseFromString(dt.getData('text/html'), 'text/html').body.textContent ?? '';
     const r = domSel() ?? lastSel;
     if (str || r.end > r.start) replace(r.start, r.end, str.replace(/\r\n?/g, '\n'), 'insert');
+    else if (pictures) handle.pasteClipboardImage();
   });
   el.addEventListener('compositionstart', () => { composing = true; });
   el.addEventListener('compositionend', () => { composing = false; const sel = domSel() ?? lastSel; push('ime'); model = parse(); show(sel); });
@@ -548,11 +637,11 @@ export function setCoreForTests(m) { const prev = core; core = m; return prev; }
 function createAt(tab, page, box, extra = {}) {
   const style = styleFrom({ ...state.toolStyle, ...extra.style });
   const ed = openTextEditor(tab, page, box, {
-    style, toggleFormat, movable: true, frame: extra.plain ? {} : frameFromStyle(),
-    onCommit(text, b, s, runs, frame) {
+    style, toggleFormat, movable: true, frame: extra.plain ? {} : frameFromStyle(), pictures: true,
+    onCommit(text, b, s, runs, frame, images) {
       if (!text.trim()) { extra.onEmpty?.(); return; }
       // Only the frame fields that are set: a plain box stays plain.
-      const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s, ...(runs ? { runs } : {}), ...frameOf(frame) });
+      const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s, ...(runs ? { runs } : {}), ...(images ? { images } : {}), ...frameOf(frame) });
       annotations.select(tab, [o.id]);
     },
     onCancel: () => extra.onEmpty?.(),
@@ -582,15 +671,16 @@ function reEdit(tab, o) {
   showTextOptions(o);
   const restore = () => { editingId = null; annotations.render(tab, [o.page]); };
   const ed = openTextEditor(tab, o.page, o, {
-    text: o.text, runs: o.runs, toggleFormat, movable: true, frame: frameOf(o),
+    text: o.text, runs: o.runs, images: o.images, pictures: true, toggleFormat, movable: true, frame: frameOf(o),
     style: { font: o.font, fontSize: o.fontSize, bold: o.bold, italic: o.italic, color: o.color, align: o.align, lineHeight: o.lineHeight, underline: o.underline, strike: o.strike },
-    onCommit(text, b, s, runs) {
+    onCommit(text, b, s, runs, _frame, images) {
       editingId = null;
       if (!text.trim()) { annotations.remove(tab, [o.id]); return; }
       const moved = b.x !== o.x || b.y !== o.y;
-      if (moved || text !== o.text || b.h !== o.h || JSON.stringify(runs) !== JSON.stringify(o.runs)) {
+      const imagesChanged = Object.keys(images ?? {}).join() !== Object.keys(o.images ?? {}).join() || Object.entries(images ?? {}).some(([k, v]) => o.images?.[k] !== v);
+      if (moved || text !== o.text || b.h !== o.h || imagesChanged || JSON.stringify(runs) !== JSON.stringify(o.runs)) {
         // `runs: undefined` clears the formatting: only when the core is there to say the text became uniform.
-        annotations.update(tab, o.id, { text, h: b.h, ...(moved ? { x: b.x, y: b.y } : {}), ...(runs !== undefined || core ? { runs } : {}) });
+        annotations.update(tab, o.id, { text, h: b.h, ...(moved ? { x: b.x, y: b.y } : {}), ...(runs !== undefined || core ? { runs } : {}), ...(imagesChanged ? { images } : {}) });
       }
       else annotations.render(tab, [o.page]);
       annotations.select(tab, [o.id]);
@@ -733,7 +823,9 @@ function attachFormatBar(ed) {
     h('span.tfb-sep'),
     ...SWATCHES.map(([hex, label]) => h('button.tb-btn.tfb-swatch', { type: 'button', title: label, 'aria-label': label, dataset: { fmt: 'color', color: hex }, style: { background: hex },
       onmousedown: (e) => e.preventDefault(), onclick: () => applyFormat({ color: hex }) })),
-    colorInput('tfb-color', 'Custom colour'));
+    colorInput('tfb-color', 'Custom colour'),
+    ...(ed.pictures ? [h('span.tfb-sep'), h('button.tb-btn.tfb-picture', { type: 'button', title: 'Insert picture…', 'aria-label': 'Insert picture',
+      onmousedown: (e) => e.preventDefault(), onclick: () => insertPictureFromFile(ed) }, h('span', {}, 'Picture'))] : []));
   bar.querySelector('.tfb-font').setAttribute('aria-label', 'Font');
   bar.querySelector('.tfb-size').setAttribute('aria-label', 'Font size');
   document.body.append(bar);
@@ -755,6 +847,14 @@ function attachFormatBar(ed) {
   };
   place();
   return ed;
+}
+/** "Insert picture…": a PNG / JPEG from the open dialog into the editor `ed` at its selection. */
+export async function insertPictureFromFile(ed) {
+  const sel = ed.getSelection();
+  const bytes = await pickPictureFile();
+  if (!bytes || activeTextEditor() !== ed) return false;
+  ed.setSelection(sel.start, sel.end);
+  return ed.insertPicture(bytes);
 }
 const ALIGN_ICON = {
   left: '<path d="M4 6h16M4 10h10M4 14h16M4 18h10"/>',
