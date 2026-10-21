@@ -18,6 +18,7 @@ import { dialogOpen } from './dialogs.js';
 import { registerTool, setTool, toggleTool } from './toolbar.js';
 import { annotations, resizeBox } from './annotations.js';
 import { sniffImage } from './tools-stamp.js';
+import { jpegOrientation } from './exif-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MIN_W = 40;          // points
@@ -88,9 +89,11 @@ async function preparePicture(bytes) {
   if (!mime) return null;
   let bmp;
   try { bmp = await createImageBitmap(new Blob([bytes], { type: mime })); } catch { return null; }
-  let { width: w, height: hh } = bmp;
-  if (Math.max(w, hh) > MAX_IMG_PX) {
-    const k = MAX_IMG_PX / Math.max(w, hh);
+  let { width: w, height: hh } = bmp; // the bitmap is already turned by the JPEG's EXIF orientation
+  // pdf-lib ignores EXIF orientation: a turned JPEG is re-encoded upright, as it shows on screen
+  const turned = mime === 'image/jpeg' && jpegOrientation(bytes) !== 1;
+  if (Math.max(w, hh) > MAX_IMG_PX || turned) {
+    const k = Math.min(1, MAX_IMG_PX / Math.max(w, hh));
     w = Math.max(1, Math.round(w * k)); hh = Math.max(1, Math.round(hh * k));
     const c = new OffscreenCanvas(w, hh), ctx = c.getContext('2d');
     ctx.imageSmoothingQuality = 'high';

@@ -56,6 +56,7 @@ import { cloudPath } from '../../src/core/cloud.js';
 import { coreWorker } from '../coreworker/client.js';
 import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from './pagehistory-lib.js';
 import { objectsSummary, unionBox, pasteDelta, clampDelta, pageBox } from './clipboard-lib.js';
+import { stable, changedKeys } from './objdiff-lib.js';
 import { canGroup, canUngroup, groupPatches, ungroupPatches, soleGroup, groupResizeBox, scaleMember } from './grouping-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -666,7 +667,7 @@ function endGesture(commitIt, copy = false) {
   for (const [id, o0] of g.orig) {
     const o = getObject(g.tab, id);
     if (!o) continue;
-    const keys = Object.keys(o).filter((k) => k !== 'id' && JSON.stringify(o[k]) !== JSON.stringify(o0[k]));
+    const keys = changedKeys(o, o0); // never stringifies picture bytes (images, bytes: shared references)
     if (!keys.length) continue;
     patches.set(id, Object.fromEntries(keys.map((k) => [k, o[k]])));
     for (const k of keys) if (!(k in o0)) delete o[k]; // a key the drag added (e.g. a text box's minH) is not part of the original
@@ -872,13 +873,6 @@ const syncs = new WeakMap();   // tab -> Map<id, {source, snap}>
 const pending = new WeakMap(); // tab -> what the last beforeSave wrote, committed by beforeSave.saved
 const flattened = new WeakMap(); // Flatten output bytes -> Set of mirror ids burned into them (page redo)
 const syncOf = (tab) => { let m = syncs.get(tab); if (!m) syncs.set(tab, (m = new Map())); return m; };
-/** Stable JSON of an object's state (key order and `source` ignored); typed arrays are hashed. */
-function stable(v) {
-  if (ArrayBuffer.isView(v)) { let x = 2166136261; for (const b of new Uint8Array(v.buffer, v.byteOffset, v.byteLength)) x = Math.imul(x ^ b, 16777619); return `"#${v.byteLength}:${x >>> 0}"`; }
-  if (Array.isArray(v)) return `[${v.map(stable).join(',')}]`;
-  if (v && typeof v === 'object') return `{${Object.keys(v).filter((k) => k !== 'source' && v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${stable(v[k])}`).join(',')}}`;
-  return JSON.stringify(v) ?? 'null';
-}
 const imported = ({ source, ...o }) => o;
 
 /** Bring the mirror in step with `read` (readAnnotations(bytes).objects). No undo step. */

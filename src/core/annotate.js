@@ -830,8 +830,12 @@ export async function flattenObjects(pdfBytes, objects, { skipUnknown = false } 
     if (o.type === 'apStamp' && o.ap instanceof Uint8Array && !apPages.get(o.ap)) apPages.set(o.ap, (await doc.embedPdf(o.ap, [0]))[0]);
     if (o.type === 'image') await embed(o, o.bytes, o.mime);
     else if (o.images && typeof o.images === 'object') {
-      // a text box's inline images: only those its runs use
-      for (const r of runsOf(o)) if (isImageRun(r) && o.images[r.img]) await embed(o, o.images[r.img].bytes, o.images[r.img].mime);
+      // a text box's inline images: only those its runs use; one that cannot be embedded is left out
+      // (its slot stays blank, as for a missing key) so one bad picture never fails the whole save
+      for (const r of runsOf(o)) {
+        if (!isImageRun(r) || !o.images[r.img]) continue;
+        try { await embed(o, o.images[r.img].bytes, o.images[r.img].mime); } catch { /* skipped */ }
+      }
     }
   }
   async function embed(o, bytes, mime) {
