@@ -45,6 +45,21 @@ function usedImages(o) {
   return [...keys].filter((k) => o.images[k]?.bytes instanceof Uint8Array).map((k) => [k, o.images[k]]);
 }
 
+/** True when a text / callout object holds an inline picture (only then is U+FFFC a placeholder to strip). */
+const hasImageRun = (o) => runsOf(o).some(isImageRun);
+
+/** 'image/png' / 'image/jpeg' from the bytes' signature, else null. */
+function sniffMime(b) {
+  if (b.length > 8 && b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47 && b[4] === 0x0d && b[5] === 0x0a && b[6] === 0x1a && b[7] === 0x0a) return 'image/png';
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  return null;
+}
+
+/** A private stream's bytes: decoded when it has a /Filter (a file recompressed by qpdf, Acrobat, ...). */
+function streamBytes(st) {
+  return st.dict.has(N('Filter')) ? decodePDFRawStream(st).decode() : st.contents.slice();
+}
+
 // ---------------------------------------------------------------- geometry
 
 /** Visible point -> PDF user space. */
@@ -370,7 +385,7 @@ function typeEntries(o, g, lay) {
       if (o.strike) extra.strike = true;
       const runs = normalizeRuns(runsOf(o), o);
       if (runs) extra.runs = runs; // exact round trip here; /RC for other programs
-      if (String(o.text ?? '').includes(OBJ_CHAR)) extra.fullText = String(o.text); // /Contents drops the image placeholders
+      if (hasImageRun(o) && String(o.text ?? '').includes(OBJ_CHAR)) extra.fullText = String(o.text); // /Contents drops the image placeholders
       if (runs || o.underline || o.strike) e.RC = text(toRichContents({ ...o, runs }));
       if (o.type === 'callout') {
         strokeColor = parseColor(o.stroke, '#ff0000');
@@ -732,7 +747,7 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     const { entries, extra } = typeEntries(o, g, lay);
     // Signature identity: the library item id and the block id, so Apply signature still works after reopening.
     for (const k of ['sig', 'group']) if (typeof o[k] === 'string' && o[k]) extra[k] = o[k];
-    const contents = o.type === 'text' || o.type === 'callout' ? String(o.text ?? '').replace(OBJ_RE, '') : (o.note ?? (o.type === 'stamp' ? o.text : undefined));
+    const contents = o.type === 'text' || o.type === 'callout' ? (hasImageRun(o) ? String(o.text ?? '').replace(OBJ_RE, '') : String(o.text ?? '')) :(o.note ?? (o.type === 'stamp' ? o.text : undefined));
     const opacity = o.type === 'highlight' ? Math.min(Math.max(num(o.opacity, 0.4), 0), 0.5) : Math.min(Math.max(num(o.opacity, 1), 0), 1);
     const rect = visRectToPdf(g, lay.bbox).map(r4);
     const dict = {
@@ -1184,8 +1199,14 @@ function toObject(doc, en, g) {
           for (const [k, v] of imgs.entries()) {
             const st = doc.context.lookup(v);
             if (!(st instanceof PDFRawStream)) continue;
-            const mime = st.dict.lookup(N('Mime'));
-            images[k.decodeText()] = { bytes: st.contents.slice(), mime: mime instanceof PDFString ? mime.decodeText() : 'image/png' };
+            // Only a PNG / JPEG that is what its /Mime says: anything else would fail every later save. A
+            // dropped entry is a missing key (its slot stays blank).
+            let bytes;
+            try { bytes = streamBytes(st); } catch { continue; }
+            const m = st.dict.lookup(N('Mime'));
+            const mime = m instanceof PDFString ? m.decodeText() : sniffMime(bytes);
+            if (!mime || mime !== sniffMime(bytes)) continue;
+            images[k.decodeText()] = { bytes, mime };
           }
         }
         o.images = images;
@@ -1209,7 +1230,7 @@ function toObject(doc, en, g) {
         Object.assign(o, b, { type: 'apStamp', name: nameOf(dict.lookup(N('Name'))) || 'Stamp', apRotate: g.rotation });
       } else if (extra.kind === 'image' && img instanceof PDFRawStream) {
         o.type = 'image';
-        o.bytes = img.contents.slice();
+        o.bytes = streamBytes(img);
         const mime = img.dict.lookup(N('Mime'));
         o.mime = mime instanceof PDFString ? mime.decodeText() : 'image/png';
       } else {

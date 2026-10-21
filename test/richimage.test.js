@@ -1,7 +1,7 @@
 // Inline images in a rich-text box ("in line with text"): image runs, layout, drawing, save -> read.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, PDFName, PDFDict, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFDict, PDFRawStream, PDFString, decodePDFRawStream } from 'pdf-lib';
 import { createCanvas } from '@napi-rs/canvas';
 import { normalizeRuns, insertText, insertImage, deleteRange, isImageRun, OBJ_CHAR } from '../src/core/richtext.js';
 import { layoutRich, flattenObjects } from '../src/core/annotate.js';
@@ -189,4 +189,63 @@ test('a box without images keeps /Contents = text and no ASHImages', async () =>
   const back = await readOne(out);
   assert.equal(back.text, 'plain');
   assert.equal(back.images, undefined);
+});
+
+// ---------------------------------------------------------------- damaged / recompressed private streams
+
+/** `bytes` with the first annotation's private stream (`get(dict)` -> its ref) replaced by `make(doc)`. */
+async function rewriteStream(bytes, get, make) {
+  const doc = await PDFDocument.load(bytes);
+  doc.context.assign(get(firstAnnot(doc)), make(doc));
+  return doc.save();
+}
+const picRef = (key) => (d) => d.lookup(PDFName.of('ASHImages')).get(PDFName.of(key));
+
+test('a damaged picture stream is dropped on read; moving the box and saving again does not throw', async () => {
+  const out = await writeAnnotations(await makePdf(1), { add: [withImage()] });
+  const bad = await rewriteStream(out, picRef('pic-1'), (doc) => doc.context.stream(new Uint8Array([1, 2, 3]), { Mime: PDFString.of('image/svg+xml') }));
+  const back = await readOne(bad);
+  assert.deepEqual(back.images, {});
+  assert.equal(back.text, `Hi ${OBJ_CHAR} there`); // the run (and its blank slot) stays
+  const moved = await writeAnnotations(bad, { update: [{ ...back, x: back.x + 10 }] });
+  assert.equal((await readOne(moved)).x, back.x + 10);
+  // PNG bytes declared as JPEG: also dropped (pdf-lib would refuse them)
+  const lie = await rewriteStream(out, picRef('pic-1'), (doc) => doc.context.stream(PNG_1x1, { Mime: PDFString.of('image/jpeg') }));
+  assert.deepEqual((await readOne(lie)).images, {});
+});
+
+test('flattenObjects and writeAnnotations skip a picture that cannot be embedded (slot left blank)', async () => {
+  for (const im of [{ bytes: new Uint8Array([1, 2, 3]), mime: 'image/png' }, { bytes: new Uint8Array([1, 2, 3]), mime: 'image/svg+xml' }]) {
+    const o = withImage({ images: { 'pic-1': im } });
+    const out = await flattenObjects(await makePdf(1), [o]);
+    assert.doesNotMatch(await pageContent(out), / Do\b/);
+    await writeAnnotations(await makePdf(1), { add: [o] });
+  }
+});
+
+test('a FlateDecode-recompressed picture stream reads back as the original PNG', async () => {
+  const out = await writeAnnotations(await makePdf(1), { add: [withImage()] });
+  const flate = await rewriteStream(out, picRef('pic-1'), (doc) => doc.context.flateStream(PNG_1x1, { Mime: PDFString.of('image/png') }));
+  const d = firstAnnot(await PDFDocument.load(flate));
+  assert.equal(d.lookup(PDFName.of('ASHImages')).lookup(PDFName.of('pic-1')).dict.lookup(PDFName.of('Filter')).decodeText(), 'FlateDecode');
+  const back = await readOne(flate);
+  assert.deepEqual(back.images['pic-1'], { bytes: PNG_1x1, mime: 'image/png' });
+});
+
+test('a FlateDecode-recompressed image stamp stream reads back as the original PNG', async () => {
+  const stamp = { id: 's', page: 0, type: 'image', x: 40, y: 50, w: 40, h: 40, bytes: PNG_1x1, mime: 'image/png' };
+  const out = await writeAnnotations(await makePdf(1), { add: [stamp] });
+  const flate = await rewriteStream(out, (d) => d.get(PDFName.of('ASHImage')), (doc) => doc.context.flateStream(PNG_1x1, { Mime: PDFString.of('image/png') }));
+  const back = await readOne(flate);
+  assert.equal(back.type, 'image');
+  assert.deepEqual(back.bytes, PNG_1x1);
+});
+
+test('a literal U+FFFC in a box without pictures saves exactly as before (in /Contents, no private copy)', async () => {
+  const o = { ...BOX, text: `a${OBJ_CHAR}b` };
+  const out = await writeAnnotations(await makePdf(1), { add: [o] });
+  const d = firstAnnot(await PDFDocument.load(out));
+  assert.equal(d.lookup(PDFName.of('Contents')).decodeText(), `a${OBJ_CHAR}b`);
+  assert.equal(d.lookup(PDFName.of('ASHStudio')), undefined);
+  assert.equal((await readOne(out)).text, `a${OBJ_CHAR}b`);
 });
