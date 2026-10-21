@@ -19,7 +19,7 @@ const SIZES = [8, 9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 36];
 const SWATCHES = [['#000000', 'Black'], ...COLORS, ['#7c3aed', 'Purple'], ['#6b7280', 'Grey'], ['#ffffff', 'White']];
 const WORD = /[\p{L}\p{N}_'’-]/u;
 
-let menu = null; // { ed, sel, levels: [{ el, items, k }] }
+let menu = null; // { ed, sel, off, levels: [{ el, items, k }] }
 
 /** Model offset under client point (x, y) in the editor, or null. */
 function offsetAt(ed, x, y) {
@@ -44,7 +44,8 @@ function wordAt(text, at) {
 /** Close the menu; `restore` puts the editor's focus and selection back (Esc, Tab, actions). */
 function close(restore = true) {
   if (!menu) return;
-  const { ed, sel } = menu;
+  const { ed, sel, off } = menu;
+  off();
   menu.levels[0].el.remove();
   ed.el.removeAttribute('aria-activedescendant');
   menu = null;
@@ -182,7 +183,7 @@ function open(e, ed) {
   const at = offsetAt(ed, e.clientX, e.clientY);
   if (at != null && !(sel.end > sel.start && at >= sel.start && at <= sel.end)) sel = wordAt(ed.getText(), at) ?? { start: at, end: at };
   ed.setSelection(sel.start, sel.end);
-  menu = { ed, sel, levels: [] };
+  menu = { ed, sel, levels: [], off: ed.onClose(() => close(false)) }; // the menu never outlives its editor
   const L = buildLevel(entries(ed, sel), '');
   menu.levels.push(L);
   document.body.append(L.el);

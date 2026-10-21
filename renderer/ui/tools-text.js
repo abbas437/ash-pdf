@@ -220,7 +220,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   const warn = h('div.form-warn.text-editor-warn', { role: 'status', hidden: true }, 'Some characters cannot be saved with the standard PDF fonts and will appear as "?".');
   const obj = () => ({ type: 'text', ...s, ...deco, text: model.text, runs: model.runs });
   let model = { text: String(text ?? '') };
-  model.runs = core && runs ? core.normalizeRuns(core.runsOf({ ...obj(), runs }), obj()) : undefined;
+  // Without the core the incoming runs cannot be normalised: keep them as they are (never drop the formatting).
+  model.runs = core ? (runs ? core.normalizeRuns(core.runsOf({ ...obj(), runs }), obj()) : undefined) : runs;
   const undo = [], redo = [];
   let lastKind = null, lastSel = { start: model.text.length, end: model.text.length }, composing = false;
 
@@ -304,7 +305,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   };
   const snapshot = () => ({ text: model.text, runs: model.runs, sel: domSel() ?? lastSel });
   const push = (kind, at) => {
-    if (!(kind === 'type' && lastKind === 'type' && at === lastSel.end)) undo.push(snapshot());
+    if (!(kind === 'type' && lastKind === 'type' && at === lastSel.end) && !(kind.startsWith('color:') && kind === lastKind)) undo.push(snapshot());
     redo.length = 0;
     lastKind = kind;
   };
@@ -338,10 +339,13 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     checkWinAnsi(model.text, warn);
   };
   let done = false;
+  const closeListeners = new Set();
   const close = () => {
     done = true;
     if (editor === handle) editor = null;
     document.removeEventListener('selectionchange', track);
+    for (const fn of [...closeListeners]) fn();
+    closeListeners.clear();
     el.remove();
     warn.remove();
     if (!layer.childElementCount) layer.remove();
@@ -350,6 +354,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     el, tab, pageIndex,
     getText: () => model.text,
     getRuns: () => model.runs,
+    /** Call fn when the editor closes (commit, cancel, any reason); returns a function that removes the listener. */
+    onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
     getSelection: () => ({ ...(domSel() ?? lastSel) }),
     setSelection(start, end = start) {
       const n = model.text.length, c = (v) => Math.min(Math.max(0, Math.trunc(Number(v) || 0)), n);
@@ -365,7 +371,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       if (!core) return;
       const sel = handle.getSelection();
       const [a, b] = sel.end > sel.start ? [sel.start, sel.end] : [0, model.text.length];
-      push('style');
+      // Consecutive colour changes on the same selection (dragging the colour input) are one undo step.
+      push(Object.keys(patch).length === 1 && 'color' in patch ? `color:${a}-${b}` : 'style');
       model = core.applyStyleToRange(obj(), a, b, patch);
       show(sel);
     },
@@ -453,6 +460,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
 }
 /** The open text editor handle (see openTextEditor), or null. */
 export const activeTextEditor = () => editor;
+/** Test hook: replace the loaded core module (null = not loaded yet). Returns the previous one. */
+export function setCoreForTests(m) { const prev = core; core = m; return prev; }
 
 // ---------------------------------------------------------------- create / re-edit
 function createAt(tab, page, box, extra = {}) {
@@ -494,7 +503,10 @@ function reEdit(tab, o) {
     onCommit(text, b, s, runs) {
       editingId = null;
       if (!text.trim()) { annotations.remove(tab, [o.id]); return; }
-      if (text !== o.text || b.h !== o.h || JSON.stringify(runs) !== JSON.stringify(o.runs)) annotations.update(tab, o.id, { text, h: b.h, runs });
+      if (text !== o.text || b.h !== o.h || JSON.stringify(runs) !== JSON.stringify(o.runs)) {
+        // `runs: undefined` clears the formatting: only when the core is there to say the text became uniform.
+        annotations.update(tab, o.id, { text, h: b.h, ...(runs !== undefined || core ? { runs } : {}) });
+      }
       else annotations.render(tab, [o.page]);
       annotations.select(tab, [o.id]);
     },

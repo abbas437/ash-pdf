@@ -211,6 +211,22 @@ try {
   o = (await texts()).at(-1);
   check(canon(o.runs) === canon([{ text: 'alpha', fontSize: 22 }, { text: '  ' }, { text: 'beta', color: '#123456' }]), `custom runs ${JSON.stringify(o.runs)}`);
 
+  step = 'menu closes with its editor';
+  await key('Escape');
+  await ev("if (app.state.tool !== 'text') document.querySelector('.tb-tools [data-tool=\"text\"]').click();");
+  await frames();
+  await page.mouse.click(...await toClient(0, 60, 300));
+  await page.keyboard.type('gamma');
+  check(await ed('return ed?.getText();') === 'gamma', 'gamma typed: ' + await ed('return ed?.getText() ?? null;'));
+  for (const [how, word] of [['commit', 'gamma'], ['cancel', 'delta']]) {
+    await rightClick(word);
+    check(await menuShown() !== null, `${how}: menu open`);
+    await ed(`ed.${how}();`);
+    await settle();
+    check(await menuShown() === null, `${how}: menu closed with its editor`);
+    if (how === 'commit') { await page.mouse.click(...await toClient(0, 60, 340)); await page.keyboard.type('delta'); }
+  }
+
   step = 'callout';
   await key('Escape');
   await key('c');

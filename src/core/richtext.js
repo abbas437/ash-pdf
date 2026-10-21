@@ -21,10 +21,28 @@ export function boxStyle(obj) {
 
 const same = (k, a, b) => (k === 'color' ? normColor(a) === normColor(b) : k === 'bold' || k === 'italic' || k === 'underline' || k === 'strike' ? !!a === !!b : a === b);
 
-/** The overrides of a run, minus those equal to the box style. */
+const FONTS = { helvetica: 'Helvetica', times: 'Times', courier: 'Courier' };
+
+/** A run's style value made valid for `key` (canonical font, #rrggbb colour), or undefined when it is not valid. */
+function cleanValue(k, v) {
+  if (k === 'font') return typeof v === 'string' ? FONTS[v.trim().toLowerCase()] : undefined;
+  if (k === 'fontSize') return typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= 1000 ? v : undefined;
+  if (k === 'color') {
+    const m = typeof v === 'string' ? /^#([0-9a-f]{3}|[0-9a-f]{6})$/.exec(v.trim().toLowerCase()) : null;
+    if (!m) return undefined;
+    return '#' + (m[1].length === 3 ? [...m[1]].map((d) => d + d).join('') : m[1]);
+  }
+  return typeof v === 'boolean' ? v : undefined;
+}
+
+/** The overrides of a run, minus those equal to the box style and invalid values (which are dropped). */
 function overrides(run, box) {
   const o = {};
-  for (const k of STYLE_KEYS) if (run[k] !== undefined && run[k] !== null && !same(k, run[k], box[k])) o[k] = k === 'color' ? normColor(run[k]) : run[k];
+  for (const k of STYLE_KEYS) {
+    if (run[k] === undefined || run[k] === null) continue;
+    const v = cleanValue(k, run[k]);
+    if (v !== undefined && !same(k, v, box[k])) o[k] = v;
+  }
   return o;
 }
 
