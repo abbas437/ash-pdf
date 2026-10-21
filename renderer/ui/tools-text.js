@@ -83,10 +83,24 @@ function svgEl(name, attrs, parent) {
 }
 const fontAttrs = (o) => ({ 'font-family': FAMILY[fontOf(o.font)], 'font-size': r3(o.fontSize > 0 ? o.fontSize : 12), 'font-weight': o.bold ? 'bold' : 'normal', 'font-style': o.italic ? 'italic' : 'normal' });
 
+/** Rich text: one tspan per layoutRich fragment, underline / strike as thin rects (same positions as the PDF appearance). */
+function renderRuns(o, g) {
+  const L = core.layoutRich(o, o.w, { x: o.x, y: o.y });
+  const t = svgEl('text', { opacity: o.opacity, style: 'white-space: pre' }, g);
+  for (const line of L.lines) for (const f of line.fragments) {
+    if (f.text === '') continue;
+    svgEl('tspan', { x: r3(f.x), y: r3(f.baseline), ...fontAttrs(f.style), fill: f.style.color }, t).textContent = f.text;
+    for (const d of f.decorations) {
+      svgEl('rect', { class: `ann-text-${d.type}`, x: r3(f.x), y: r3(d.y - d.thickness / 2), width: r3(f.width), height: r3(d.thickness), fill: f.style.color, opacity: o.opacity }, g);
+    }
+  }
+}
+
 const textType = {
   render(o, parent) {
     const g = svgEl('g', { class: 'ann-text' }, parent);
     if (o.id && o.id === editingId) return g;
+    if (core && Array.isArray(o.runs) && o.runs.length) { renderRuns(o, g); return g; }
     const m = measure(o.text, o, o.w);
     const align = o.align === 'center' || o.align === 'right' ? o.align : 'left';
     const ax = align === 'center' ? o.x + o.w / 2 : align === 'right' ? o.x + o.w : o.x;
