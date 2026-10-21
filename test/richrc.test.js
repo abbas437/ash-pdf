@@ -5,6 +5,8 @@ import { PDFDocument, PDFName, PDFHexString, PDFString } from 'pdf-lib';
 import { DOMParser } from '@xmldom/xmldom';
 import { writeAnnotations, readAnnotations } from '../src/core/annots.js';
 import { makePdf } from './helpers.js';
+import { richFromRC, parseRichContents } from '../src/core/richxhtml.js';
+import { boxStyle } from '../src/core/richtext.js';
 
 const RICH = {
   id: 'r', page: 0, type: 'text', x: 40, y: 50, w: 260, h: 80, font: 'Times', fontSize: 12, color: '#333333', align: 'center',
@@ -119,4 +121,53 @@ test('G2: uniform /RC styles the box without runs; /RC whose text differs from /
   const broken = await foreign('x y', 'not xhtml at all');
   assert.equal(broken.text, 'x y');
   assert.equal(broken.runs, undefined);
+});
+
+test('G1: a pretty-printed /RC keeps /Contents exactly as the text and maps its runs onto it', async () => {
+  const contents = 'Check duct size here';
+  const o = await foreign(contents, '<?xml version="1.0"?><body xmlns="http://www.w3.org/1999/xhtml">\r\n  <p>Check <b>duct</b>\r\n     size here</p>\r\n</body>');
+  assert.equal(o.text, contents);
+  assert.deepEqual(o.runs, [{ text: 'Check ' }, { text: 'duct', bold: true }, { text: ' size here' }]);
+});
+
+test('G1: runs map onto /Contents whitespace (Acrobat spacerun, CR line ends); a different text falls back', () => {
+  const box = { type: 'text', font: 'Helvetica', fontSize: 12 };
+  const rc = '<body xmlns="http://www.w3.org/1999/xhtml">\n <p>a  <i>b</i><span style="xfa-spacerun:yes">   </span>c</p>\n <p>d</p>\n</body>';
+  const got = richFromRC(rc, { ...box, text: 'a  b   c\rd' });
+  assert.equal(got.text, 'a  b   c\rd');
+  assert.deepEqual(got.runs, [{ text: 'a  ' }, { text: 'b', italic: true }, { text: '   c\rd' }]);
+  assert.equal(richFromRC(rc, { ...box, text: 'ab c d' }), null, 'a missing space is a different text');
+  assert.equal(richFromRC(rc, { ...box, text: 'a b c d e' }), null);
+  // CSS white-space: normal — runs collapse across tags, line-edge and inter-block whitespace is dropped.
+  assert.equal(parseRichContents('<body>\n  <p> x <b> y </b> </p>\n  <p>z</p>\n</body>', boxStyle(box), (n) => n).text, 'x y\nz');
+});
+
+test('G2: hostile /RC parses in linear time and falls back to plain text', () => {
+  const o = { type: 'text', text: 'x' };
+  const timed = (rc) => {
+    const t0 = performance.now();
+    const got = richFromRC(rc, o);
+    return { ms: performance.now() - t0, got };
+  };
+  for (const [name, rc] of [
+    ['200 KB of <a', '<body>' + '<a'.repeat(100000) + '</body>'],
+    ['50k-deep <span>', '<body>' + '<span>'.repeat(50000) + 'x' + '</span>'.repeat(50000) + '</body>'],
+  ]) {
+    const { ms, got } = timed(rc);
+    assert.ok(ms < 200, `${name}: ${ms.toFixed(0)} ms`);
+    assert.equal(got, null, `${name}: falls back to plain text`);
+  }
+  // Under the size cap the tokenizer stays linear (no rescans of unterminated tags, comments, attributes).
+  for (const [name, rc] of [
+    ['<a', '<body>' + '<a'.repeat(30000) + '</body>'],
+    ['<!--', '<body>' + '<!--'.repeat(15000) + '</body>'],
+    ['<?', '<body>' + '<?'.repeat(30000) + '</body>'],
+    ['long tag', '<body><' + 'a'.repeat(60000) + '</body>'],
+    ['long attribute name', '<body><p ' + 'a'.repeat(60000) + '>x</p></body>'],
+    ['long font shorthand', '<body><p style="font:' + '1'.repeat(60000) + '">x</p></body>'],
+    ['deep, closed', '<body>' + '<b>'.repeat(200) + 'x' + '</b>'.repeat(200) + '</body>'],
+  ]) {
+    const { ms } = timed(rc);
+    assert.ok(ms < 200, `${name}: ${ms.toFixed(0)} ms`);
+  }
 });
