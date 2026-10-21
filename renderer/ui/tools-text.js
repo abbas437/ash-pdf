@@ -258,14 +258,14 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     const p = P.find((q) => i > q.start && i <= q.start + q.len) ?? P.find((q) => i <= q.start);
     return p ? [p.node, Math.max(0, i - p.start)] : [el, el.childNodes.length];
   };
-  const domSel = () => {
+  const selIn = () => {
     const sel = window.getSelection();
-    // Focus in a format control: re-rendering leaves the DOM selection collapsed in el; keep lastSel.
-    if (document.activeElement !== el) return null;
     if (!sel?.rangeCount || !el.contains(sel.anchorNode) || !el.contains(sel.focusNode)) return null;
     const a = toOffset(sel.anchorNode, sel.anchorOffset), b = toOffset(sel.focusNode, sel.focusOffset);
     return { start: Math.min(a, b), end: Math.max(a, b) };
   };
+  // Focus in a format control: re-rendering leaves the DOM selection collapsed in el; keep lastSel.
+  const domSel = () => (document.activeElement === el ? selIn() : null);
   const setDomSel = ({ start, end }) => {
     const sel = window.getSelection();
     sel?.setBaseAndExtent(...toPoint(start), ...toPoint(end));
@@ -428,6 +428,9 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   // Keep pointer events on the editor away from the tool dispatch (select tool would start a move).
   for (const t of ['pointerdown', 'pointermove', 'pointerup', 'dblclick']) el.addEventListener(t, (e) => e.stopPropagation());
   el.addEventListener('blur', (e) => {
+    // selectionchange is async: take the selection now, before a format control has the focus.
+    const v = selIn();
+    if (v) lastSel = v;
     if (e.relatedTarget?.closest?.(FORMAT_UI) || !el.isConnected) return;
     // Window blur (switching apps) keeps the editor open.
     setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.(FORMAT_UI)) handle.commit(); }, 0);
