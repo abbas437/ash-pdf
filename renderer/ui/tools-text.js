@@ -70,6 +70,25 @@ function measure(text, s, maxWidth) {
 }
 /** Box height that fits the text (at least one line). */
 const fitH = (text, s, w) => { const m = measure(text, s, w); return Math.max(m.height, m.lineHeight); };
+/** Box height: the text's, but never below the height the user dragged the box to (`minH`). */
+const boxH = (text, s, w, minH) => Math.max(fitH(text, s, w), Number(minH) > 0 ? Number(minH) : 0);
+/**
+ * Word-style resize of a text box by `handle` (nw..w): width and height follow the drag, text
+ * re-wraps, the dragged height is kept as `minH` (0 when it is at or below the text height).
+ * Dragging a top/left handle moves that edge and keeps the opposite one fixed.
+ */
+export function resizeTextBox(o, handle, dx, dy, fit) {
+  let { x, w } = resizeBox(o, handle, dx, 0);
+  if (w < MIN_W) { if (handle.includes('w')) x = o.x + o.w - MIN_W; w = MIN_W; }
+  const needed = fit(w);
+  const vertical = handle.includes('n') || handle.includes('s');
+  // The height never flips: dragging past the opposite edge stops at the text's height.
+  const userH = handle.includes('n') ? o.h - dy : handle.includes('s') ? o.h + dy : o.h;
+  const minH = vertical ? (userH > needed ? userH : 0) : o.minH;
+  const h = Math.max(needed, minH || 0);
+  const y = handle.includes('n') ? o.y + o.h - h : o.y;
+  return vertical ? { x, y, w, h, minH } : { x, y, w, h };
+}
 function styleFrom(s = state.toolStyle) {
   return { font: fontOf(s.font), fontSize: Number(s.fontSize) > 0 ? Number(s.fontSize) : 12, bold: !!s.bold, italic: !!s.italic, color: s.color ?? '#000000', align: s.align ?? 'left', lineHeight: s.lineHeight > 0 ? s.lineHeight : LINE_HEIGHT };
 }
@@ -98,20 +117,17 @@ const textType = {
     return g;
   },
   bbox: (o) => ({ x: o.x, y: o.y, w: o.w, h: o.h }),
-  handles: (o) => [{ id: 'w', x: o.x, y: o.y + o.h / 2 }, { id: 'e', x: o.x + o.w, y: o.y + o.h / 2 }],
+  handles: (o) => ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'].map((id) => ({
+    id, x: id.includes('w') ? o.x : id.includes('e') ? o.x + o.w : o.x + o.w / 2, y: id.includes('n') ? o.y : id.includes('s') ? o.y + o.h : o.y + o.h / 2,
+  })),
   hit: (o, x, y, tol) => x >= o.x - tol && x <= o.x + o.w + tol && y >= o.y - tol && y <= o.y + o.h + tol,
   move: (o, dx, dy) => ({ x: o.x + dx, y: o.y + dy }),
-  resize(o, handle, dx) {
-    const b = resizeBox(o, handle, dx, 0);
-    let { x, w } = b;
-    if (w < MIN_W) { if (handle === 'w') x = o.x + o.w - MIN_W; w = MIN_W; }
-    return { x, w, h: fitH(o.text, o, w) };
-  },
+  resize: (o, handle, dx, dy) => resizeTextBox(o, handle, dx, dy, (w) => fitH(o.text, o, w)),
   style(o, s, keys) {
     const p = {};
     const ns = styleFrom(s);
     for (const k of TEXT_KEYS) if (keys.includes(k)) p[k] = ns[k];
-    if (['font', 'fontSize', 'bold', 'italic'].some((k) => k in p)) p.h = fitH(o.text, { ...o, ...p }, o.w);
+    if (['font', 'fontSize', 'bold', 'italic'].some((k) => k in p)) p.h = boxH(o.text, { ...o, ...p }, o.w, o.minH);
     return p;
   },
 };
@@ -154,11 +170,12 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', style, onCom
   if (!layer) return null;
   let s = styleFrom({ ...state.toolStyle, ...style });
   const box = { x: boxPts.x, y: boxPts.y, w: Math.max(MIN_W, boxPts.w || 0) };
+  const minH = boxPts.minH;
   const ta = h('textarea.text-editor', { spellcheck: 'false', 'aria-label': 'Text', wrap: 'soft' });
   const warn = h('div.form-warn.text-editor-warn', { role: 'status', hidden: true }, 'Some characters cannot be saved with the standard PDF fonts and will appear as "?".');
   ta.value = text;
   const layout = () => {
-    box.h = fitH(ta.value, s, box.w);
+    box.h = boxH(ta.value, s, box.w, minH);
     Object.assign(ta.style, {
       left: px(box.x), top: px(box.y), width: px(box.w), height: px(box.h),
       fontFamily: FAMILY[s.font], fontSize: px(s.fontSize), lineHeight: px(s.fontSize * s.lineHeight),
@@ -180,7 +197,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', style, onCom
     commit() {
       if (done) return;
       const value = ta.value.replace(/\r\n?/g, '\n');
-      const b = { ...box, h: fitH(value, s, box.w) };
+      const b = { ...box, h: boxH(value, s, box.w, minH) };
       close();
       onCommit?.(value, b, s);
     },

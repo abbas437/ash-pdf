@@ -14,15 +14,14 @@ import { h, isTyping } from './dom.js';
 import { viewer } from './viewer.js';
 import { dialogOpen } from './dialogs.js';
 import { registerTool, toggleTool } from './toolbar.js';
-import { annotations, resizeBox, dashArray } from './annotations.js';
-import { openTextEditor } from './tools-text.js';
+import { annotations, dashArray } from './annotations.js';
+import { openTextEditor, resizeTextBox } from './tools-text.js';
 import { calloutArrowHead } from '../../src/core/arrowhead.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PAD = 4;            // points, same default as the core
 const LINE_HEIGHT = 1.2;  // core default
 const DEFAULT_W = 160;    // points
-const MIN_W = 40;
 const GAP = 24;           // points between a markup shape and its comment box
 const MARGIN = 4;         // keep comment boxes this far inside the page
 const MIN_DRAG_PX = 4;
@@ -112,10 +111,7 @@ const calloutType = {
   move: (o, dx, dy) => ({ x: o.x + dx, y: o.y + dy, ...(Number.isFinite(o.tx) ? { tx: o.tx + dx, ty: o.ty + dy } : {}) }),
   resize(o, handle, dx, dy) {
     if (handle === 'tip') return { tx: o.tx + dx, ty: o.ty + dy };
-    const b = resizeBox(o, handle, dx, dy);
-    let { x, w } = b;
-    if (w < MIN_W) { if (handle.includes('w')) x = o.x + o.w - MIN_W; w = MIN_W; }
-    return { x, y: b.y, w, h: fitH(o.text, fsOf(o), w) };
+    return resizeTextBox(o, handle, dx, dy, (w) => fitH(o.text, fsOf(o), w));
   },
   /** Option changes on selected callouts: callout keys (co*) and the shared Select-tool keys. */
   style(o, s, keys) {
@@ -126,7 +122,7 @@ const calloutType = {
     if (keys.includes('coFontSize')) p.fontSize = s.coFontSize;
     if (keys.includes('strokeWidth')) p.strokeWidth = s.strokeWidth;
     if (keys.includes('opacity')) p.opacity = s.opacity;
-    if ('fontSize' in p) p.h = fitH(o.text, p.fontSize, o.w);
+    if ('fontSize' in p) p.h = Math.max(fitH(o.text, p.fontSize, o.w), o.minH > 0 ? o.minH : 0);
     return p;
   },
 };
