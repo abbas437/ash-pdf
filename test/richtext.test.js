@@ -27,7 +27,7 @@ test('a patch value equal to the box style removes the override; a uniform resul
   const c = applyStyleToRange({ ...box, bold: true }, 0, 3, { bold: true });
   assert.equal(c.runs, undefined, 'bold on a bold box is no override');
   const d = applyStyleToRange(a, 4, 5, { fontSize: null });
-  assert.deepEqual(d.runs, [{ text: 'one ' }, { text: 't', color: '#00f' }, { text: 'wo', fontSize: 20, color: '#00f' }, { text: ' three' }]);
+  assert.deepEqual(d.runs, [{ text: 'one ' }, { text: 't', color: '#0000ff' }, { text: 'wo', fontSize: 20, color: '#0000ff' }, { text: ' three' }]);
 });
 
 test('insertText takes the style of the character before, or a given style', () => {
@@ -61,4 +61,12 @@ test('runsOf ignores runs that do not add up to the text; styleAt and normalizeR
   assert.equal(styleAt(a, 5).fontSize, 18);
   assert.equal(styleAt(a, 0).fontSize, 12);
   assert.deepEqual(normalizeRuns([{ text: 'a', bold: false }, { text: '' }, { text: 'b', color: '#000000' }], box), undefined);
+});
+
+test('item 7: normalizeRuns validates run style values', () => {
+  const r = normalizeRuns([
+    { text: 'a', font: 'Comic' }, { text: 'b', fontSize: -5 }, { text: 'c', fontSize: NaN }, { text: 'd', fontSize: 1e9 },
+    { text: 'e', color: 'red;}' }, { text: 'f', bold: 'yes', italic: 1 }, { text: 'g', font: 'times', color: '#ABC', fontSize: 20, underline: true },
+  ], box);
+  assert.deepEqual(r, [{ text: 'abcdef' }, { text: 'g', font: 'Times', color: '#aabbcc', fontSize: 20, underline: true }]);
 });
