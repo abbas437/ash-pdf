@@ -534,3 +534,16 @@ test('read-only annotations (/F 64, e.g. AutoCAD SHX Text) are not editable obje
   assert.equal(kept[0].lookup(PDFName.of('Contents')).decodeText(), 'ELEC.PANEL');
   assert.equal((await readAnnotations(out)).objects.length, 1, 'the new markup only');
 });
+
+test('a text box taller than its text keeps its height (minH) through write -> read', async () => {
+  const objs = [
+    { id: 'tall', page: 0, type: 'text', x: 50, y: 60, w: 160, h: 120, minH: 120, text: 'Short', fontSize: 12 },
+    { id: 'fit', page: 0, type: 'text', x: 50, y: 220, w: 160, h: 14.4, text: 'Short', fontSize: 12 },
+    { id: 'co', page: 0, type: 'callout', x: 250, y: 60, w: 120, h: 90, minH: 90, text: 'Note', tx: 300, ty: 200, fontSize: 10 },
+  ];
+  const out = await writeAnnotations(await makePdf(1), { add: objs }, OPTS);
+  const by = Object.fromEntries((await readAnnotations(out)).objects.map((o) => [o.id, o]));
+  near(by.tall.h, 120, 0.01, 'tall h'); near(by.tall.minH, 120, 0.01, 'tall minH');
+  assert.equal(by.fit.minH, undefined, 'a box that fits its text has no minH');
+  near(by.co.h, 90, 0.01, 'callout h'); near(by.co.minH, 90, 0.01, 'callout minH');
+});

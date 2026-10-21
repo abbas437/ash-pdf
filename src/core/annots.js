@@ -1104,6 +1104,14 @@ function toObject(doc, en, g) {
         const cl = readNums(dict, 'CL');
         if (cl && cl.length >= 4) [o.tx, o.ty] = visPt(g, cl[0], cl[1]);
       } else if (da.color) o.color = da.color;
+      // A box taller than its text keeps that height as the user's minimum (see the editor's `minH`).
+      const pad = callout ? num(o.padding, 4) : 0;
+      const fm = measureText(o.text, {
+        font: o.font || 'Helvetica', bold: !!o.bold, italic: !!o.italic,
+        fontSize: num(o.fontSize, callout ? 10 : 12), maxWidth: Math.max(1, o.w - 2 * pad), lineHeight: num(o.lineHeight, 1.2),
+      });
+      const need = Math.max(fm.height, fm.lineHeight) + 2 * pad;
+      if (o.h > need + 0.5) o.minH = o.h;
       break;
     }
     case 'Stamp': {

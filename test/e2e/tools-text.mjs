@@ -228,7 +228,48 @@ try {
   check(/Times/.test(st[0]) && st[1] === '18' && st[2] === 'bold' && st[3] === '#ff0000', `rendered style ${st}`);
   check(JSON.stringify(await ev('return an.getSelection(tab);')) === JSON.stringify([target.id]), 'style change lost the selection');
   // Handles: only w / e.
-  check(JSON.stringify(await ev('return [...v.getOverlaySvg(tab, 0).querySelectorAll("[data-handle]")].map((h) => h.dataset.handle).sort();')) === '["e","w"]', 'text handles are not w/e only');
+  check(JSON.stringify(await ev('return [...v.getOverlaySvg(tab, 0).querySelectorAll("[data-handle]")].map((h) => h.dataset.handle).sort();')) === '["e","n","ne","nw","s","se","sw","w"]', 'text box does not have all eight handles');
+
+  // Resize in all directions: width and height follow the drag, the dragged height is a minimum.
+  step = 'resize handles';
+  const cur = async () => (await objs()).find((o) => o.id === target.id);
+  const handleAt = async (id) => { const o = await cur(); return toClient(0, id.includes('w') ? o.x : id.includes('e') ? o.x + o.w : o.x + o.w / 2, id.includes('n') ? o.y : id.includes('s') ? o.y + o.h : o.y + o.h / 2); };
+  const dragHandle = async (id, dx, dy) => { const [cx, cy] = await handleAt(id); await drag([[cx, cy], [cx + dx, cy + dy]]); await frames(); };
+  const sc = await ev('return v.scale(tab);');
+  const r0 = await cur();
+  await dragHandle('se', 60 * sc, 50 * sc);
+  let r1 = await cur();
+  near(r1.w, r0.w + 60, 'se drag grows width', 0.5); near(r1.h, r0.h + 50, 'se drag grows height', 0.5);
+  near(r1.x, r0.x, 'se keeps x', 1e-6); near(r1.y, r0.y, 'se keeps y', 1e-6);
+  const rm = await measure(r1.text, r1);
+  check(r1.minH > 0 && (await tspans([0, r1.id])).map((t) => t.s).join('|') === rm.lines.join('|'), 'text did not re-wrap to the new width');
+  await dragHandle('s', 0, -200 * sc);
+  let r2 = await cur();
+  near(r2.h, (await measure(r2.text, r2)).height, 'dragging s above the text keeps the text height', 1e-6);
+  check(!(r2.minH > 0), 'minH not cleared when dragged to the text height');
+  await dragHandle('s', 0, 40 * sc);
+  let r3 = await cur();
+  await dragHandle('n', 0, -30 * sc);
+  const r4 = await cur();
+  near(r4.y, r3.y - 30, 'n drag moves the top edge', 0.5); near(r4.y + r4.h, r3.y + r3.h, 'n drag keeps the bottom edge', 0.5);
+  near(r4.h, r3.h + 30, 'n drag grows height', 0.5);
+  await dragHandle('nw', 20 * sc, 0);
+  const r5 = await cur();
+  near(r5.x, r4.x + 20, 'nw drag moves the left edge', 0.5); near(r5.x + r5.w, r4.x + r4.w, 'nw keeps the right edge', 0.5);
+  await key('Control+z');
+  // Typing into a tall box leaves its height; only the text outgrowing it would.
+  await page.mouse.dblclick(...await toClient(0, r4.x + 5, r4.y + 5));
+  await page.keyboard.press('End');
+  await page.keyboard.type('!');
+  await page.keyboard.press('Control+Enter');
+  const r6 = await cur();
+  check(r6.text === r4.text + '!', `typed text ${r6.text}`);
+  near(r6.h, r4.h, 'typing into a tall box keeps its height', 1e-6);
+  near(r6.minH, r4.minH, 'minH kept after typing', 1e-6);
+  await key('Control+z');
+  for (let i = 0; i < 4; i++) await key('Control+z'); // n, s(+40), s(up), se
+  const back = await cur();
+  check(['x', 'y', 'w', 'h'].every((k) => Math.abs(back[k] - r0[k]) < 1e-6) && !(back.minH > 0), `undo did not restore the box ${JSON.stringify(back)}`);
 
   // ------------------------------------------------------------ double-click re-edit
   step = 're-edit';

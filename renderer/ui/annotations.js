@@ -628,6 +628,7 @@ function endGesture(commitIt, copy = false) {
     const keys = Object.keys(o).filter((k) => k !== 'id' && JSON.stringify(o[k]) !== JSON.stringify(o0[k]));
     if (!keys.length) continue;
     patches.set(id, Object.fromEntries(keys.map((k) => [k, o[k]])));
+    for (const k of keys) if (!(k in o0)) delete o[k]; // a key the drag added (e.g. a text box's minH) is not part of the original
     Object.assign(o, clone(o0)); // restore, then apply as one undoable update
   }
   if (commitIt && patches.size) updateMany(g.tab, patches);
