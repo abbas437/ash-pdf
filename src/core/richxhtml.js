@@ -74,7 +74,7 @@ function applyCss(s, decl, family) {
       s.strike = /line-through/i.test(v);
     } else if (k === 'font') {
       // shorthand: [style] [weight] size[/line-height] family
-      const m = /([\d.]+(?:pt|px)?)(?:\/\S+)?\s+(.+)$/.exec(v);
+      const m = /(?<![\d.])([\d.]+(?:pt|px)?)(?:\/\S+)?\s+(.+)$/.exec(v);
       if (m) {
         const z = cssSize(m[1]);
         if (z) s.fontSize = z;
@@ -96,38 +96,88 @@ function decodeEntities(s) {
   });
 }
 
-const attrs = (src) => Object.fromEntries([...src.matchAll(/([\w:-]+)\s*=\s*("([^"]*)"|'([^']*)')/g)].map((m) => [m[1].toLowerCase(), decodeEntities(m[3] ?? m[4])]));
+// (?<!…) anchors: one match attempt per name, so a long name with no '=' is not rescanned (linear).
+const attrs = (src) => Object.fromEntries([...src.matchAll(/(?<![\w:-])([\w:-]+)\s*=\s*("([^"]*)"|'([^']*)')/g)].map((m) => [m[1].toLowerCase(), decodeEntities(m[3] ?? m[4])]));
+
+/** Larger /RC (or deeper nesting) is not from a real editor: the box falls back to plain text. */
+export const RC_MAX_LENGTH = 64 * 1024;
+export const RC_MAX_DEPTH = 100;
+
+/** `src` without comments, processing instructions and DOCTYPE (linear); null when one is unterminated. */
+function stripMarkup(src) {
+  let out = '', i = 0;
+  for (;;) {
+    const j = src.indexOf('<', i);
+    if (j < 0) return out + src.slice(i);
+    out += src.slice(i, j);
+    const end = src.startsWith('<!--', j) ? ['-->', j + 4] : src.startsWith('<?', j) ? ['?>', j + 2] : /^<!DOCTYPE/i.test(src.slice(j, j + 9)) ? ['>', j + 9] : null;
+    if (!end) { out += '<'; i = j + 1; continue; }
+    const e = src.indexOf(end[0], end[1]);
+    if (e < 0) return null;
+    i = e + end[0].length;
+  }
+}
+
+const BLOCKS = new Set(['p', 'div', 'body']);
 
 /**
  * Parse /RC XHTML on top of `base` (a boxStyle). Returns { text, runs: [{ text, ...full style }] } or
  * null when it is not usable. <p>/<div> end a line, <br> is a line break; a trailing newline is dropped.
+ * Whitespace collapses as in CSS white-space: normal (runs of XML whitespace become one space, none at
+ * the start or end of a line, whitespace-only text between blocks dropped); &nbsp; is kept.
  */
 export function parseRichContents(xhtml, base, family) {
-  const src = String(xhtml).replace(/<\?[\s\S]*?\?>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>/gi, '');
-  if (!/<body[\s>]/i.test(src)) return null;
+  const raw = String(xhtml);
+  if (raw.length > RC_MAX_LENGTH) return null;
+  const src = stripMarkup(raw);
+  if (src === null || !/<body[\s>]/i.test(src)) return null;
   const stack = [{ tag: '', s: { ...base } }];
   const runs = [];
+  let lineStart = true; // no collapsible space may follow (start of a line, or after a space)
+  const trimEnd = () => {
+    const last = runs[runs.length - 1];
+    if (last && last.text.endsWith(' ')) {
+      last.text = last.text.slice(0, -1);
+      if (!last.text) runs.pop();
+    }
+  };
   const push = (t, s) => {
     if (t) runs.push({ text: t, ...s });
   };
-  for (const m of src.matchAll(/<(\/?)([a-zA-Z][\w:-]*)([^>]*?)(\/?)>|([^<]+)/g)) {
+  const pushText = (t, s) => {
+    let c = t.replace(/[ \t\r\n\f]+/g, ' ');
+    if (lineStart && c.startsWith(' ')) c = c.slice(1);
+    if (!c) return;
+    push(c, s);
+    lineStart = c.endsWith(' ');
+  };
+  const lineBreak = (s) => {
+    trimEnd();
+    push('\n', s);
+    lineStart = true;
+  };
+  // [^<>] in the tag: an unterminated '<' is skipped at the next '<' instead of rescanning the rest.
+  for (const m of src.matchAll(/<(\/?)([a-zA-Z][\w:-]*)((?:\s[^<>]*?)?)(\/?)>|([^<]+)/g)) {
     const top = stack[stack.length - 1];
     if (m[5] !== undefined) {
-      if (stack.length > 1) push(decodeEntities(m[5]), top.s);
+      if (stack.length > 1) pushText(decodeEntities(m[5]), top.s);
       continue;
     }
     const close = !!m[1], tag = m[2].toLowerCase().replace(/^.*:/, ''), self = !!m[4] || tag === 'br';
     if (close) {
-      const i = stack.map((e) => e.tag).lastIndexOf(tag);
+      let i = stack.length - 1;
+      while (i > 0 && stack[i].tag !== tag) i--;
       if (i <= 0) continue;
       stack.length = i;
-      if (tag === 'p' || tag === 'div') push('\n', stack[stack.length - 1].s);
+      if (tag === 'p' || tag === 'div') lineBreak(stack[stack.length - 1].s);
+      else if (BLOCKS.has(tag)) { trimEnd(); lineStart = true; }
       continue;
     }
     if (tag === 'br') {
-      push('\n', top.s);
+      lineBreak(top.s);
       continue;
     }
+    if (BLOCKS.has(tag)) { trimEnd(); lineStart = true; }
     const s = { ...top.s };
     const a = attrs(m[3]);
     if (tag === 'b' || tag === 'strong') s.bold = true;
@@ -143,8 +193,11 @@ export function parseRichContents(xhtml, base, family) {
       if (a.color && cssColor(a.color)) s.color = cssColor(a.color);
     }
     if (a.style) applyCss(s, a.style, family);
-    if (!self) stack.push({ tag, s });
+    if (self) continue;
+    if (stack.length > RC_MAX_DEPTH) return null;
+    stack.push({ tag, s });
   }
+  trimEnd();
   let text = runs.map((r) => r.text).join('');
   if (text.endsWith('\n')) {
     const last = runs[runs.length - 1];
@@ -156,11 +209,49 @@ export function parseRichContents(xhtml, base, family) {
 }
 
 const STYLE_FIELDS = ['font', 'fontSize', 'bold', 'italic', 'underline', 'strike', 'color'];
-const ws = (s) => s.replace(/\s+/g, ' ').trim();
+const isWs = (c) => /\s/.test(c);
+
+/**
+ * The parsed runs re-cut onto `text` (/Contents): every non-whitespace character must match in order,
+ * and each whitespace stretch of `text` matches one (possibly empty, only at the ends) of the parsed
+ * text. Returns runs whose texts concatenate to exactly `text`, or null when the texts differ.
+ */
+function mapRuns(runs, text) {
+  const P = [], at = [];
+  runs.forEach((r, k) => { for (const c of r.text) { P.push(c); at.push(k); } });
+  const C = [...text], of = [];
+  let i = 0;
+  for (let j = 0; j < C.length;) {
+    if (isWs(C[j])) {
+      const j0 = j, i0 = i;
+      while (j < C.length && isWs(C[j])) j++;
+      while (i < P.length && isWs(P[i])) i++;
+      const near = i > i0 ? null : i < P.length ? at[i] : i0 > 0 ? at[i0 - 1] : 0;
+      for (let k = j0; k < j; k++) of.push(near ?? at[Math.min(i0 + k - j0, i - 1)]);
+      continue;
+    }
+    if (i < P.length && isWs(P[i])) {
+      if (j > 0) return null;
+      while (i < P.length && isWs(P[i])) i++;
+    }
+    if (i >= P.length || P[i] !== C[j]) return null;
+    of.push(at[i++]);
+    j++;
+  }
+  while (i < P.length) if (!isWs(P[i++])) return null;
+  const out = [];
+  C.forEach((c, j) => {
+    const last = out[out.length - 1];
+    if (last && last.k === of[j]) last.text += c;
+    else out.push({ ...runs[of[j]], text: c, k: of[j] });
+  });
+  return out.map(({ k, ...r }) => r);
+}
 
 /**
  * Box style + runs of a text object `o` (text = /Contents, box style already read) from its /RC:
  * returns the fields to assign ({ text, runs } or uniform box fields), or null to keep `o` as it is.
+ * /Contents stays the text: the /RC runs are mapped onto it, or not used when its text differs.
  */
 export function richFromRC(xhtml, o, family = (n) => FAMILY[n]) {
   let parsed;
@@ -169,8 +260,9 @@ export function richFromRC(xhtml, o, family = (n) => FAMILY[n]) {
   } catch {
     return null;
   }
-  if (!parsed || ws(parsed.text) !== ws(String(o.text ?? ''))) return null;
-  const { text, runs } = parsed;
+  const text = String(o.text ?? '');
+  const runs = parsed && mapRuns(parsed.runs, text);
+  if (!runs) return null;
   const key = (r) => STYLE_FIELDS.map((k) => r[k]).join('|');
   if (runs.length && runs.every((r) => key(r) === key(runs[0]))) {
     const box = boxStyle(o);
