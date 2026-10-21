@@ -2,6 +2,18 @@
 import { boxStyle, runsOf, normalizeRuns } from './richtext.js';
 
 const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+/** XML 1.0 forbids these (controls, U+FFFE/F, lone surrogates); they are dropped from /RC text. */
+const XML_ILLEGAL = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+const RTL_CHAR = /[\u0590-\u05FF\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]/;
+const LTR_CHAR = /\p{L}/u;
+/** "rtl" when the first strong directional character of `text` is RTL, else "ltr". */
+function dirOf(text) {
+  for (const ch of text) {
+    if (RTL_CHAR.test(ch)) return 'rtl';
+    if (LTR_CHAR.test(ch)) return 'ltr';
+  }
+  return 'ltr';
+}
 const FAMILY = { Helvetica: 'Helvetica', Times: 'Times', Courier: 'Courier' };
 
 /** CSS of one effective style (font-family, size, weight, style, colour, decoration). */
@@ -17,16 +29,17 @@ export function toRichContents(obj) {
   for (const r of runsOf(obj)) {
     const s = { ...box };
     for (const k of Object.keys(box)) if (r[k] !== undefined && r[k] !== null) s[k] = r[k];
-    r.text.split('\n').forEach((piece, i) => {
+    r.text.split('\n').forEach((raw, i) => {
       if (i) paras.push([]);
-      if (piece) paras[paras.length - 1].push(`<span style="${esc(css(s))}">${esc(piece)}</span>`);
+      const piece = raw.replace(XML_ILLEGAL, '');
+      if (piece) paras[paras.length - 1].push({ piece, html: `<span style="${esc(css(s))}">${esc(piece)}</span>` });
     });
   }
   const align = obj.align || 'left';
   return (
     '<?xml version="1.0"?><body xmlns="http://www.w3.org/1999/xhtml" xmlns:xfa="http://www.xfa.org/schema/xfa-data/1.0/" ' +
     `xfa:APIVersion="Acrobat:11.0.0" xfa:spec="2.0.2" style="${esc(`${css(box)};text-align:${align}`)}">` +
-    paras.map((p) => `<p dir="ltr">${p.join('')}</p>`).join('') +
+    paras.map((p) => `<p dir="${dirOf(p.map((x) => x.piece).join(''))}">${p.map((x) => x.html).join('')}</p>`).join('') +
     '</body>'
   );
 }

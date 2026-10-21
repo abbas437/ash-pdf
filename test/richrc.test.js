@@ -5,7 +5,7 @@ import { PDFDocument, PDFName, PDFHexString, PDFString } from 'pdf-lib';
 import { DOMParser } from '@xmldom/xmldom';
 import { writeAnnotations, readAnnotations } from '../src/core/annots.js';
 import { makePdf } from './helpers.js';
-import { richFromRC, parseRichContents } from '../src/core/richxhtml.js';
+import { richFromRC, parseRichContents, toRichContents } from '../src/core/richxhtml.js';
 import { boxStyle } from '../src/core/richtext.js';
 
 const RICH = {
@@ -170,4 +170,16 @@ test('G2: hostile /RC parses in linear time and falls back to plain text', () =>
     const { ms } = timed(rc);
     assert.ok(ms < 200, `${name}: ${ms.toFixed(0)} ms`);
   }
+});
+
+test('item 6: /RC drops XML-illegal characters (well-formed XML) and sets dir per paragraph', () => {
+  const text = 'a\u0001b\uD800c\u0000\uFFFF\nمرحبا hello\nשלום\n123 abc';
+  const rc = toRichContents({ type: 'text', text, font: 'Helvetica', fontSize: 12, color: '#000000' });
+  const bad = [];
+  const doc = new DOMParser({ errorHandler: { warning: (m) => bad.push(m), error: (m) => bad.push(m), fatalError: (m) => bad.push(m) } }).parseFromString(rc, 'text/xml');
+  assert.deepEqual(bad, []);
+  const list = doc.getElementsByTagName('p');
+  const ps = Array.from({ length: list.length }, (_, i) => list.item(i));
+  assert.deepEqual(ps.map((p) => p.getAttribute('dir')), ['ltr', 'rtl', 'rtl', 'ltr']);
+  assert.equal(ps[0].textContent, 'abc');
 });
