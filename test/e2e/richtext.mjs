@@ -429,6 +429,75 @@ try {
   const rp = (await texts()).find((x) => x.text === 'Plain');
   check(rp && ['borderWidth', 'fill', 'padding'].every((k) => !(k in rp) || rp[k] == null), `reopened plain box ${JSON.stringify(rp)}`);
 
+  // Frame edits on several boxes: a border-colour pick recolours only boxes that have a border, an
+  // unrelated control (font size) carries nothing of the first box's frame to the others; while
+  // re-editing, frame changes live in the editor and are committed (fitting the text) with Ctrl+Enter.
+  step = 'frame multi-select';
+  await key('Escape');
+  await ev('an.select(tab, []);');
+  if (await ev('return app.state.tool;') !== 'text') await key('t');
+  await frames();
+  const setColor = (sel, c) => page.$eval(sel, (el, v) => { el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); }, c);
+  const BLUE = '#1d4ed8', RED = '#ff0000', FILL2 = '#cfe8ff';
+  await setFrame(0, null, 0);
+  await page.mouse.click(...await toClient(0, 60, 150));
+  await page.keyboard.type('Alpha box');
+  await page.keyboard.press('Control+Enter');
+  await key('Escape');
+  await ev('an.select(tab, []);');
+  if (await ev('return app.state.tool;') !== 'text') await key('t');
+  await frames();
+  await setColor('.options-bar .opt-text-border-color', BLUE);
+  await setFrame(2, FILL2, 4);
+  await page.mouse.click(...await toClient(0, 60, 230));
+  await page.keyboard.type('Beta box');
+  await page.keyboard.press('Control+Enter');
+  const byText = async (t) => (await texts()).find((x) => x.text === t);
+  const A0 = await byText('Alpha box'), B0 = await byText('Beta box');
+  check(A0 && !A0.borderWidth && B0 && B0.borderWidth === 2 && B0.borderColor === BLUE && B0.fill === FILL2 && B0.padding === 4, `setup boxes ${JSON.stringify([A0, B0])}`);
+  await key('Escape');
+  await key('v');
+  await frames();
+  await page.mouse.click(...await toClient(0, A0.x + 20, A0.y + A0.h / 2));
+  await page.keyboard.down('Shift');
+  await page.mouse.click(...await toClient(0, B0.x + 20, B0.y + B0.h / 2));
+  await page.keyboard.up('Shift');
+  check((await ev('return an.getSelection(tab).length;')) === 2, 'both boxes selected');
+  await setColor('.options-bar .opt-text-border-color', RED);
+  const A1 = await byText('Alpha box'), B1 = await byText('Beta box');
+  check(!A1.borderWidth && !A1.borderColor && !A1.fill && !A1.padding, `A got a frame from the colour pick: ${JSON.stringify(A1)}`);
+  check(B1.borderWidth === 2 && B1.borderColor === RED && B1.fill === FILL2 && B1.padding === 4, `B after the colour pick: ${JSON.stringify(B1)}`);
+  await page.$eval('.options-bar .opt-font', (el) => { el.value = '20'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  const A2 = await byText('Alpha box'), B2 = await byText('Beta box');
+  check(A2.fontSize === 20 && B2.fontSize === 20, `font size ${A2.fontSize} / ${B2.fontSize}`);
+  check(!A2.borderWidth && !A2.borderColor && !A2.fill && !A2.padding, `A got a frame from the font-size change: ${JSON.stringify(A2)}`);
+  check(B2.borderWidth === 2 && B2.borderColor === RED && B2.fill === FILL2 && B2.padding === 4, `B lost its frame on the font-size change: ${JSON.stringify(B2)}`);
+  // Re-edit B: Esc after a margin change leaves it as it was; Ctrl+Enter commits the margin and fits the height.
+  const reEditB = async () => {
+    await key('Escape');
+    await ev('an.select(tab, []);');
+    await key('v');
+    await frames();
+    const cur = await byText('Beta box');
+    await page.mouse.dblclick(...await toClient(0, cur.x + 20, cur.y + cur.h / 2));
+    check(await ed('return ed?.objectId;') === cur.id, 're-editing B');
+    await frames();
+    await page.$eval('.options-bar .opt-text-margin', (el) => { el.value = '12'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+    await frames();
+  };
+  await reEditB();
+  await page.keyboard.press('Escape');
+  await frames();
+  const B3 = await byText('Beta box');
+  check(B3.padding === 4 && B3.h === B2.h && B3.borderWidth === 2 && B3.fill === FILL2, `Esc left B changed: ${JSON.stringify(B3)}`);
+  await reEditB();
+  await page.keyboard.press('Control+Enter');
+  await frames();
+  const B4 = await byText('Beta box');
+  const m4 = await measure(B4.text, { ...B4, w: B4.w - 2 * (12 + 2) });
+  check(B4.padding === 12 && B4.borderWidth === 2, `Ctrl+Enter frame ${JSON.stringify(B4)}`);
+  near(B4.h, m4.height + 2 * (12 + 2), 'B height fits text + 2 * inset after the margin change', 0.01);
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {

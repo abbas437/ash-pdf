@@ -694,6 +694,8 @@ function handleCursor(id, rot = 0) {
 // ---------------------------------------------------------------- style, clipboard, keyboard
 let lastStyle = { ...state.toolStyle };
 /** Apply the given state.toolStyle keys to the selected objects (one coalesced undo step). */
+/** Tell the style-diff that state.toolStyle was just loaded from an object (not changed by the user), so the next change applies only the key the user edits. */
+function syncLastStyle() { lastStyle = { ...state.toolStyle }; }
 function applyStyle(tab, keys) {
   if (!tab || !keys.length) return;
   const patches = new Map();
@@ -1098,7 +1100,7 @@ export function initAnnotations() {
 
 export const annotations = {
   add, update, remove, select, getSelection, getObject, list, undo, redo, batch, newId, remapPages,
-  registerObjectType, applyStyle, toPage, render: renderAll, renderPreview,
+  registerObjectType, applyStyle, syncLastStyle, toPage, render: renderAll, renderPreview,
   groupSelection, ungroupSelection, canGroupSelection, canUngroupSelection,
   /** Internal for tools: add several objects as one undo step, returns their ids. */
   addMany,
