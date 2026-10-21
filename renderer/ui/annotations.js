@@ -14,6 +14,9 @@
 //   annotations.newId()
 //   Groups: objects sharing a `group` string (e.g. a signature block) are selected, moved and
 //   deleted together: select() widens to every member; paste gives copies a fresh group.
+//   A selection that is exactly one group gets 8 handles on the group's box; a drag scales every
+//   member (grouping-lib scaleMember). groupSelection / ungroupSelection (Ctrl+G / Ctrl+Shift+G,
+//   Edit menu, context menu): one undo step each; canGroupSelection / canUngroupSelection(tab).
 //   annotations.remapPages(tab, Map<oldIndex, newIndex|null>)  (also on bus 'pages:remapped' {tab, map})
 //   restorePageObjects(tab, items)  page undo/redo puts back the objects a page operation dropped
 //   dropPageObjects(tab, ids) -> items  a page operation's `res.remove` (no annotation undo step)
@@ -53,6 +56,7 @@ import { cloudPath } from '../../src/core/cloud.js';
 import { coreWorker } from '../coreworker/client.js';
 import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from './pagehistory-lib.js';
 import { objectsSummary, unionBox, pasteDelta, clampDelta, pageBox } from './clipboard-lib.js';
+import { canGroup, canUngroup, groupPatches, ungroupPatches, soleGroup, groupResizeBox, scaleMember } from './grouping-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -343,6 +347,32 @@ function select(tab, ids) {
 const getSelection = (tab) => [...selOf(tab)];
 const getObject = (tab, id) => ensureTab(tab).objects.find((o) => o.id === id) ?? null;
 const list = (tab, page) => ensureTab(tab).objects.filter((o) => page == null || o.page === page);
+const selectedObjects = (tab) => getSelection(tab).map((id) => getObject(tab, id)).filter(Boolean);
+export const canGroupSelection = (tab) => !!tab && canGroup(selectedObjects(tab), !!tab.readOnly);
+export const canUngroupSelection = (tab) => !!tab && canUngroup(selectedObjects(tab), !!tab.readOnly);
+/** The selected objects become one new group (members of other groups included): one undo step. */
+export function groupSelection(tab) {
+  if (!canGroupSelection(tab)) return false;
+  const objs = selectedObjects(tab);
+  updateMany(tab, groupPatches(objs, newId()));
+  select(tab, objs.map((o) => o.id));
+  return true;
+}
+/** The selected objects leave their groups and stay selected, each on its own: one undo step. */
+export function ungroupSelection(tab) {
+  if (!canUngroupSelection(tab)) return false;
+  const objs = selectedObjects(tab);
+  updateMany(tab, ungroupPatches(objs));
+  select(tab, objs.map((o) => o.id));
+  return true;
+}
+/** {page, box} when the selection is exactly one group (its handles resize every member), else null. */
+function groupBox(tab) {
+  const objs = selectedObjects(tab);
+  if (!soleGroup(objs)) return null;
+  const box = unionBox(objs.map((o) => types.get(o.type)?.bbox?.(o)).filter(Boolean));
+  return box ? { page: objs[0].page, box } : null;
+}
 
 function undo(tab) {
   ensureTab(tab);
@@ -471,12 +501,15 @@ function renderPage(tab, i) {
     const pad = 3 * px;
     svgEl('rect', { class: 'ann-bbox', x: b.x - pad, y: b.y - pad, width: b.w + 2 * pad, height: b.h + 2 * pad }, L.sel);
   }
-  if (selected.length === 1) {
-    const o = selected[0];
-    const hs = HANDLE_PX * px;
-    for (const hd of types.get(o.type).handles?.(o) ?? []) {
-      svgEl('rect', { class: 'ann-handle', 'data-handle': hd.id, x: hd.x - hs / 2, y: hd.y - hs / 2, width: hs, height: hs }, L.sel);
-    }
+  const gb = selected.length > 1 ? groupBox(tab) : null;
+  if (gb && gb.page === i) {
+    const pad = 3 * px, b = gb.box;
+    svgEl('rect', { class: 'ann-bbox ann-group-bbox', x: b.x - pad, y: b.y - pad, width: b.w + 2 * pad, height: b.h + 2 * pad }, L.sel);
+  }
+  const hds = selected.length === 1 ? types.get(selected[0].type).handles?.(selected[0]) ?? [] : gb?.page === i ? boxHandles(gb.box) : [];
+  const hs = HANDLE_PX * px;
+  for (const hd of hds) {
+    svgEl('rect', { class: 'ann-handle', 'data-handle': hd.id, x: hd.x - hs / 2, y: hd.y - hs / 2, width: hs, height: hs }, L.sel);
   }
 }
 function renderAll(tab, pages = null) {
@@ -519,11 +552,17 @@ function objectAt(tab, page, x, y) {
 }
 function handleAt(tab, page, x, y) {
   const ids = getSelection(tab);
+  const tol = (HANDLE_PX / 2 + 2) / scaleOf(tab);
+  const near = (p) => Math.abs(p.x - x) <= tol && Math.abs(p.y - y) <= tol;
+  if (ids.length > 1) { // one group: its box's handles
+    const gb = groupBox(tab);
+    const hd = gb?.page === page ? boxHandles(gb.box).find(near) : null;
+    return hd ? { group: gb, handle: hd.id } : null;
+  }
   if (ids.length !== 1) return null;
   const o = getObject(tab, ids[0]);
   if (!o || o.page !== page) return null;
-  const tol = (HANDLE_PX / 2 + 2) / scaleOf(tab);
-  const hd = types.get(o.type)?.handles?.(o)?.find((p) => Math.abs(p.x - x) <= tol && Math.abs(p.y - y) <= tol);
+  const hd = types.get(o.type)?.handles?.(o)?.find(near);
   return hd ? { obj: o, handle: hd.id } : null;
 }
 function capture(e) { try { e.target.setPointerCapture?.(e.pointerId); } catch { /* element gone */ } }
@@ -538,7 +577,7 @@ export const selectHandlers = {
     const p = toPage(tab, hit.pageIndex, e.clientX, e.clientY);
     const hd = handleAt(tab, hit.pageIndex, p.x, p.y);
     let mode = null, objs = [];
-    if (hd) { mode = 'resize'; objs = [hd.obj]; } else {
+    if (hd?.group) { mode = 'groupResize'; objs = selectedObjects(tab); } else if (hd) { mode = 'resize'; objs = [hd.obj]; } else {
       const o = objectAt(tab, hit.pageIndex, p.x, p.y);
       const ctrl = e.ctrlKey || e.metaKey;
       if (!o) { if (!e.shiftKey && !ctrl && selOf(tab).size) select(tab, []); return; }
@@ -553,7 +592,7 @@ export const selectHandlers = {
     e.preventDefault();
     capture(e);
     document.body.classList.add('ann-gesture');
-    gesture = { tab, page: hit.pageIndex, mode, handle: hd?.handle, start: p, orig: new Map(objs.map((o) => [o.id, clone(o)])), moved: false, drawn: new Set([hit.pageIndex, ...objs.map((o) => o.page)]), toggleOff };
+    gesture = { tab, page: hit.pageIndex, mode, handle: hd?.handle, start: p, orig: new Map(objs.map((o) => [o.id, clone(o)])), box: hd?.group?.box, moved: false, drawn: new Set([hit.pageIndex, ...objs.map((o) => o.page)]), toggleOff };
   },
   onPointerMove(e, { tab }) {
     if (!gesture || gesture.tab !== tab) { hover(e, tab); return; }
@@ -568,9 +607,11 @@ export const selectHandlers = {
       dragMove(tab, e);
       return;
     }
+    // Group resize: the group box follows the handle (Shift on a corner keeps its aspect ratio), every member scales with it.
+    const nb = gesture.box && groupResizeBox(gesture.box, gesture.handle, dx, dy, e.shiftKey);
     for (const [id, o0] of gesture.orig) {
       const o = getObject(tab, id), def = types.get(o0.type);
-      if (o && def) Object.assign(o, def.resize(o0, gesture.handle, dx, dy));
+      if (o && def) Object.assign(o, nb ? scaleMember(o0, gesture.box, nb, def) : def.resize(o0, gesture.handle, dx, dy));
     }
     renderAll(tab, [gesture.page]);
   },
@@ -749,6 +790,7 @@ function onKey(e) {
   if (ctrl && k === 'z' && !e.shiftKey) return run(() => router.undo(tab));
   if (ctrl && (k === 'y' || (k === 'z' && e.shiftKey))) return run(() => router.redo(tab));
   // Ctrl+X / C / V: copytext.js (object and system clipboard together).
+  if (ctrl && k === 'g') return run(() => (e.shiftKey ? ungroupSelection(tab) : groupSelection(tab)));
   if (ctrl && k === 'd' && sel.length) return run(() => duplicate(tab));
   if (ctrl) return;
   if (e.key === 'Escape') {
@@ -1057,6 +1099,7 @@ export function initAnnotations() {
 export const annotations = {
   add, update, remove, select, getSelection, getObject, list, undo, redo, batch, newId, remapPages,
   registerObjectType, applyStyle, toPage, render: renderAll, renderPreview,
+  groupSelection, ungroupSelection, canGroupSelection, canUngroupSelection,
   /** Internal for tools: add several objects as one undo step, returns their ids. */
   addMany,
   getAuthor, setAuthor,

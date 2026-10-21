@@ -171,6 +171,9 @@ function openMenu(e, tab) {
     null,
     ['delete', 'Delete', 'Del', () => annotations.remove(tab, sel), ro || !!textSel || !sel.length],
     ['select-all', 'Select all', '', () => annotations.select(tab, onPage.map((o) => o.id)), !onPage.length],
+    null,
+    ['group', 'Group', 'Ctrl+G', () => annotations.groupSelection(tab), !annotations.canGroupSelection(tab)],
+    ['ungroup', 'Ungroup', 'Ctrl+Shift+G', () => annotations.ungroupSelection(tab), !annotations.canUngroupSelection(tab)],
   ];
   const el = h('div.menu.context-menu.page-context-menu', { role: 'menu', 'aria-label': 'Edit', style: { position: 'fixed' } });
   for (const it of entries) {

@@ -63,7 +63,7 @@ try {
   await ev("an.add(tab, { type: 'rect', page: 0, x: 100, y: 300, w: 80, h: 60, stroke: '#ff0000', strokeWidth: 2 });");
   await menuAt(0, 140, 330);
   const items = await page.$$eval('.page-context-menu .menu-item', (b) => b.map((x) => `${x.dataset.action}:${x.disabled}`));
-  check(items.join() === 'cut:false,copy:false,paste:false,delete:false,select-all:false', `menu items ${items}`);
+  check(items.join() === 'cut:false,copy:false,paste:false,delete:false,select-all:false,group:true,ungroup:true', `menu items ${items}`);
   check(await page.evaluate(() => document.activeElement?.dataset.action) === 'cut', 'menu: first item not focused');
   await page.keyboard.press('ArrowDown');
   check(await page.evaluate(() => document.activeElement?.dataset.action) === 'copy', 'menu: ArrowDown did not move focus');
