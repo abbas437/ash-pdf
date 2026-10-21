@@ -166,6 +166,8 @@ try {
 
   step = 'blue follow-up';
   await page.click('.options-bar .co-shape[data-shape="rect"]');
+  const chipBg = await page.$eval('.options-bar .co-chip[data-color="#1d4ed8"]', (el) => getComputedStyle(el).backgroundColor);
+  if (chipBg !== 'rgb(29, 78, 216)') throw new Error(`colour chip not painted in its colour: ${chipBg}`);
   await page.click('.options-bar .co-chip[data-color="#1d4ed8"]');
   await drag(await toClient(0, 480, 470), await toClient(0, 590, 520));
   await type('Rev.01: Still open - show access panel');

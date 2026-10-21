@@ -17,7 +17,7 @@ export function h(spec, props = {}, ...children) {
     if (v == null || v === false) continue;
     if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
     else if (k === 'dataset') Object.assign(el.dataset, v);
-    else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
+    else if (k === 'style' && typeof v === 'object') for (const [p, x] of Object.entries(v)) { if (p.startsWith('--')) el.style.setProperty(p, x); else el.style[p] = x; } // custom properties need setProperty
     else if (k === 'html') el.innerHTML = v;
     else if (k === 'text') el.textContent = v;
     else if (k === 'className') el.className = v;
