@@ -145,6 +145,96 @@ try {
   check(o.text === 'Hello bigger worldXY\n', `final text ${JSON.stringify(o.text)}`);
   check(o.h > 12 * 1.2 * 1.5, `box grew for the new line: h ${o.h}`);
 
+  // Format controls style the editor's selection and keep it (DOM selection still "big", editor focused).
+  const domSel = () => ev('const t = document.querySelector("div.text-editor[contenteditable]"); return { s: getSelection().toString(), focused: !!t && document.activeElement === t };');
+  const keptBig = async (what) => { const d = await domSel(); check(d.s === 'big' && d.focused, `${what}: selection not kept ${JSON.stringify(d)}`); };
+  const sortRuns = (rs) => JSON.stringify((rs ?? []).map((r) => Object.fromEntries(Object.entries(r).sort())));
+  const typeAndSelectBig = async (y) => {
+    await page.mouse.click(...await toClient(0, 60, y));
+    await page.keyboard.type('Hello big world');
+    for (let k = 0; k < 6; k++) await page.keyboard.press('ArrowLeft');
+    for (let k = 0; k < 3; k++) await page.keyboard.press('Shift+ArrowLeft');
+    await keptBig('keyboard selection');
+  };
+
+  step = 'floating format bar';
+  await key('Escape');
+  await key('t');
+  await frames();
+  // Box colour black (the default is the review red, which would make a red run no override).
+  await page.$eval('.options-bar .opt-color', (el) => { el.value = '#000000'; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  const boxStyle = await ev('return { ...app.state.toolStyle };');
+  check(boxStyle.color === '#000000', `box colour ${boxStyle.color}`);
+  await typeAndSelectBig(400);
+  await frames();
+  const fb = await page.locator('.text-format-bar').boundingBox(), er = await editorRect();
+  check(fb && fb.y + fb.height <= er.t && er.t - (fb.y + fb.height) < 20 && Math.abs(fb.x - er.l) < 2, `floating bar not just above the box: ${JSON.stringify(fb)} vs ${JSON.stringify(er)}`);
+  await page.keyboard.press('Control+b');
+  await keptBig('Ctrl+B');
+  check(await page.getAttribute('.text-format-bar .tfb-bold', 'aria-pressed') === 'true' && await page.getAttribute('.options-bar .opt-text-bold', 'aria-pressed') === 'true', 'B not shown pressed for the selection');
+  await page.click('.text-format-bar .tfb-swatch[data-color="#d62828"]');
+  await keptBig('red swatch');
+  await page.keyboard.press('Control+u');
+  await keptBig('Ctrl+U');
+  await page.focus('.text-format-bar .tfb-font');
+  await page.selectOption('.text-format-bar .tfb-font', 'Times');
+  await keptBig('floating font select');
+  await page.keyboard.press('Control+Shift+X');
+  check((await ed('return ed.styleAtSelection();')).strike === true, 'Ctrl+Shift+X did not strike');
+  await page.keyboard.press('Control+Shift+X');
+  await keptBig('Ctrl+Shift+X twice');
+  await page.keyboard.press('Control+Enter');
+  o = (await texts()).at(-1);
+  check(sortRuns(o.runs) === sortRuns([{ text: 'Hello ' }, { text: 'big', bold: true, underline: true, color: '#d62828', font: 'Times' }, { text: ' world' }]), `floating bar runs ${JSON.stringify(o.runs)}`);
+  check(o.font === boxStyle.font && !o.bold, `box style changed: ${o.font} ${o.bold}`);
+  await frames();
+  check(!(await page.$('.text-format-bar')), 'floating bar left after commit');
+
+  step = 'main options bar';
+  await key('Escape');
+  if (await ev('return app.state.tool;') !== 'text') await key('t');
+  await frames();
+  await typeAndSelectBig(480);
+  await page.focus('.options-bar .opt-text-font');
+  await page.selectOption('.options-bar .opt-text-font', 'Times');
+  await keptBig('main font select');
+  await page.focus('.options-bar .opt-font');
+  await page.$eval('.options-bar .opt-font', (el) => { el.value = '18'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await keptBig('main size input');
+  for (const b of ['bold', 'underline', 'strike']) {
+    await page.click(`.options-bar .opt-text-${b}`);
+    await keptBig(`main ${b}`);
+  }
+  await page.focus('.options-bar .opt-color');
+  await page.$eval('.options-bar .opt-color', (el) => { el.value = '#1d4ed8'; el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); });
+  await keptBig('main colour input');
+  await page.keyboard.press('ArrowLeft');
+  await frames();
+  check(await page.getAttribute('.options-bar .opt-text-bold', 'aria-pressed') === 'false', 'B pressed at a caret after plain text');
+  await page.keyboard.press('Shift+ArrowRight');
+  await frames();
+  check(await page.getAttribute('.options-bar .opt-text-strike', 'aria-pressed') === 'true' && await page.getAttribute('.text-format-bar .tfb-strike', 'aria-pressed') === 'true', 'S not pressed for a struck selection');
+  await page.keyboard.press('Control+Enter');
+  o = (await texts()).at(-1);
+  check(sortRuns(o.runs) === sortRuns([{ text: 'Hello ' }, { text: 'big', font: 'Times', fontSize: 18, bold: true, underline: true, strike: true, color: '#1d4ed8' }, { text: ' world' }]), `main bar runs ${JSON.stringify(o.runs)}`);
+  const after = await ev('return { ...app.state.toolStyle };');
+  check(['font', 'fontSize', 'bold', 'italic', 'color'].every((k) => after[k] === boxStyle[k]), `selection styling changed the box style: ${JSON.stringify(after)}`);
+
+  step = 'collapsed caret = box style';
+  await key('Escape');
+  if (await ev('return app.state.tool;') !== 'text') await key('t');
+  await frames();
+  await page.mouse.click(...await toClient(0, 60, 560));
+  await page.keyboard.type('Box style');
+  await page.focus('.options-bar .opt-text-font');
+  await page.selectOption('.options-bar .opt-text-font', 'Courier');
+  check((await domSel()).focused, 'editor not refocused after the font change');
+  await page.keyboard.press('Control+Enter');
+  o = (await texts()).at(-1);
+  check(o.text === 'Box style' && o.font === 'Courier' && !o.runs, `collapsed caret font: ${JSON.stringify(o)}`);
+  check(await ev('return app.state.toolStyle.font;') === 'Courier', 'box style (toolStyle) not set');
+  await page.selectOption('.options-bar .opt-text-font', boxStyle.font);
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {

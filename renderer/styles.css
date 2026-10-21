@@ -444,6 +444,19 @@ body.text-tool .viewer-host { user-select: none; -webkit-user-select: none; }
 body.text-tool .viewer-host .page { cursor: text; }
 .opt-glyph-bold { font-weight: 700; font-family: Georgia, serif; }
 .opt-glyph-italic { font-style: italic; font-family: Georgia, serif; }
+.opt-glyph-underline { text-decoration: underline; font-family: Georgia, serif; }
+.opt-glyph-strike { text-decoration: line-through; font-family: Georgia, serif; }
+/* Floating format bar over the open text editor (ui/tools-text.js attachFormatBar); placed by translate() */
+.text-format-bar { position: fixed; left: 0; top: 0; z-index: 40; display: flex; align-items: center; gap: 2px; padding: 3px 5px; color: var(--text);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.18); font: 12px system-ui, sans-serif; }
+.text-format-bar[hidden] { display: none; }
+.text-format-bar select, .text-format-bar input[type="number"] { font: inherit; color: var(--text); background: var(--input); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+.text-format-bar .tfb-size { width: 52px; margin-right: 4px; }
+.text-format-bar .tb-btn { width: 24px; height: 24px; }
+.text-format-bar .tfb-sep { width: 1px; height: 18px; margin: 0 4px; background: var(--line); }
+.text-format-bar .tfb-swatch { width: 18px; height: 18px; margin: 0 1px; border-radius: 50%; border: 2px solid var(--surface-2); box-shadow: 0 0 0 1px var(--line); }
+.text-format-bar .tfb-swatch[aria-pressed="true"] { border-color: var(--surface-2); box-shadow: 0 0 0 2px var(--accent); }
+.text-format-bar .tfb-color { width: 26px; height: 22px; margin-left: 4px; padding: 0; border: 1px solid var(--line); background: none; }
 
 /* Callout + Markup review tools (ui/tools-callout.js) */
 body.callout-tool .viewer-host .textLayer, body.callout-tool .viewer-host .linkLayer { pointer-events: none; }
