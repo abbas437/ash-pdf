@@ -548,6 +548,42 @@ try {
   await page.keyboard.press('Control+Enter');
   const io2 = (await objs()).find((x) => x.id === io.id);
   check(io2.text === 'A\uFFFCBC' && io2.images?.[ik]?.bytes?.length === io.images[ik].bytes.length, 're-edit kept the picture');
+  // Picture size: click selects the picture; the right-click menu resizes it (one undo step each).
+  step = 'picture size';
+  const pickSize = async (label) => {
+    await page.mouse.click(...await ed('const r = ed.el.querySelector("img").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2];'), { button: 'right' });
+    await frames();
+    await page.locator('.text-context-menu button.menu-item', { hasText: /^Picture size/ }).first().hover();
+    await page.locator('.text-context-menu .text-submenu button.menu-item', { hasText: new RegExp(`^${label}`) }).first().click();
+    await frames();
+  };
+  const picRun = async () => (await ed('return ed.getRuns();')).find((r) => r.img);
+  await page.mouse.dblclick(...await toClient(0, io.x + 3, io.y + io.h - 4));
+  await page.mouse.click(...await ed('const r = ed.el.querySelector("img").getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2];'));
+  check(JSON.stringify(await ed('return ed.getSelection();')) === '{"start":1,"end":2}', `click selects the picture ${JSON.stringify(await ed('return ed.getSelection();'))}`);
+  check(await ed('return ed.el.querySelector("img").classList.contains("te-sel");'), 'selected picture is outlined');
+  await pickSize('50%');
+  pr = await picRun();
+  near(pr.imgW, 60, 'picture 50% width', 0.01);
+  near(pr.imgH, 45, 'picture 50% height', 0.01);
+  await pickSize('Fit width');
+  pr = await picRun();
+  const inner = io2.w - 2 * await ev('return (await import("/src/core/index.js")).textInset(arg);', io2);
+  near(pr.imgW, inner, 'Fit width = box inner width', 0.01);
+  near(pr.imgH, inner * 0.75, 'Fit width keeps the aspect', 0.01);
+  await page.keyboard.press('Control+z');
+  near((await picRun()).imgW, 60, 'Ctrl+Z undoes Fit width', 0.01);
+  await page.keyboard.press('Control+z');
+  near((await picRun()).imgW, 120, 'Ctrl+Z undoes the 50% resize', 0.01);
+  await pickSize('50%');
+  await page.keyboard.press('Control+Enter');
+  const io3 = (await objs()).find((x) => x.id === io.id).runs.find((r) => r.img);
+  near(io3.imgW, 60, 'committed 50% width', 0.01);
+  near(io3.imgH, 45, 'committed 50% height', 0.01);
+  await page.mouse.dblclick(...await toClient(0, io.x + 3, io.y + 20));
+  await pickSize('100%');
+  near((await picRun()).imgW, 120, '100% restores the natural size', 0.01);
+  await page.keyboard.press('Control+Enter');
   // A box whose picture was deleted has no images field.
   await page.mouse.dblclick(...await toClient(0, io.x + 3, io.y + io.h - 4));
   await ed('ed.setSelection(1, 2);');
