@@ -290,6 +290,17 @@ try {
   ob = (await objs()).find((x) => x.id === o.id);
   check(ob.text.endsWith('Q') && JSON.stringify(ob.runs) === before, `runs kept without the core: ${JSON.stringify(ob)}`);
 
+  step = 'colour input drag is one undo step';
+  await reopen();
+  await ed('ed.setSelection(0, 5);');
+  const runsBefore = JSON.stringify(await ed('return ed.getRuns();'));
+  await ev('const i = document.querySelector(".tfb-color"); for (const c of ["#ff0000", "#00ff00", "#0000ff"]) { i.value = c; i.dispatchEvent(new Event("input", { bubbles: true })); }');
+  check(JSON.stringify(await ed('return ed.getRuns();')) !== runsBefore && (await ed('return ed.styleAtSelection();')).color === '#0000ff', 'colour applied');
+  await ed('ed.el.focus();');
+  await page.keyboard.press('Control+z');
+  check(JSON.stringify(await ed('return ed.getRuns();')) === runsBefore, `one Ctrl+Z restores the colour before the first change: ${JSON.stringify(await ed('return ed.getRuns();'))}`);
+  await page.keyboard.press('Control+Enter');
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {

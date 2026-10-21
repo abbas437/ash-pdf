@@ -305,7 +305,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   };
   const snapshot = () => ({ text: model.text, runs: model.runs, sel: domSel() ?? lastSel });
   const push = (kind, at) => {
-    if (!(kind === 'type' && lastKind === 'type' && at === lastSel.end)) undo.push(snapshot());
+    if (!(kind === 'type' && lastKind === 'type' && at === lastSel.end) && !(kind.startsWith('color:') && kind === lastKind)) undo.push(snapshot());
     redo.length = 0;
     lastKind = kind;
   };
@@ -371,7 +371,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       if (!core) return;
       const sel = handle.getSelection();
       const [a, b] = sel.end > sel.start ? [sel.start, sel.end] : [0, model.text.length];
-      push('style');
+      // Consecutive colour changes on the same selection (dragging the colour input) are one undo step.
+      push(Object.keys(patch).length === 1 && 'color' in patch ? `color:${a}-${b}` : 'style');
       model = core.applyStyleToRange(obj(), a, b, patch);
       show(sel);
     },
