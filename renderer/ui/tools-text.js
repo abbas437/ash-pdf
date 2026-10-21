@@ -179,7 +179,8 @@ function checkWinAnsi(text, warn) {
   warn.hidden = !core || core.sanitizeText(norm) === norm;
 }
 
-/** CSS for one run's overrides (the box style is the editor's own style). */
+/** CSS for one run's overrides (the box style is the editor's own style, except underline / strike:
+ * a decoration on the editor element could not be cancelled by a run, so every run span carries its own). */
 function runCss(r, s, deco) {
   const c = {};
   if (r.font && r.font !== s.font) c.fontFamily = FAMILY[fontOf(r.font)];
@@ -188,7 +189,7 @@ function runCss(r, s, deco) {
   if (r.italic != null && !!r.italic !== !!s.italic) c.fontStyle = r.italic ? 'italic' : 'normal';
   if (r.color) c.color = r.color;
   const u = r.underline ?? deco.underline, k = r.strike ?? deco.strike;
-  if (u !== deco.underline || k !== deco.strike) c.textDecorationLine = [u && 'underline', k && 'line-through'].filter(Boolean).join(' ') || 'none';
+  c.textDecorationLine = [u && 'underline', k && 'line-through'].filter(Boolean).join(' ') || 'none';
   return c;
 }
 const hex2 = (n) => Number(n).toString(16).padStart(2, '0');
@@ -258,14 +259,14 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     const p = P.find((q) => i > q.start && i <= q.start + q.len) ?? P.find((q) => i <= q.start);
     return p ? [p.node, Math.max(0, i - p.start)] : [el, el.childNodes.length];
   };
-  const domSel = () => {
+  const selIn = () => {
     const sel = window.getSelection();
-    // Focus in a format control: re-rendering leaves the DOM selection collapsed in el; keep lastSel.
-    if (document.activeElement !== el) return null;
     if (!sel?.rangeCount || !el.contains(sel.anchorNode) || !el.contains(sel.focusNode)) return null;
     const a = toOffset(sel.anchorNode, sel.anchorOffset), b = toOffset(sel.focusNode, sel.focusOffset);
     return { start: Math.min(a, b), end: Math.max(a, b) };
   };
+  // Focus in a format control: re-rendering leaves the DOM selection collapsed in el; keep lastSel.
+  const domSel = () => (document.activeElement === el ? selIn() : null);
   const setDomSel = ({ start, end }) => {
     const sel = window.getSelection();
     sel?.setBaseAndExtent(...toPoint(start), ...toPoint(end));
@@ -287,8 +288,15 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       const cs = getComputedStyle(p.node.parentNode);
       const fam = /Times/.test(cs.fontFamily) ? 'Times' : /Courier/.test(cs.fontFamily) ? 'Courier' : 'Helvetica';
       const pt = Math.round((parseFloat(cs.fontSize) / basePx) * s.fontSize * 100) / 100;
+      // Decorations from the elements below the editor (run spans); text straight in the editor (or in
+      // an element the browser made without any) has the box decoration.
       const lines = new Set();
-      for (let n = p.node.parentNode; n && n !== el.parentNode; n = n.parentNode) for (const v of getComputedStyle(n).textDecorationLine.split(' ')) lines.add(v);
+      let styled = false;
+      for (let n = p.node.parentNode; n && n !== el; n = n.parentNode) {
+        if (n.style?.textDecorationLine) styled = true;
+        for (const v of getComputedStyle(n).textDecorationLine.split(' ')) lines.add(v);
+      }
+      if (!styled) { if (deco.underline) lines.add('underline'); if (deco.strike) lines.add('line-through'); }
       out.push({ text: t, font: fam, fontSize: Math.abs(pt - s.fontSize) < 0.01 ? s.fontSize : pt, bold: Number(cs.fontWeight) >= 600, italic: cs.fontStyle !== 'normal', color: cssHex(cs.color), underline: lines.has('underline'), strike: lines.has('line-through') });
     }
     const t = out.map((r) => r.text).join('');
@@ -324,7 +332,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       left: px(box.x), top: px(box.y), width: px(box.w), height: px(box.h),
       fontFamily: FAMILY[s.font], fontSize: px(s.fontSize), lineHeight: px(s.fontSize * s.lineHeight),
       fontWeight: s.bold ? 'bold' : 'normal', fontStyle: s.italic ? 'italic' : 'normal', color: s.color, textAlign: s.align,
-      textDecorationLine: [deco.underline && 'underline', deco.strike && 'line-through'].filter(Boolean).join(' ') || 'none',
+      textDecorationLine: 'none', // on the run spans (runCss)
     });
     Object.assign(warn.style, { left: px(box.x), top: px(box.y + box.h + 2), minWidth: px(box.w) });
     checkWinAnsi(model.text, warn);
@@ -428,6 +436,9 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   // Keep pointer events on the editor away from the tool dispatch (select tool would start a move).
   for (const t of ['pointerdown', 'pointermove', 'pointerup', 'dblclick']) el.addEventListener(t, (e) => e.stopPropagation());
   el.addEventListener('blur', (e) => {
+    // selectionchange is async: take the selection now, before a format control has the focus.
+    const v = selIn();
+    if (v) lastSel = v;
     if (e.relatedTarget?.closest?.(FORMAT_UI) || !el.isConnected) return;
     // Window blur (switching apps) keeps the editor open.
     setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.(FORMAT_UI)) handle.commit(); }, 0);

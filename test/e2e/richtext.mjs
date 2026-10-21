@@ -235,6 +235,50 @@ try {
   check(await ev('return app.state.toolStyle.font;') === 'Courier', 'box style (toolStyle) not set');
   await page.selectOption('.options-bar .opt-text-font', boxStyle.font);
 
+  // A box-level underline is drawn by the run spans, so one word can drop it (and keeps it dropped
+  // through a native edit read back from the DOM).
+  step = 'box underline off for one word';
+  await key('Escape');
+  await key('v');
+  o = await ev("const o = an.add(tab, { type: 'text', page: 0, x: 60, y: 640, w: 300, h: 20, text: 'Hello big world', font: 'Helvetica', fontSize: 12, color: '#000000', underline: true }); return { ...o };");
+  await frames();
+  const reopen = async () => { await page.mouse.dblclick(...await toClient(0, o.x + 5, o.y + 8)); check(await ed('return ed?.getText();') != null, 'editor not reopened'); };
+  /** text-decoration-line of the span holding `word` and of every ancestor up to the editor's parent. */
+  const decoOf = (word) => ed('const n = [...ed.el.querySelectorAll("span")].find((s) => s.textContent.includes(arg)); const out = []; for (let e = n; e && e !== ed.el.parentNode; e = e.parentNode) out.push(getComputedStyle(e).textDecorationLine); return out;', word);
+  await reopen();
+  check((await decoOf('big')).includes('underline'), `box underline not shown: ${await decoOf('big')}`);
+  await ed('ed.setSelection(6, 9);');
+  await page.keyboard.press('Control+u');
+  let dl = await decoOf('big');
+  check(dl.every((v) => v === 'none'), `word still underlined in the editor: ${dl}`);
+  check((await decoOf('Hello')).includes('underline'), 'rest of the box lost its underline');
+  await page.keyboard.press('Control+Enter');
+  const plainBig = sortRuns([{ text: 'Hello ' }, { text: 'big', underline: false }, { text: ' world' }]);
+  let ob = (await objs()).find((x) => x.id === o.id);
+  check(sortRuns(ob.runs) === plainBig && ob.underline === true, `runs ${JSON.stringify(ob.runs)}`);
+  await frames();
+  const ov = await ev('const g = v.getOverlaySvg(tab, 0).querySelector(`[data-obj-id="${arg}"]`); return { t: [...g.querySelectorAll("tspan")].map((t) => ({ s: t.textContent, x: +t.getAttribute("x") })), u: [...g.querySelectorAll("rect.ann-text-underline")].map((r) => ({ x: +r.getAttribute("x"), w: +r.getAttribute("width") })) };', o.id);
+  const bi = ov.t.findIndex((t) => t.s === 'big');
+  check(bi > 0 && bi < ov.t.length - 1 && ov.u.length >= 2, `overlay ${JSON.stringify(ov)}`);
+  const [x0, x1] = [ov.t[bi].x, ov.t[bi + 1].x];
+  check(!ov.u.some((r) => r.x < x1 - 0.5 && r.x + r.w > x0 + 0.5), `underline drawn under the word: ${JSON.stringify(ov)}`);
+  await reopen();
+  await ed('ed.setSelection(7, 7);');
+  await page.keyboard.type('X');
+  // A native edit (as IME / execCommand do): change the DOM text, the editor reads it back.
+  await ed('const n = [...ed.el.querySelectorAll("span")].find((s) => s.textContent === "bXig").firstChild; n.data = "bXYig"; ed.el.dispatchEvent(new InputEvent("input", { bubbles: true }));');
+  dl = await decoOf('bXYig');
+  check(dl.every((v) => v === 'none'), `word underlined again after typing: ${dl}`);
+  const nativeRuns = sortRuns([{ text: 'Hello ' }, { text: 'bXYig', underline: false }, { text: ' world' }]);
+  check(sortRuns(await ed('return ed.getRuns();')) === nativeRuns, `runs after a native edit ${JSON.stringify(await ed('return ed.getRuns();'))}`);
+  // Text the browser puts straight into the editor element (IME into an empty box) has the box style.
+  await ed('ed.el.append(document.createTextNode("Z")); ed.el.dispatchEvent(new InputEvent("input", { bubbles: true }));');
+  const finalRuns = sortRuns([{ text: 'Hello ' }, { text: 'bXYig', underline: false }, { text: ' worldZ' }]);
+  check(sortRuns(await ed('return ed.getRuns();')) === finalRuns, `runs after text in the editor element ${JSON.stringify(await ed('return ed.getRuns();'))}`);
+  await page.keyboard.press('Control+Enter');
+  ob = (await objs()).find((x) => x.id === o.id);
+  check(ob.text === 'Hello bXYig worldZ' && sortRuns(ob.runs) === finalRuns, `committed ${JSON.stringify(ob)}`);
+
   check(!problems.length, `browser problems:\n${problems.join('\n')}`);
   console.log('RICHTEXT OK');
 } catch (err) {
