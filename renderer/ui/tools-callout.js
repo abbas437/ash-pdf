@@ -182,14 +182,14 @@ function editComment(tab, page, box, tip, { shape = null } = {}) {
     const t = shape ? tipFor(shape, b) : tip;
     return { type: 'callout', page, ...b, text, tx: r3(t.x), ty: r3(t.y), ...st };
   };
-  const refresh = () => { if (session?.ed) showPreview(tab, page, shape, { ...build(session.ed.textarea.value), text: '' }); };
+  const refresh = () => { if (session?.ed) showPreview(tab, page, shape, { ...build(session.ed.getText()), text: '' }); };
   const finish = () => { session = null; annotations.renderPreview(tab, page, null); };
   const ed = openTextEditor(tab, page, { x: box.x + PAD, y: box.y + PAD, w: box.w - 2 * PAD, h: h0 - 2 * PAD }, {
     style: editorStyle(st),
-    onCommit(text) {
+    onCommit(text, b, s, runs) {
       finish();
       if (!text.trim()) { if (shape) annotations.select(tab, [annotations.add(tab, shape).id]); return; }
-      const co = build(text);
+      const co = { ...build(text), ...(runs ? { runs } : {}) };
       const ids = [];
       annotations.batch(tab, () => {
         if (shape) ids.push(annotations.add(tab, shape).id);
@@ -201,8 +201,9 @@ function editComment(tab, page, box, tip, { shape = null } = {}) {
   });
   if (!ed) { if (shape) annotations.add(tab, shape); return null; }
   session = { tab, page, ed, refresh, restyle() { st = calloutStyle(); ed.setStyle(editorStyle(st)); refresh(); } };
-  ed.textarea.classList.add('callout-editor');
-  ed.textarea.addEventListener('input', refresh);
+  ed.el.classList.add('callout-editor');
+  ed.el.addEventListener('input', refresh);
+  ed.el.addEventListener('beforeinput', () => setTimeout(refresh, 0));
   refresh();
   return ed;
 }
@@ -325,7 +326,7 @@ export function initCalloutTools() {
   if (cb && mb) cb.after(mb);
 
   // A pointerdown that commits the open comment editor must not also start a new callout.
-  window.addEventListener('pointerdown', (e) => { if (session && e.target !== session.ed.textarea && !e.target.closest?.('.options-bar, .dialog, .menu')) swallowEv = e; }, true);
+  window.addEventListener('pointerdown', (e) => { if (session && !session.ed.el.contains(e.target) && !e.target.closest?.('.options-bar, .dialog, .menu')) swallowEv = e; }, true);
   // tools-text restyles any open editor to the Text tool style; put the comment style back.
   bus.on('state:changed', ({ key }) => { if (key === 'toolStyle' && session) session.restyle(); });
   document.addEventListener('keydown', (e) => {

@@ -63,7 +63,7 @@ try {
     for (const p of pts.slice(1)) await page.mouse.move(p[0], p[1], { steps: 5 });
     await page.mouse.up();
   };
-  const editorRect = () => ev('const t = document.querySelector("textarea.text-editor"); if (!t) return null; const r = t.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, focused: document.activeElement === t, value: t.value, sh: t.scrollHeight, ch: t.clientHeight };');
+  const editorRect = () => ev('const t = document.querySelector("div.text-editor[contenteditable]"); if (!t) return null; const ed = (await import("/renderer/ui/tools-text.js")).activeTextEditor(); const r = t.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, focused: document.activeElement === t, value: ed?.el === t ? ed.getText() : null, sh: t.scrollHeight, ch: t.clientHeight };');
   /** Client bounding box of a page-space box (any view rotation). */
   const boxClient = async (i, b) => {
     const c = [await toClient(i, b.x, b.y), await toClient(i, b.x + b.w, b.y), await toClient(i, b.x, b.y + b.h), await toClient(i, b.x + b.w, b.y + b.h)];
