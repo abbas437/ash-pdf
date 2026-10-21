@@ -1,4 +1,4 @@
-// Text tool: type text onto a page with an in-place <textarea>, stored as a core `text` overlay
+// Text tool: type text onto a page with an in-place rich-text editor (contenteditable), stored as a core `text` overlay
 // object ({type:'text', page, x,y,w,h, text, fontSize, font, bold, italic, color, align,
 // lineHeight}) and flattened on save by src/core/annotate.js. Also "Replace text…" (Tools menu):
 // a whiteout over the original text plus a new text box in the same rectangle.
@@ -8,7 +8,7 @@
 // svg.overlay-svg, so zoom and view rotation need no re-layout. Line wrapping and the box height
 // come from the core's measureText, so the overlay, the editor and the saved PDF wrap alike.
 //
-// Exports: initTextTools(app), openTextEditor(tab, pageIndex, boxPts, opts), registerTextObjectType(),
+// Exports: initTextTools(app), openTextEditor(tab, pageIndex, boxPts, opts), activeTextEditor(), registerTextObjectType(),
 // addTextBox(tab, page, x, y, text) (paste of plain text).
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
@@ -69,9 +69,13 @@ function measure(text, s, maxWidth) {
   return { lines, lineHeight: lh, height: lines.length * lh, firstBaseline: (lh - opts.fontSize * 0.93) / 2 + opts.fontSize * 0.72 };
 }
 /** Box height that fits the text (at least one line). */
-const fitH = (text, s, w) => { const m = measure(text, s, w); return Math.max(m.height, m.lineHeight); };
+const fitH = (text, s, w, runs) => {
+  const m = measure(text, s, w);
+  if (core && Array.isArray(runs) && runs.length) return Math.max(core.layoutRich({ ...s, text, runs }, w).height, m.lineHeight);
+  return Math.max(m.height, m.lineHeight);
+};
 /** Box height: the text's, but never below the height the user dragged the box to (`minH`). */
-const boxH = (text, s, w, minH) => Math.max(fitH(text, s, w), Number(minH) > 0 ? Number(minH) : 0);
+const boxH = (text, s, w, minH, runs) => Math.max(fitH(text, s, w, runs), Number(minH) > 0 ? Number(minH) : 0);
 /**
  * Word-style resize of a text box by `handle` (nw..w): width and height follow the drag, text
  * re-wraps, the dragged height is kept as `minH` (0 when it is at or below the text height).
@@ -136,12 +140,12 @@ const textType = {
   })),
   hit: (o, x, y, tol) => x >= o.x - tol && x <= o.x + o.w + tol && y >= o.y - tol && y <= o.y + o.h + tol,
   move: (o, dx, dy) => ({ x: o.x + dx, y: o.y + dy }),
-  resize: (o, handle, dx, dy) => resizeTextBox(o, handle, dx, dy, (w) => fitH(o.text, o, w)),
+  resize: (o, handle, dx, dy) => resizeTextBox(o, handle, dx, dy, (w) => fitH(o.text, o, w, o.runs)),
   style(o, s, keys) {
     const p = {};
     const ns = styleFrom(s);
     for (const k of TEXT_KEYS) if (keys.includes(k)) p[k] = ns[k];
-    if (['font', 'fontSize', 'bold', 'italic'].some((k) => k in p)) p.h = boxH(o.text, { ...o, ...p }, o.w, o.minH);
+    if (['font', 'fontSize', 'bold', 'italic'].some((k) => k in p)) p.h = boxH(o.text, { ...o, ...p }, o.w, o.minH, o.runs);
     return p;
   },
 };
@@ -171,80 +175,271 @@ function checkWinAnsi(text, warn) {
   warn.hidden = !core || core.sanitizeText(norm) === norm;
 }
 
+/** CSS for one run's overrides (the box style is the editor's own style). */
+function runCss(r, s, deco) {
+  const c = {};
+  if (r.font && r.font !== s.font) c.fontFamily = FAMILY[fontOf(r.font)];
+  if (r.fontSize > 0 && r.fontSize !== s.fontSize) { c.fontSize = px(r.fontSize); c.lineHeight = px(r.fontSize * s.lineHeight); }
+  if (r.bold != null && !!r.bold !== !!s.bold) c.fontWeight = r.bold ? 'bold' : 'normal';
+  if (r.italic != null && !!r.italic !== !!s.italic) c.fontStyle = r.italic ? 'italic' : 'normal';
+  if (r.color) c.color = r.color;
+  const u = r.underline ?? deco.underline, k = r.strike ?? deco.strike;
+  if (u !== deco.underline || k !== deco.strike) c.textDecorationLine = [u && 'underline', k && 'line-through'].filter(Boolean).join(' ') || 'none';
+  return c;
+}
+const hex2 = (n) => Number(n).toString(16).padStart(2, '0');
+const cssHex = (c) => { const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(c); return m ? `#${hex2(m[1])}${hex2(m[2])}${hex2(m[3])}` : c; };
+const BLOCK = /^(DIV|P|LI|H[1-6])$/;
+
 /**
- * Open the in-place editor over boxPts {x, y, w, h?} (points) on page `pageIndex`.
- * opts: {text = '', style ({font,fontSize,bold,italic,color,align,lineHeight}, default
- * state.toolStyle), onCommit(text, boxPts), onCancel()}. Ctrl+Enter or a click outside commits,
- * Esc cancels. boxPts.h passed to onCommit is the height that fits the text.
- * Returns {textarea, commit(), cancel(), setStyle(style)}; any editor already open is committed.
+ * Open the in-place rich-text editor (a contenteditable div.text-editor) over boxPts {x, y, w, h?}
+ * (points) on page `pageIndex`. opts: {text = '', runs, style ({font,fontSize,bold,italic,color,
+ * align,lineHeight,underline,strike}, default state.toolStyle), onCommit(text, boxPts, style, runs),
+ * onCancel()}. Ctrl+Enter or a click outside commits, Esc cancels. boxPts.h passed to onCommit is the
+ * height that fits the text; runs is undefined when the text is uniform.
+ * Returns {el, commit(), cancel(), setStyle(style), getText(), getRuns(), getSelection() → {start, end},
+ * setSelection(start, end), applyStyle(patch), styleAtSelection()}; any editor already open is committed.
+ * Edits go through `beforeinput` into a {text, runs} model (new text takes the style before the caret,
+ * paste is plain text); IME composition and other native edits are read back from the DOM.
  */
-export function openTextEditor(tab, pageIndex, boxPts, { text = '', style, onCommit, onCancel } = {}) {
+export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel } = {}) {
   editor?.commit();
   const layer = layerFor(tab, pageIndex);
   if (!layer) return null;
   let s = styleFrom({ ...state.toolStyle, ...style });
+  let deco = { underline: !!style?.underline, strike: !!style?.strike };
   const box = { x: boxPts.x, y: boxPts.y, w: Math.max(MIN_W, boxPts.w || 0) };
   const minH = boxPts.minH;
-  const ta = h('textarea.text-editor', { spellcheck: 'false', 'aria-label': 'Text', wrap: 'soft' });
+  const el = h('div.text-editor', { contenteditable: 'true', spellcheck: 'false', role: 'textbox', 'aria-multiline': 'true', 'aria-label': 'Text' });
   const warn = h('div.form-warn.text-editor-warn', { role: 'status', hidden: true }, 'Some characters cannot be saved with the standard PDF fonts and will appear as "?".');
-  ta.value = text;
+  const obj = () => ({ type: 'text', ...s, ...deco, text: model.text, runs: model.runs });
+  let model = { text: String(text ?? '') };
+  model.runs = core && runs ? core.normalizeRuns(core.runsOf({ ...obj(), runs }), obj()) : undefined;
+  const undo = [], redo = [];
+  let lastKind = null, lastSel = { start: model.text.length, end: model.text.length }, composing = false;
+
+  // ---- DOM <-> character offsets: text nodes count their length, <br> and block starts count '\n'
+  const pieces = () => {
+    const out = [];
+    let pos = 0;
+    const walk = (n) => {
+      for (const c of n.childNodes) {
+        if (c.nodeType === 3) { out.push({ node: c, start: pos, len: c.data.length }); pos += c.data.length; } else if (c.nodeName === 'BR') {
+          if (c.classList.contains('te-end')) continue;
+          out.push({ node: c, start: pos, len: 1, br: true }); pos += 1;
+        } else if (c.nodeType === 1) {
+          if (BLOCK.test(c.nodeName) && pos > 0 && !out.at(-1)?.br) { out.push({ node: c, start: pos, len: 1, block: true }); pos += 1; }
+          walk(c);
+        }
+      }
+    };
+    walk(el);
+    return out;
+  };
+  const toOffset = (node, off) => {
+    const P = pieces();
+    if (node.nodeType === 3) { const p = P.find((q) => q.node === node); if (p) return p.start + Math.min(off, p.len); }
+    const r = document.createRange();
+    try { r.setStart(node, off); } catch { return model.text.length; }
+    let pos = 0;
+    for (const p of P) {
+      const before = p.node.nodeType === 3 ? r.comparePoint(p.node, p.len) <= 0 : r.comparePoint(p.node.parentNode, [...p.node.parentNode.childNodes].indexOf(p.node)) < 0;
+      if (before) pos = p.start + p.len; else break;
+    }
+    return pos;
+  };
+  const toPoint = (i) => {
+    const P = pieces().filter((p) => p.node.nodeType === 3);
+    const p = P.find((q) => i > q.start && i <= q.start + q.len) ?? P.find((q) => i <= q.start);
+    return p ? [p.node, Math.max(0, i - p.start)] : [el, el.childNodes.length];
+  };
+  const domSel = () => {
+    const sel = window.getSelection();
+    if (!sel?.rangeCount || !el.contains(sel.anchorNode) || !el.contains(sel.focusNode)) return null;
+    const a = toOffset(sel.anchorNode, sel.anchorOffset), b = toOffset(sel.focusNode, sel.focusOffset);
+    return { start: Math.min(a, b), end: Math.max(a, b) };
+  };
+  const setDomSel = ({ start, end }) => {
+    const sel = window.getSelection();
+    sel?.setBaseAndExtent(...toPoint(start), ...toPoint(end));
+  };
+
+  // ---- model -> DOM, DOM -> model
+  const render = () => {
+    const parts = core ? core.runsOf(obj()) : [{ text: model.text }];
+    el.replaceChildren(...parts.filter((r) => r.text).map((r) => h('span', { style: runCss(r, s, deco) }, r.text)));
+    if (!model.text || model.text.endsWith('\n')) el.append(h('br.te-end'));
+  };
+  const parse = () => {
+    if (!core) return { text: pieces().map((p) => (p.node.nodeType === 3 ? p.node.data : '\n')).join('') };
+    const base = getComputedStyle(el), basePx = parseFloat(base.fontSize) || 1;
+    const out = [];
+    for (const p of pieces()) {
+      const t = p.node.nodeType === 3 ? p.node.data : '\n';
+      if (p.node.nodeType !== 3) { out.push({ ...(out.at(-1) ?? {}), text: t }); continue; }
+      const cs = getComputedStyle(p.node.parentNode);
+      const fam = /Times/.test(cs.fontFamily) ? 'Times' : /Courier/.test(cs.fontFamily) ? 'Courier' : 'Helvetica';
+      const pt = Math.round((parseFloat(cs.fontSize) / basePx) * s.fontSize * 100) / 100;
+      const lines = new Set();
+      for (let n = p.node.parentNode; n && n !== el.parentNode; n = n.parentNode) for (const v of getComputedStyle(n).textDecorationLine.split(' ')) lines.add(v);
+      out.push({ text: t, font: fam, fontSize: Math.abs(pt - s.fontSize) < 0.01 ? s.fontSize : pt, bold: Number(cs.fontWeight) >= 600, italic: cs.fontStyle !== 'normal', color: cssHex(cs.color), underline: lines.has('underline'), strike: lines.has('line-through') });
+    }
+    const t = out.map((r) => r.text).join('');
+    return { text: t, runs: core.normalizeRuns(out, { ...obj(), text: t }) };
+  };
+  const snapshot = () => ({ text: model.text, runs: model.runs, sel: domSel() ?? lastSel });
+  const push = (kind, at) => {
+    if (!(kind === 'type' && lastKind === 'type' && at === lastSel.end)) undo.push(snapshot());
+    redo.length = 0;
+    lastKind = kind;
+  };
+  const show = (sel) => { render(); lastSel = sel; if (document.activeElement === el) setDomSel(sel); layout(); };
+  const replace = (a, b, str, kind) => {
+    push(kind, a);
+    const keep = a < b && core ? core.styleAt(obj(), a) : undefined;
+    let m = a < b && core ? core.deleteRange(obj(), a, b) : { text: model.text.slice(0, a) + model.text.slice(b), runs: model.runs };
+    if (str) m = core ? core.insertText({ ...obj(), ...m }, a, str, keep) : { text: m.text.slice(0, a) + str + m.text.slice(a) };
+    model = m;
+    show({ start: a + str.length, end: a + str.length });
+  };
+  const history = (from, to) => {
+    if (!from.length) return;
+    to.push(snapshot());
+    const st = from.pop();
+    model = { text: st.text, runs: st.runs };
+    lastKind = null;
+    show(st.sel);
+  };
+
   const layout = () => {
-    box.h = boxH(ta.value, s, box.w, minH);
-    Object.assign(ta.style, {
+    box.h = boxH(model.text, s, box.w, minH, model.runs);
+    Object.assign(el.style, {
       left: px(box.x), top: px(box.y), width: px(box.w), height: px(box.h),
       fontFamily: FAMILY[s.font], fontSize: px(s.fontSize), lineHeight: px(s.fontSize * s.lineHeight),
       fontWeight: s.bold ? 'bold' : 'normal', fontStyle: s.italic ? 'italic' : 'normal', color: s.color, textAlign: s.align,
+      textDecorationLine: [deco.underline && 'underline', deco.strike && 'line-through'].filter(Boolean).join(' ') || 'none',
     });
     Object.assign(warn.style, { left: px(box.x), top: px(box.y + box.h + 2), minWidth: px(box.w) });
-    checkWinAnsi(ta.value, warn);
+    checkWinAnsi(model.text, warn);
   };
   let done = false;
   const close = () => {
     done = true;
     if (editor === handle) editor = null;
-    ta.remove();
+    document.removeEventListener('selectionchange', track);
+    el.remove();
     warn.remove();
     if (!layer.childElementCount) layer.remove();
   };
   const handle = {
-    textarea: ta, tab, pageIndex,
+    el, tab, pageIndex,
+    getText: () => model.text,
+    getRuns: () => model.runs,
+    getSelection: () => ({ ...(domSel() ?? lastSel) }),
+    setSelection(start, end = start) {
+      const n = model.text.length, c = (v) => Math.min(Math.max(0, Math.trunc(Number(v) || 0)), n);
+      lastSel = { start: Math.min(c(start), c(end)), end: Math.max(c(start), c(end)) };
+      if (document.activeElement !== el) el.focus();
+      setDomSel(lastSel);
+    },
+    styleAtSelection() {
+      const { start, end } = handle.getSelection();
+      return core ? core.styleAt(obj(), end > start ? start : Math.max(0, start - 1)) : { ...s, ...deco };
+    },
+    applyStyle(patch) {
+      if (!core) return;
+      const sel = handle.getSelection();
+      const [a, b] = sel.end > sel.start ? [sel.start, sel.end] : [0, model.text.length];
+      push('style');
+      model = core.applyStyleToRange(obj(), a, b, patch);
+      show(sel);
+    },
     commit() {
       if (done) return;
-      const value = ta.value.replace(/\r\n?/g, '\n');
-      const b = { ...box, h: boxH(value, s, box.w, minH) };
+      if (composing) model = parse();
+      const value = model.text.replace(/\r\n?/g, '\n');
+      const b = { ...box, h: boxH(value, s, box.w, minH, model.runs) };
+      const r = model.runs;
       close();
-      onCommit?.(value, b, s);
+      onCommit?.(value, b, s, r);
     },
     cancel() { if (done) return; close(); onCancel?.(); },
-    setStyle(ns) { s = styleFrom({ ...s, ...ns }); layout(); },
+    setStyle(ns) {
+      s = styleFrom({ ...s, ...ns });
+      deco = { underline: !!(ns.underline ?? deco.underline), strike: !!(ns.strike ?? deco.strike) };
+      const sel = handle.getSelection();
+      show(sel);
+    },
   };
-  ta.addEventListener('input', layout);
-  ta.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); handle.cancel(); } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); handle.commit(); }
+  const track = () => { const v = domSel(); if (v) lastSel = v; };
+  document.addEventListener('selectionchange', track);
+  el.addEventListener('beforeinput', (e) => {
+    const t = e.inputType;
+    if (composing || e.isComposing || t === 'insertCompositionText') return;
+    if (t === 'historyUndo' || t === 'historyRedo') { e.preventDefault(); if (t === 'historyUndo') history(undo, redo); else history(redo, undo); return; }
+    if (/^format|List$|^insertHorizontalRule|^insertLink/.test(t)) { e.preventDefault(); return; }
+    let str = null;
+    if (t === 'insertParagraph' || t === 'insertLineBreak') str = '\n';
+    else if (t.startsWith('insert')) str = String(e.data ?? e.dataTransfer?.getData('text/plain') ?? '').replace(/\r\n?/g, '\n');
+    else if (!t.startsWith('delete')) return;
+    e.preventDefault();
+    const tr = e.getTargetRanges?.()[0];
+    let r = tr ? { start: toOffset(tr.startContainer, tr.startOffset), end: toOffset(tr.endContainer, tr.endOffset) } : domSel() ?? lastSel;
+    if (str == null && r.start === r.end) r = t.includes('Backward') ? { start: Math.max(0, r.start - 1), end: r.start } : { start: r.start, end: Math.min(model.text.length, r.start + 1) };
+    if (str == null && r.start === r.end) return;
+    replace(r.start, r.end, str ?? '', str === null ? 'delete' : t === 'insertText' ? 'type' : 'insert');
+  });
+  el.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const dt = e.clipboardData;
+    let str = dt?.getData('text/plain') ?? '';
+    if (!str && dt?.getData('text/html')) str = new DOMParser().parseFromString(dt.getData('text/html'), 'text/html').body.textContent ?? '';
+    const r = domSel() ?? lastSel;
+    if (str || r.end > r.start) replace(r.start, r.end, str.replace(/\r\n?/g, '\n'), 'insert');
+  });
+  el.addEventListener('compositionstart', () => { composing = true; });
+  el.addEventListener('compositionend', () => { composing = false; const sel = domSel() ?? lastSel; push('ime'); model = parse(); show(sel); });
+  // Edits the browser made itself (IME, execCommand): read the DOM back.
+  el.addEventListener('input', () => {
+    const sel = domSel() ?? lastSel;
+    if (composing) { model = parse(); layout(); return; }
+    push('native');
+    model = parse();
+    show(sel);
+  });
+  el.addEventListener('keydown', (e) => {
+    const k = e.key.toLowerCase();
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); handle.cancel(); } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); handle.commit(); } else if ((e.ctrlKey || e.metaKey) && !e.altKey && (k === 'z' || k === 'y')) {
+      e.preventDefault(); e.stopPropagation();
+      if (k === 'z' && !e.shiftKey) history(undo, redo); else history(redo, undo);
+    }
   });
   // Keep pointer events on the editor away from the tool dispatch (select tool would start a move).
-  for (const t of ['pointerdown', 'pointermove', 'pointerup', 'dblclick']) ta.addEventListener(t, (e) => e.stopPropagation());
-  ta.addEventListener('blur', (e) => {
-    if (e.relatedTarget?.closest?.('.options-bar') || !ta.isConnected) return;
+  for (const t of ['pointerdown', 'pointermove', 'pointerup', 'dblclick']) el.addEventListener(t, (e) => e.stopPropagation());
+  el.addEventListener('blur', (e) => {
+    if (e.relatedTarget?.closest?.('.options-bar') || !el.isConnected) return;
     // Window blur (switching apps) keeps the editor open.
-    setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== ta && !document.activeElement?.closest?.('.options-bar')) handle.commit(); }, 0);
+    setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.('.options-bar')) handle.commit(); }, 0);
   });
-  layer.append(ta, warn);
+  render();
+  layer.append(el, warn);
   layout();
   editor = handle;
-  ta.focus();
-  ta.setSelectionRange(ta.value.length, ta.value.length);
+  el.focus();
+  setDomSel(lastSel);
   return handle;
 }
+/** The open text editor handle (see openTextEditor), or null. */
+export const activeTextEditor = () => editor;
 
 // ---------------------------------------------------------------- create / re-edit
 function createAt(tab, page, box, extra = {}) {
   const style = styleFrom({ ...state.toolStyle, ...extra.style });
   return openTextEditor(tab, page, box, {
     style,
-    onCommit(text, b, s) {
+    onCommit(text, b, s, runs) {
       if (!text.trim()) { extra.onEmpty?.(); return; }
-      const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s });
+      const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s, ...(runs ? { runs } : {}) });
       annotations.select(tab, [o.id]);
     },
     onCancel: () => extra.onEmpty?.(),
@@ -272,12 +467,12 @@ function reEdit(tab, o) {
   showTextOptions(o);
   const restore = () => { editingId = null; annotations.render(tab, [o.page]); };
   const ed = openTextEditor(tab, o.page, o, {
-    text: o.text,
-    style: { font: o.font, fontSize: o.fontSize, bold: o.bold, italic: o.italic, color: o.color, align: o.align, lineHeight: o.lineHeight },
-    onCommit(text, b) {
+    text: o.text, runs: o.runs,
+    style: { font: o.font, fontSize: o.fontSize, bold: o.bold, italic: o.italic, color: o.color, align: o.align, lineHeight: o.lineHeight, underline: o.underline, strike: o.strike },
+    onCommit(text, b, s, runs) {
       editingId = null;
       if (!text.trim()) { annotations.remove(tab, [o.id]); return; }
-      if (text !== o.text || b.h !== o.h) annotations.update(tab, o.id, { text, h: b.h });
+      if (text !== o.text || b.h !== o.h || JSON.stringify(runs) !== JSON.stringify(o.runs)) annotations.update(tab, o.id, { text, h: b.h, runs });
       else annotations.render(tab, [o.page]);
       annotations.select(tab, [o.id]);
     },
@@ -433,7 +628,7 @@ export function initTextTools(app) {
 
   // A click anywhere outside the open editor (and outside the options bar) commits it.
   document.addEventListener('pointerdown', (e) => {
-    if (!editor || e.target === editor.textarea || e.target.closest?.('.options-bar, .dialog, .menu')) return;
+    if (!editor || editor.el.contains(e.target) || e.target.closest?.('.options-bar, .dialog, .menu')) return;
     editor.commit();
     swallow = e;
   }, true);
