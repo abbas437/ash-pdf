@@ -15,7 +15,7 @@ import { viewer } from './viewer.js';
 import { dialogOpen } from './dialogs.js';
 import { registerTool, toggleTool } from './toolbar.js';
 import { annotations, dashArray } from './annotations.js';
-import { openTextEditor, resizeTextBox } from './tools-text.js';
+import { openTextEditor, resizeTextBox, renderRuns } from './tools-text.js';
 import { calloutArrowHead } from '../../src/core/arrowhead.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -52,10 +52,11 @@ function measure(text, fontSize, maxWidth) {
   const lh = fontSize * LINE_HEIGHT, lines = String(text ?? '').split('\n');
   return { lines, lineHeight: lh, height: lines.length * lh, firstBaseline: (lh - fontSize * 0.93) / 2 + fontSize * 0.72 };
 }
-/** Box height that fits the text inside the padding (at least one line). */
-function fitH(text, fontSize, w) {
+/** Box height that fits the text (rich `runs` when given) inside the padding (at least one line). */
+function fitH(text, fontSize, w, runs) {
   const m = measure(text, fontSize, Math.max(1, w - 2 * PAD));
-  return r3(Math.max(m.height, m.lineHeight) + 2 * PAD);
+  const th = core && Array.isArray(runs) && runs.length ? core.layoutRich({ type: 'callout', text, runs, fontSize, lineHeight: LINE_HEIGHT }, Math.max(1, w - 2 * PAD)).height : m.height;
+  return r3(Math.max(th, m.lineHeight) + 2 * PAD);
 }
 /** Leader start: the point of the box nearest the tip (null when the tip is inside the box). */
 function leaderStart(o) {
@@ -81,7 +82,10 @@ const calloutType = {
       svgEl('path', { class: 'ann-callout-head', d: `M${r3(tip.x)} ${r3(tip.y)}L${r3(left.x)} ${r3(left.y)}L${r3(right.x)} ${r3(right.y)}Z`, fill: stroke, stroke: 'none' }, g);
     }
     svgEl('rect', { class: 'ann-callout-box', x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.fill === undefined ? '#ffffff' : o.fill), stroke, 'stroke-width': sw, 'stroke-dasharray': dashArray(o.dash, sw) }, g);
-    if (o.text) {
+    if (o.text && core && Array.isArray(o.runs) && o.runs.length) {
+      // Rich text: the Text tool's renderer inside the padding (the group carries the opacity).
+      renderRuns({ ...o, font: 'Helvetica', fontSize: fsOf(o), color: o.color ?? o.stroke ?? '#000000', lineHeight: LINE_HEIGHT, x: o.x + PAD, y: o.y + PAD, w: Math.max(1, o.w - 2 * PAD), opacity: undefined }, g, core);
+    } else if (o.text) {
       const fs = fsOf(o), m = measure(o.text, fs, Math.max(1, o.w - 2 * PAD));
       const t = svgEl('text', { 'font-family': FAMILY, 'font-size': r3(fs), fill: o.color ?? o.stroke ?? '#000000' }, g);
       m.lines.forEach((line, i) => {
@@ -111,7 +115,7 @@ const calloutType = {
   move: (o, dx, dy) => ({ x: o.x + dx, y: o.y + dy, ...(Number.isFinite(o.tx) ? { tx: o.tx + dx, ty: o.ty + dy } : {}) }),
   resize(o, handle, dx, dy) {
     if (handle === 'tip') return { tx: o.tx + dx, ty: o.ty + dy };
-    return resizeTextBox(o, handle, dx, dy, (w) => fitH(o.text, fsOf(o), w));
+    return resizeTextBox(o, handle, dx, dy, (w) => fitH(o.text, fsOf(o), w, o.runs));
   },
   /** Option changes on selected callouts: callout keys (co*) and the shared Select-tool keys. */
   style(o, s, keys) {
@@ -122,7 +126,7 @@ const calloutType = {
     if (keys.includes('coFontSize')) p.fontSize = s.coFontSize;
     if (keys.includes('strokeWidth')) p.strokeWidth = s.strokeWidth;
     if (keys.includes('opacity')) p.opacity = s.opacity;
-    if ('fontSize' in p) p.h = Math.max(fitH(o.text, p.fontSize, o.w), o.minH > 0 ? o.minH : 0);
+    if ('fontSize' in p) p.h = Math.max(fitH(o.text, p.fontSize, o.w, o.runs), o.minH > 0 ? o.minH : 0);
     return p;
   },
 };
@@ -177,19 +181,20 @@ let swallowEv = null;   // pointerdown that only committed the open comment edit
 function editComment(tab, page, box, tip, { shape = null } = {}) {
   let st = calloutStyle();
   const h0 = fitH('', st.fontSize, box.w);
-  const build = (text) => {
-    const b = { x: box.x, y: box.y, w: box.w, h: fitH(text, st.fontSize, box.w) };
+  const build = (text, runs) => {
+    const b = { x: box.x, y: box.y, w: box.w, h: fitH(text, st.fontSize, box.w, runs) };
     const t = shape ? tipFor(shape, b) : tip;
     return { type: 'callout', page, ...b, text, tx: r3(t.x), ty: r3(t.y), ...st };
   };
-  const refresh = () => { if (session?.ed) showPreview(tab, page, shape, { ...build(session.ed.getText()), text: '' }); };
-  const finish = () => { session = null; annotations.renderPreview(tab, page, null); };
+  const refresh = () => { if (session?.ed) showPreview(tab, page, shape, { ...build(session.ed.getText(), session.ed.getRuns()), text: '' }); };
+  let watch = null;
+  const finish = () => { watch?.disconnect(); session = null; annotations.renderPreview(tab, page, null); };
   const ed = openTextEditor(tab, page, { x: box.x + PAD, y: box.y + PAD, w: box.w - 2 * PAD, h: h0 - 2 * PAD }, {
     style: editorStyle(st),
     onCommit(text, b, s, runs) {
       finish();
       if (!text.trim()) { if (shape) annotations.select(tab, [annotations.add(tab, shape).id]); return; }
-      const co = { ...build(text), ...(runs ? { runs } : {}) };
+      const co = { ...build(text, runs), ...(runs ? { runs } : {}) };
       const ids = [];
       annotations.batch(tab, () => {
         if (shape) ids.push(annotations.add(tab, shape).id);
@@ -202,8 +207,9 @@ function editComment(tab, page, box, tip, { shape = null } = {}) {
   if (!ed) { if (shape) annotations.add(tab, shape); return null; }
   session = { tab, page, ed, refresh, restyle() { st = calloutStyle(); ed.setStyle(editorStyle(st)); refresh(); } };
   ed.el.classList.add('callout-editor');
-  ed.el.addEventListener('input', refresh);
-  ed.el.addEventListener('beforeinput', () => setTimeout(refresh, 0));
+  // Every change of the editor's content or size (typing, paste, undo, formatting) re-renders it: follow it.
+  watch = new MutationObserver(refresh);
+  watch.observe(ed.el, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['style'] });
   refresh();
   return ed;
 }

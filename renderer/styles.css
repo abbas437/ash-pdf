@@ -626,6 +626,18 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 
 /* ---- page text context menu (ui/copytext.js) */
 .menu.context-menu { z-index: 1000; min-width: 160px; top: auto; }
+/* text editor context menu (ui/text-menu.js): keyboard focus stays in the editor, .active is the highlight */
+.text-context-menu .menu-item.active:not(:disabled) { background: var(--hover); }
+.text-context-menu .menu-item[aria-haspopup] kbd { color: var(--muted); }
+.text-submenu { min-width: 120px; }
+.tm-swatches { display: grid; grid-template-columns: repeat(5, 26px); gap: 4px; padding: 4px 6px; }
+.tm-swatches .tm-swatch { width: 26px; min-width: 26px; height: 22px; padding: 0; gap: 0; border-radius: 4px; background: var(--chip) !important; box-shadow: inset 0 0 0 1px var(--line); }
+.tm-swatches .tm-swatch > span, .tm-swatches .tm-swatch > kbd { display: none; }
+.tm-swatches .tm-swatch.active, .tm-swatches .tm-swatch[aria-checked="true"] { outline: 2px solid var(--brass); outline-offset: 1px; }
+.tm-custom { display: flex; align-items: center; gap: 6px; padding: 4px 10px; }
+.tm-custom[hidden] { display: none; }
+.tm-custom input { width: 64px; }
+.tm-color { position: absolute; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; pointer-events: none; }
 
 /* ASH brand logo: light-background SVG by default, reversed SVG in the dark theme. Trademark: see assets/brand/README.md. */
 .brand-logo { display: block; height: 40px; width: auto; }

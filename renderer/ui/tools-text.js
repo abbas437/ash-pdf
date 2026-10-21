@@ -50,7 +50,7 @@ function addMetricFaces() {
 }
 const TEXT_KEYS = ['font', 'fontSize', 'bold', 'italic', 'color', 'align'];
 const FORMAT_KEYS = { b: 'bold', i: 'italic', u: 'underline', x: 'strike' }; // Ctrl+<key> in the editor (x with Shift)
-const FORMAT_UI = '.options-bar, .text-format-bar'; // focus / clicks there keep the editor open
+const FORMAT_UI = '.options-bar, .text-format-bar, .menu'; // focus / clicks there keep the editor open
 // Floating bar colours: black + the callout tool's review colours (tools-callout.js COLORS, copied: importing it would be circular).
 const SWATCHES = [['#000000', 'Black'], ['#d62828', 'Red'], ['#1d4ed8', 'Rev. comment (blue)'], ['#1b7f3b', 'Green'], ['#d97706', 'Orange']];
 
@@ -110,9 +110,9 @@ function svgEl(name, attrs, parent) {
 }
 const fontAttrs = (o) => ({ 'font-family': FAMILY[fontOf(o.font)], 'font-size': r3(o.fontSize > 0 ? o.fontSize : 12), 'font-weight': o.bold ? 'bold' : 'normal', 'font-style': o.italic ? 'italic' : 'normal' });
 
-/** Rich text: one tspan per layoutRich fragment, underline / strike as thin rects (same positions as the PDF appearance). */
-function renderRuns(o, g) {
-  const L = core.layoutRich(o, o.w, { x: o.x, y: o.y });
+/** Rich text: one tspan per layoutRich fragment, underline / strike as thin rects (same positions as the PDF appearance). Also used by callouts (with their padding). */
+export function renderRuns(o, g, lib = core) {
+  const L = lib.layoutRich(o, o.w, { x: o.x, y: o.y });
   const t = svgEl('text', { opacity: o.opacity, style: 'white-space: pre' }, g);
   for (const line of L.lines) for (const f of line.fragments) {
     if (f.text === '') continue;
