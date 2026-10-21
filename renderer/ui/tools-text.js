@@ -339,10 +339,13 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     checkWinAnsi(model.text, warn);
   };
   let done = false;
+  const closeListeners = new Set();
   const close = () => {
     done = true;
     if (editor === handle) editor = null;
     document.removeEventListener('selectionchange', track);
+    for (const fn of [...closeListeners]) fn();
+    closeListeners.clear();
     el.remove();
     warn.remove();
     if (!layer.childElementCount) layer.remove();
@@ -351,6 +354,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     el, tab, pageIndex,
     getText: () => model.text,
     getRuns: () => model.runs,
+    /** Call fn when the editor closes (commit, cancel, any reason); returns a function that removes the listener. */
+    onClose(fn) { closeListeners.add(fn); return () => closeListeners.delete(fn); },
     getSelection: () => ({ ...(domSel() ?? lastSel) }),
     setSelection(start, end = start) {
       const n = model.text.length, c = (v) => Math.min(Math.max(0, Math.trunc(Number(v) || 0)), n);
