@@ -11,7 +11,7 @@
 // Exports: initTextMenu().
 import { h } from './dom.js';
 import { toast } from './dialogs.js';
-import { activeTextEditor } from './tools-text.js';
+import { activeTextEditor, insertPictureFromFile } from './tools-text.js';
 import { COLORS } from './tools-callout.js';
 
 const FONTS = ['Helvetica', 'Times', 'Courier'];
@@ -69,7 +69,7 @@ function item(label, { check, sub, action, disabled, kbd } = {}) {
 }
 
 /** Menu entries for the current editor state. */
-function entries(ed, sel) {
+function entries(ed, sel, pic = -1) {
   const st = ed.styleAtSelection();
   const has = sel.end > sel.start;
   const text = has ? ed.getText().slice(sel.start, sel.end) : '';
@@ -124,6 +124,11 @@ function entries(ed, sel) {
     item('Font', { sub: () => FONTS.map((f) => item(f, { check: st.font === f, action: style({ font: f }) })) }),
     item('Size', { sub: sizeSub }),
     item('Colour', { sub: colourSub }),
+    ...(ed.pictures ? [
+      null,
+      ...(pic >= 0 ? [item('Picture size', { sub: () => [['25%', 0.25], ['50%', 0.5], ['100%', 1], ['Fit width', 'fit']].map(([l, k]) => item(l, { action: () => run((e) => e.resizePicture(pic, k)) })) })] : []),
+      item('Insert picture…', { action: () => run((e) => insertPictureFromFile(e)) }),
+    ] : []),
   ];
 }
 
@@ -180,11 +185,14 @@ function open(e, ed) {
   e.preventDefault();
   e.stopPropagation();
   let sel = ed.getSelection();
-  const at = offsetAt(ed, e.clientX, e.clientY);
-  if (at != null && !(sel.end > sel.start && at >= sel.start && at <= sel.end)) sel = wordAt(ed.getText(), at) ?? { start: at, end: at };
+  const img = e.target.tagName === 'IMG' && ed.el.contains(e.target) ? ed.pictureIndex(e.target) : -1;
+  const at = img >= 0 ? null : offsetAt(ed, e.clientX, e.clientY);
+  if (img >= 0) sel = { start: img, end: img + 1 };
+  else if (at != null && !(sel.end > sel.start && at >= sel.start && at <= sel.end)) sel = wordAt(ed.getText(), at) ?? { start: at, end: at };
   ed.setSelection(sel.start, sel.end);
   menu = { ed, sel, levels: [], off: ed.onClose(() => close(false)) }; // the menu never outlives its editor
-  const L = buildLevel(entries(ed, sel), '');
+  const one = sel.end - sel.start === 1 && ed.getText()[sel.start] === '\uFFFC' ? sel.start : -1; // exactly one picture selected
+  const L = buildLevel(entries(ed, sel, img >= 0 ? img : one), '');
   menu.levels.push(L);
   document.body.append(L.el);
   place(L.el, e.clientX, e.clientY);

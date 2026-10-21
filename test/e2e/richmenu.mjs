@@ -117,7 +117,7 @@ try {
   await ed('ed.setSelection(6, 9);');
   await rightClick('big');
   const labels = await menuShown();
-  check(JSON.stringify(labels) === JSON.stringify(['Cut', 'Copy', 'Paste', 'Select all', 'Bold', 'Italic', 'Underline', 'Strikethrough', 'Font', 'Size', 'Colour']), `menu items ${JSON.stringify(labels)}`);
+  check(JSON.stringify(labels) === JSON.stringify(['Cut', 'Copy', 'Paste', 'Select all', 'Bold', 'Italic', 'Underline', 'Strikethrough', 'Font', 'Size', 'Colour', 'Insert picture…']), `menu items ${JSON.stringify(labels)}`);
   await settle();
   check(await editorOpen(), 'menu open: editor still open and focused');
   check(await sel() === '{"start":6,"end":9}', `menu open: selection ${await sel()}`);
@@ -155,7 +155,7 @@ try {
 
   step = 'keyboard + Esc';
   await rightClick('big');
-  for (const k of ['End', 'ArrowUp', 'ArrowRight', 'ArrowDown']) await page.keyboard.press(k);
+  for (const k of ['End', 'ArrowUp', 'ArrowUp', 'ArrowRight', 'ArrowDown']) await page.keyboard.press(k);
   const active = await page.evaluate(() => [...document.querySelectorAll('.text-context-menu .menu-item.active > span')].map((s) => s.textContent));
   check(JSON.stringify(active) === '["Size","9"]', `keyboard highlight ${JSON.stringify(active)}`);
   await page.keyboard.press('Escape');

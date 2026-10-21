@@ -407,7 +407,12 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     redo.length = 0;
     lastKind = kind;
   };
-  const show = (sel) => { render(); lastSel = sel; if (document.activeElement === el) setDomSel(sel); layout(); };
+  // A picture inside the selection is outlined (CSS .te-img.te-sel).
+  const markPictures = () => {
+    const v = domSel() ?? lastSel;
+    for (const p of pieces()) if (p.img != null) p.node.classList.toggle('te-sel', v.start <= p.start && v.end >= p.start + 1 && v.end > v.start);
+  };
+  const show = (sel) => { render(); lastSel = sel; if (document.activeElement === el) setDomSel(sel); layout(); markPictures(); };
   const replace = (a, b, str, kind) => {
     push(kind, a);
     const keep = a < b && core ? core.styleAt(obj(), a) : undefined;
@@ -526,6 +531,31 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       try { png = await window.api.readImage?.(); } catch { return false; }
       return png?.length ? handle.insertPicture(png instanceof Uint8Array ? png : new Uint8Array(png)) : false;
     },
+    /** Character index of the picture element `img` (an <img> of this editor), or -1. */
+    pictureIndex: (img) => pieces().find((p) => p.node === img)?.start ?? -1,
+    /**
+     * Resize the picture at character index `at`: size = a factor of its natural size (0.25, 0.5, 1) or
+     * 'fit' (the box's inner width, aspect kept). One undo step. Returns true when a picture was resized.
+     */
+    resizePicture(at, size) {
+      if (!pictures || !core || done) return false;
+      const piece = pieces().find((p) => p.img != null && p.start === at);
+      const parts = core.runsOf(obj());
+      let pos = 0, idx = -1;
+      for (let i = 0; i < parts.length; i++) { if (pos === at && core.isImageRun(parts[i])) { idx = i; break; } pos += parts[i].text.length; }
+      if (idx < 0) return false;
+      const run = parts[idx];
+      let nw = piece?.node.naturalWidth, nh = piece?.node.naturalHeight;
+      if (!(nw > 0 && nh > 0)) { nw = run.imgW * 96 / 72; nh = run.imgH * 96 / 72; }
+      const natW = (nw * 72) / 96, natH = (nh * 72) / 96;
+      const k = size === 'fit' ? Math.max(1, box.w - 2 * insetOf(fr)) / natW : Number(size);
+      if (!(k > 0)) return false;
+      push('style');
+      const next = parts.map((r, i) => (i === idx ? { ...r, imgW: r3(natW * k), imgH: r3(natH * k) } : r));
+      model = { text: model.text, runs: core.normalizeRuns(next, obj()), images: model.images };
+      show(handle.getSelection());
+      return true;
+    },
     /** Live frame change ({borderWidth, borderColor, fill, padding}; unset fields = none). */
     setFrame(f) { fr = frameOf(f); layout(); },
     setStyle(ns) {
@@ -535,7 +565,7 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
       show(sel);
     },
   };
-  const track = () => { const v = domSel(); if (v) lastSel = v; };
+  const track = () => { const v = domSel(); if (v) { lastSel = v; markPictures(); } };
   document.addEventListener('selectionchange', track);
   el.addEventListener('beforeinput', (e) => {
     const t = e.inputType;
@@ -552,6 +582,15 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     if (str == null && r.start === r.end) r = t.includes('Backward') ? { start: Math.max(0, r.start - 1), end: r.start } : { start: r.start, end: Math.min(model.text.length, r.start + 1) };
     if (str == null && r.start === r.end) return;
     replace(r.start, r.end, str ?? '', str === null ? 'delete' : t === 'insertText' ? 'type' : 'insert');
+  });
+  // A click (or right-click) on a picture selects it: one character, so Delete / typing replaces it.
+  el.addEventListener('mousedown', (e) => {
+    if (e.target.tagName !== 'IMG' || e.button > 2) return;
+    const at = handle.pictureIndex(e.target);
+    if (at < 0) return;
+    e.preventDefault();
+    handle.setSelection(at, at + 1);
+    markPictures();
   });
   el.addEventListener('paste', (e) => {
     e.preventDefault();

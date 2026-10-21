@@ -441,6 +441,7 @@ body.img-armed .viewer-host .page { cursor: copy; }
 .text-editor:focus { outline: 1px dashed #1a73e8; }
 /* Text cursor inside the box (the viewer's move cursor must not carry over); the grab frame around it moves the box. */
 .text-editor { cursor: text; }
+.text-editor .te-img.te-sel { outline: 2px solid #1a73e8; outline-offset: 1px; }
 .text-editor-frame { position: absolute; box-sizing: border-box; pointer-events: auto; cursor: move; }
 /* Selected text keeps its own colour (Chromium otherwise paints it in the selection colour, hiding a colour change). */
 .text-editor::selection, .text-editor *::selection { color: var(--te-color); background: rgba(128, 128, 128, .3); }
