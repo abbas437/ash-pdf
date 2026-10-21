@@ -634,6 +634,34 @@ try {
   r = await call('setFullScreen', 'yes');
   expect('setFullScreen non-boolean', r, r.startsWith('rejected:'));
 
+  step = 'text editor right-click: the app menu, not the native editable menu';
+  await app.evaluate(({ Menu, webContents }) => {
+    globalThis.__popups = 0; globalThis.__ctx = 0;
+    const pop = Menu.prototype.popup; Menu.prototype.popup = function (...a) { globalThis.__popups++; return pop.apply(this, a); };
+    for (const wc of webContents.getAllWebContents()) wc.on('context-menu', () => { globalThis.__ctx++; }); // what main's own handler sees
+  });
+  await win.bringToFront();
+  await win.evaluate(() => document.activeElement?.blur?.());
+  await win.keyboard.press('t');
+  const at = await win.evaluate(() => { const app = window.ashStudio, tab = app.state.tabs.find((t) => t.id === app.state.activeId); const c = app.viewer.pageToClient(tab, 0, 60, 200); return [c.clientX, c.clientY]; });
+  await win.mouse.click(...at);
+  await win.keyboard.type('Hello big world');
+  const word = await win.evaluate(async () => {
+    const ed = (await import('/renderer/ui/tools-text.js')).activeTextEditor();
+    ed.setSelection(6, 9);
+    const w = document.createTreeWalker(ed.el, NodeFilter.SHOW_TEXT);
+    for (let n = w.nextNode(); n; n = w.nextNode()) { const i = n.data.indexOf('big'); if (i < 0) continue; const r = document.createRange(); r.setStart(n, i); r.setEnd(n, i + 3); const b = r.getBoundingClientRect(); return [b.left + b.width / 2, b.top + b.height / 2]; }
+    return null;
+  });
+  await win.mouse.click(...word, { button: 'right' });
+  await win.waitForTimeout(500);
+  const shown = await win.evaluate(() => !!document.querySelector('.text-context-menu'));
+  const popups = await app.evaluate(() => globalThis.__popups), ctx = await app.evaluate(() => globalThis.__ctx);
+  expect('app text menu shown, native menu not popped', JSON.stringify({ shown, popups, ctx }), shown && popups === 0 && ctx === 0);
+  await win.keyboard.press('Escape'); // closes the menu
+  await win.keyboard.press('Escape'); // cancels the editor
+  await win.keyboard.press('v');
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');
