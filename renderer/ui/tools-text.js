@@ -49,6 +49,10 @@ function addMetricFaces() {
   }
 }
 const TEXT_KEYS = ['font', 'fontSize', 'bold', 'italic', 'color', 'align'];
+const FORMAT_KEYS = { b: 'bold', i: 'italic', u: 'underline', x: 'strike' }; // Ctrl+<key> in the editor (x with Shift)
+const FORMAT_UI = '.options-bar, .text-format-bar'; // focus / clicks there keep the editor open
+// Floating bar colours: black + the callout tool's review colours (tools-callout.js COLORS, copied: importing it would be circular).
+const SWATCHES = [['#000000', 'Black'], ['#d62828', 'Red'], ['#1d4ed8', 'Rev. comment (blue)'], ['#1b7f3b', 'Green'], ['#d97706', 'Orange']];
 
 let core = null;
 const loadCore = () => import('../../src/core/index.js').then((m) => { core = m; addMetricFaces(); return m; });
@@ -195,14 +199,15 @@ const BLOCK = /^(DIV|P|LI|H[1-6])$/;
  * Open the in-place rich-text editor (a contenteditable div.text-editor) over boxPts {x, y, w, h?}
  * (points) on page `pageIndex`. opts: {text = '', runs, style ({font,fontSize,bold,italic,color,
  * align,lineHeight,underline,strike}, default state.toolStyle), onCommit(text, boxPts, style, runs),
- * onCancel()}. Ctrl+Enter or a click outside commits, Esc cancels. boxPts.h passed to onCommit is the
+ * onCancel(), toggleFormat(key) (Ctrl+B / I / U / Shift+X; default: applyStyle toggling key at the selection)}.
+ * Ctrl+Enter or a click outside (other than the options bar / div.text-format-bar) commits, Esc cancels. boxPts.h passed to onCommit is the
  * height that fits the text; runs is undefined when the text is uniform.
  * Returns {el, commit(), cancel(), setStyle(style), getText(), getRuns(), getSelection() → {start, end},
  * setSelection(start, end), applyStyle(patch), styleAtSelection()}; any editor already open is committed.
  * Edits go through `beforeinput` into a {text, runs} model (new text takes the style before the caret,
  * paste is plain text); IME composition and other native edits are read back from the DOM.
  */
-export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel } = {}) {
+export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style, onCommit, onCancel, toggleFormat } = {}) {
   editor?.commit();
   const layer = layerFor(tab, pageIndex);
   if (!layer) return null;
@@ -255,6 +260,8 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
   };
   const domSel = () => {
     const sel = window.getSelection();
+    // Focus in a format control: re-rendering leaves the DOM selection collapsed in el; keep lastSel.
+    if (document.activeElement !== el) return null;
     if (!sel?.rangeCount || !el.contains(sel.anchorNode) || !el.contains(sel.focusNode)) return null;
     const a = toOffset(sel.anchorNode, sel.anchorOffset), b = toOffset(sel.focusNode, sel.focusOffset);
     return { start: Math.min(a, b), end: Math.max(a, b) };
@@ -412,14 +419,18 @@ export function openTextEditor(tab, pageIndex, boxPts, { text = '', runs, style,
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); handle.cancel(); } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.stopPropagation(); handle.commit(); } else if ((e.ctrlKey || e.metaKey) && !e.altKey && (k === 'z' || k === 'y')) {
       e.preventDefault(); e.stopPropagation();
       if (k === 'z' && !e.shiftKey) history(undo, redo); else history(redo, undo);
+    } else if ((e.ctrlKey || e.metaKey) && !e.altKey && FORMAT_KEYS[k] && e.shiftKey === (k === 'x')) {
+      e.preventDefault(); e.stopPropagation();
+      const key = FORMAT_KEYS[k];
+      if (toggleFormat) toggleFormat(key); else handle.applyStyle({ [key]: !handle.styleAtSelection()[key] });
     }
   });
   // Keep pointer events on the editor away from the tool dispatch (select tool would start a move).
   for (const t of ['pointerdown', 'pointermove', 'pointerup', 'dblclick']) el.addEventListener(t, (e) => e.stopPropagation());
   el.addEventListener('blur', (e) => {
-    if (e.relatedTarget?.closest?.('.options-bar') || !el.isConnected) return;
+    if (e.relatedTarget?.closest?.(FORMAT_UI) || !el.isConnected) return;
     // Window blur (switching apps) keeps the editor open.
-    setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.('.options-bar')) handle.commit(); }, 0);
+    setTimeout(() => { if (!done && document.hasFocus() && document.activeElement !== el && !document.activeElement?.closest?.(FORMAT_UI)) handle.commit(); }, 0);
   });
   render();
   layer.append(el, warn);
@@ -435,15 +446,15 @@ export const activeTextEditor = () => editor;
 // ---------------------------------------------------------------- create / re-edit
 function createAt(tab, page, box, extra = {}) {
   const style = styleFrom({ ...state.toolStyle, ...extra.style });
-  return openTextEditor(tab, page, box, {
-    style,
+  return attachFormatBar(openTextEditor(tab, page, box, {
+    style, toggleFormat,
     onCommit(text, b, s, runs) {
       if (!text.trim()) { extra.onEmpty?.(); return; }
       const o = annotations.add(tab, { type: 'text', page, x: b.x, y: b.y, w: b.w, h: b.h, text, ...s, ...(runs ? { runs } : {}) });
       annotations.select(tab, [o.id]);
     },
     onCancel: () => extra.onEmpty?.(),
-  });
+  }));
 }
 
 let widthCtx = null;
@@ -467,7 +478,7 @@ function reEdit(tab, o) {
   showTextOptions(o);
   const restore = () => { editingId = null; annotations.render(tab, [o.page]); };
   const ed = openTextEditor(tab, o.page, o, {
-    text: o.text, runs: o.runs,
+    text: o.text, runs: o.runs, toggleFormat,
     style: { font: o.font, fontSize: o.fontSize, bold: o.bold, italic: o.italic, color: o.color, align: o.align, lineHeight: o.lineHeight, underline: o.underline, strike: o.strike },
     onCommit(text, b, s, runs) {
       editingId = null;
@@ -478,7 +489,7 @@ function reEdit(tab, o) {
     },
     onCancel: restore,
   });
-  if (ed) { ed.objectId = o.id; annotations.render(tab, [o.page]); } else restore();
+  if (ed) { ed.objectId = o.id; annotations.render(tab, [o.page]); attachFormatBar(ed); } else restore();
   return ed;
 }
 
@@ -554,23 +565,88 @@ function setStyleKey(key, value) {
   state.toolStyle[key] = value;
   bus.emit('state:changed', { key: 'toolStyle', value: state.toolStyle });
 }
+// Format controls (main options bar and the floating bar) carry data-fmt=<key>. While the Text tool's
+// editor is open they style its selection (applyStyle) and keep it: buttons never take focus,
+// selects / inputs hand focus and the selection back after a change. Without a selection (collapsed
+// caret) or without an editor they set the box style (state.toolStyle), as before; underline /
+// strike have no box style and style the whole text instead (disabled without an editor).
+const DECO = new Set(['underline', 'strike']);
+const FMT_TOGGLES = [['bold', 'Bold (Ctrl+B)', 'B'], ['italic', 'Italic (Ctrl+I)', 'I'], ['underline', 'Underline (Ctrl+U)', 'U'], ['strike', 'Strikethrough (Ctrl+Shift+X)', 'S']];
+const toSelection = (key) => { const sel = editor?.getSelection(); return !!editor && (sel.end > sel.start || DECO.has(key)); };
+function applyFormat(patch) {
+  for (const [key, value] of Object.entries(patch)) {
+    if (toSelection(key)) editor.applyStyle({ [key]: value });
+    else if (!DECO.has(key)) setStyleKey(key, value);
+  }
+  syncFormatControls();
+}
+const toggleFormat = (key) => applyFormat({ [key]: !(toSelection(key) ? editor.styleAtSelection() : state.toolStyle)[key] });
+/** After a select / input took focus: back into the editor with its selection shown. */
+function refocusEditor() { if (!editor) return; const { start, end } = editor.getSelection(); editor.setSelection(start, end); }
+/** Show the style at the editor's selection (or the box style without an editor) on every format control. */
+function syncFormatControls() {
+  const st = editor ? editor.styleAtSelection() : styleFrom();
+  for (const c of document.querySelectorAll('.options-bar [data-fmt], .text-format-bar [data-fmt]')) {
+    const k = c.dataset.fmt;
+    if (c.dataset.color) c.setAttribute('aria-pressed', String(c.dataset.color === String(st.color).toLowerCase()));
+    else if (c.tagName === 'BUTTON') { c.setAttribute('aria-pressed', String(!!st[k])); if (DECO.has(k)) c.disabled = !editor; } else if (document.activeElement !== c) c.value = k === 'font' ? fontOf(st.font) : String(st[k]);
+  }
+}
+const fmtButton = (key, label, glyph, cls) => h(`button.tb-btn.${cls}`, { type: 'button', title: label, 'aria-label': label.replace(/ \(.*/, ''), 'aria-pressed': String(!!state.toolStyle[key]), disabled: DECO.has(key) && !editor, dataset: { fmt: key },
+  onmousedown: (e) => e.preventDefault(), onclick: () => toggleFormat(key) }, h(`span.opt-glyph-${key}`, {}, glyph));
+const fontSelect = (cls) => h(`select.${cls}`, { dataset: { fmt: 'font' }, onchange: (e) => { applyFormat({ font: e.target.value }); refocusEditor(); } },
+  FONTS.map((f) => h('option', { value: f, selected: fontOf(state.toolStyle.font) === f }, f)));
+const sizeInput = (cls) => h(`input.${cls}`, { type: 'number', min: '4', max: '144', step: '0.5', value: String(state.toolStyle.fontSize), dataset: { fmt: 'fontSize' },
+  onchange: (e) => { applyFormat({ fontSize: Number(e.target.value) || 12 }); refocusEditor(); } });
+const colorInput = (cls, label) => h(`input.${cls}`, { type: 'color', 'aria-label': label, value: state.toolStyle.color, dataset: { fmt: 'color' },
+  oninput: (e) => applyFormat({ color: e.target.value }), onchange: refocusEditor });
 function fontCtl(c) {
-  c.append(h('label.opt', {}, h('span', {}, 'Font'), h('select.opt-text-font', { onchange: (e) => setStyleKey('font', e.target.value) },
-    FONTS.map((f) => h('option', { value: f, selected: fontOf(state.toolStyle.font) === f }, f)))));
+  c.append(h('label.opt', {}, h('span', {}, 'Font'), fontSelect('opt-text-font')));
 }
 function sizeCtl(c) {
-  c.append(h('label.opt', {}, h('span', {}, 'Size'), h('input.opt-font', { type: 'number', min: '4', max: '144', step: '0.5', value: String(state.toolStyle.fontSize), onchange: (e) => setStyleKey('fontSize', Number(e.target.value) || 12) })));
+  c.append(h('label.opt', {}, h('span', {}, 'Size'), sizeInput('opt-font')));
 }
 function toggles(c) {
-  const seg = h('div.opt-seg', { role: 'group', 'aria-label': 'Text style' });
-  for (const [key, label, glyph] of [['bold', 'Bold', 'B'], ['italic', 'Italic', 'I']]) {
-    seg.append(h(`button.tb-btn.opt-text-${key}`, { type: 'button', title: label, 'aria-label': label, 'aria-pressed': String(!!state.toolStyle[key]),
-      onclick: (e) => { const on = !state.toolStyle[key]; e.currentTarget.setAttribute('aria-pressed', String(on)); setStyleKey(key, on); } }, h(`span.opt-glyph-${key}`, {}, glyph)));
-  }
-  c.append(seg);
+  c.append(h('div.opt-seg', { role: 'group', 'aria-label': 'Text style' }, FMT_TOGGLES.map(([k, label, glyph]) => fmtButton(k, label, glyph, `opt-text-${k}`))));
 }
 function colorCtl(c) {
-  c.append(h('label.opt', {}, h('span', {}, 'Colour'), h('input.opt-color', { type: 'color', value: state.toolStyle.color, oninput: (e) => setStyleKey('color', e.target.value) })));
+  c.append(h('label.opt', {}, h('span', {}, 'Colour'), colorInput('opt-color')));
+}
+/**
+ * Floating format bar (div.text-format-bar) for the open editor `ed`: font, size, B / I / U / S and
+ * colour, just above the box (below it when there is no room above), following it on scroll / zoom
+ * every frame; removed when the editor closes. Returns ed.
+ */
+function attachFormatBar(ed) {
+  if (!ed) return ed;
+  const bar = h('div.text-format-bar', { role: 'toolbar', 'aria-label': 'Text format' },
+    fontSelect('tfb-font'), sizeInput('tfb-size'),
+    ...FMT_TOGGLES.map(([k, label, glyph]) => fmtButton(k, label, glyph, `tfb-${k}`)),
+    h('span.tfb-sep'),
+    ...SWATCHES.map(([hex, label]) => h('button.tb-btn.tfb-swatch', { type: 'button', title: label, 'aria-label': label, dataset: { fmt: 'color', color: hex }, style: { background: hex },
+      onmousedown: (e) => e.preventDefault(), onclick: () => applyFormat({ color: hex }) })),
+    colorInput('tfb-color', 'Custom colour'));
+  bar.querySelector('.tfb-font').setAttribute('aria-label', 'Font');
+  bar.querySelector('.tfb-size').setAttribute('aria-label', 'Font size');
+  document.body.append(bar);
+  syncFormatControls();
+  const GAP = 6;
+  const place = () => {
+    if (editor !== ed) { bar.remove(); syncFormatControls(); return; }
+    const r = ed.el.getBoundingClientRect();
+    const v = viewer.getScrollEl(ed.tab)?.getBoundingClientRect() ?? { top: 0, left: 0, bottom: innerHeight, right: innerWidth };
+    bar.hidden = !(r.bottom > v.top && r.top < v.bottom && r.right > v.left && r.left < v.right);
+    if (!bar.hidden) {
+      const bh = bar.offsetHeight, bw = bar.offsetWidth;
+      let top = r.top - bh - GAP;
+      if (top < v.top) top = Math.min(r.bottom + GAP, v.bottom - bh);
+      const left = Math.max(v.left, Math.min(r.left, v.right - bw));
+      bar.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+    }
+    requestAnimationFrame(place);
+  };
+  place();
+  return ed;
 }
 const ALIGN_ICON = {
   left: '<path d="M4 6h16M4 10h10M4 14h16M4 18h10"/>',
@@ -582,7 +658,7 @@ function alignCtl(c) {
   for (const a of ['left', 'center', 'right']) {
     seg.append(h('button.tb-btn.opt-text-align', { type: 'button', title: `Align ${a}`, 'aria-label': `Align ${a}`, 'aria-pressed': String((state.toolStyle.align ?? 'left') === a), dataset: { align: a },
       html: `<svg class="icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true" focusable="false">${ALIGN_ICON[a]}</svg>`,
-      onclick: () => { for (const b of seg.children) b.setAttribute('aria-pressed', String(b.dataset.align === a)); setStyleKey('align', a); } }));
+      onmousedown: (e) => e.preventDefault(), onclick: () => { for (const b of seg.children) b.setAttribute('aria-pressed', String(b.dataset.align === a)); setStyleKey('align', a); } }));
   }
   c.append(seg);
 }
@@ -604,6 +680,7 @@ function showTextOptions(o) {
   bar.replaceChildren();
   for (const f of TEXT_OPTIONS) f(bar);
   bar.hidden = false;
+  syncFormatControls();
 }
 
 // ---------------------------------------------------------------- init
@@ -628,7 +705,7 @@ export function initTextTools(app) {
 
   // A click anywhere outside the open editor (and outside the options bar) commits it.
   document.addEventListener('pointerdown', (e) => {
-    if (!editor || editor.el.contains(e.target) || e.target.closest?.('.options-bar, .dialog, .menu')) return;
+    if (!editor || editor.el.contains(e.target) || e.target.closest?.(`${FORMAT_UI}, .dialog, .menu`)) return;
     editor.commit();
     swallow = e;
   }, true);
@@ -657,6 +734,8 @@ export function initTextTools(app) {
     }
   });
   bus.on('annotations:selection', onSelection);
+  // B / I / U / S, font, size and colour show the style at the caret / selection while editing.
+  document.addEventListener('selectionchange', () => { if (editor && document.activeElement === editor.el) syncFormatControls(); });
   bus.on('rotation:changed', ({ tab }) => {
     for (let i = 0; i < (tab.numPages ?? 0); i++) viewer.getOverlayEl(tab, i)?.querySelector(':scope > .text-edit-layer')?.setAttribute('data-view-rotation', String(tab.viewRotation));
   });
