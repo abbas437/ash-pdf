@@ -1,11 +1,15 @@
 {
   "id": "first-steps",
   "title": "First steps",
-  "description": "Open a file, add some text and save it.",
+  "description": "Open a PDF, find your way around, add some text and save it.",
   "steps": [
-    { "target": "open", "title": "Open a PDF", "text": "Start here: open a PDF file from your computer (Ctrl+O), or drop one on the window.", "placement": "bottom" },
-    { "target": "text", "title": "Choose the Text tool", "text": "Click the Text tool, or press T.", "placement": "bottom", "advanceOn": "event:tool:text" },
-    { "target": "viewer", "title": "Place your text", "text": "Click on the page where the text should go and type. Press Ctrl+Enter to finish.", "placement": "auto" },
-    { "target": "save", "title": "Save", "text": "Save the file to keep your text (Ctrl+S).", "placement": "bottom" }
+    { "target": "btn:open", "title": "Open a PDF", "text": "Click Open and choose a PDF from your computer (Ctrl+O). You can also drop a file onto the window.", "placement": "bottom", "advanceOn": "event:file:opened" },
+    { "target": "btn:page", "title": "Change page", "text": "Type a page number in this box and press Enter to jump to it. The arrows beside it move one page at a time.", "placement": "bottom" },
+    { "target": "btn:zoom", "title": "Zoom in or out", "text": "Pick a zoom level from this list, such as Fit width. The minus and plus buttons next to it zoom step by step.", "placement": "bottom" },
+    { "target": "panel:thumbnails", "title": "See every page", "text": "Open the sidebar and use the Thumbnails tab to see small pictures of all the pages. Click one to go to that page.", "placement": "right" },
+    { "target": "tool:text", "title": "Choose the Text tool", "text": "Click the Text tool, or press T.", "placement": "bottom", "advanceOn": "event:tool:text" },
+    { "target": "panel:viewer", "title": "Type on the page", "text": "Click on the page where the text should go and type something. Press Ctrl+Enter when you have finished.", "placement": "auto", "advanceOn": "event:annotation:added" },
+    { "target": "btn:save", "title": "Save your work", "text": "Click Save to keep your text in the file (Ctrl+S).", "placement": "bottom", "advanceOn": "event:file:saved" },
+    { "target": "menu:Help", "title": "Help is always here", "text": "Open the Help menu, or press F1, to read the user guide and start another tour.", "placement": "bottom" }
   ]
 }
