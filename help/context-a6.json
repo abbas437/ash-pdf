@@ -1,0 +1,8 @@
+{
+  "dialog:Header & Footer…": "header-footer-page-numbers",
+  "dialog:Page Numbers…": "header-footer-page-numbers",
+  "dialog:Watermark…": "watermark-background",
+  "dialog:Background…": "watermark-background",
+  "dialog:Bates Numbering…": "bates-numbering",
+  "dialog:Word count": "word-count"
+}
