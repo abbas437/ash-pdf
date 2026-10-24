@@ -40,6 +40,7 @@ import { initCopyText, copySelection } from './ui/copytext.js';
 import { initTextMenu } from './ui/text-menu.js';
 import { initHandTool } from './ui/tools-hand.js';
 import { initTextEdit } from './ui/textedit.js';
+import { initHelpAdapter } from './ui/help-adapter.js';
 import { initSession } from './ui/session.js';
 import { initReadMode } from './ui/readmode.js';
 import { initPrefs, openPrefs, prefsForNewTab, applySidebarOnOpen } from './ui/prefs.js';
@@ -83,7 +84,7 @@ const menus = new Map(); // name -> {button, list, items: []}
 export function registerMenuItem(menu, item) {
   let m = menus.get(menu);
   if (!m) {
-    const button = h('button.menu-btn', { type: 'button', role: 'menuitem', 'aria-haspopup': 'true', 'aria-expanded': 'false' }, menu);
+    const button = h('button.menu-btn', { type: 'button', role: 'menuitem', 'aria-haspopup': 'true', 'aria-expanded': 'false', dataset: { menu } }, menu);
     const list = h('div.menu', { role: 'menu', 'aria-label': menu, hidden: true });
     const wrap = h('div.menu-wrap', {}, button, list);
     m = { button, list, items: [] };
@@ -286,6 +287,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     if (!signedUpdate && tab.requiresFullSave) { clearBytesHistory(tab); tab.requiresFullSave = false; bus.emit('history:changed', { tab }); }
     renderTabs();
     toast(signedUpdate ? 'Saved as an update; the signature is kept' : `Saved ${tab.name}`);
+    bus.emit('file:saved', { tab });
     return true;
   } catch (err) {
     showError('Could not save', err);
@@ -561,7 +563,8 @@ M('Tools', { id: 'select', label: 'Select', shortcut: 'V', action: () => setTool
 initForms({ registerMenuItem });
 const pageMarks = initPageMarks({ registerMenuItem }); // Document menu: must be registered before Help
 initViewExtrasMenus({ registerMenuItem }); // View > Snapshot, Document > Word count: before Help
-M('Help', { id: 'keys', label: 'Keyboard shortcuts', action: showShortcuts });
+const help = initHelpAdapter({ registerMenuItem, bus, api, showShortcuts }); // Help > User guide (F1), Guided tours
+M('Help', { id: 'keys', label: 'Keyboard shortcuts', action: () => help.openTopic('keyboard-shortcuts') || showShortcuts() });
 M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => showDialog({ title: 'About ASH PDF Studio', className: 'about-dlg', body: h('div', {}, h('img.brand-logo.lt.about-logo', { src: 'assets/brand/ash-logo-horizontal.svg', alt: 'ASH Technical & Project Management Services' }), h('img.brand-logo.rev.about-logo', { src: 'assets/brand/ash-logo-horizontal-reversed.svg', alt: '' }), h('p', {}, `Version ${await api.version()}. Free and open source (MIT). Uses pdf.js (Apache-2.0) and pdf-lib (MIT).`), h('p.about-tm', {}, 'The ASH logo and icon are trademarks of ASH Technical & Project Management Services and are not covered by the MIT licence.')) }) });
 
 function showShortcuts() {
@@ -782,4 +785,5 @@ const toolbarReady = initToolbarCustomize({ registerMenuItem }); // View > Custo
   if (launching && !state.tabs.length) welcome.hidden = false;
   await session.start();
   document.body.dataset.ready = 'true';
+  help.welcome();
 })();

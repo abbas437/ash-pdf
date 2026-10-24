@@ -1,0 +1,87 @@
+/* In-app help (help-engine.js). App-agnostic: uses the host app's tokens when present, ASH brand fallbacks otherwise. */
+.ash-help, .ah-pop, .ah-welcome {
+  --ah-bg: var(--surface-2, #FBF8F2); --ah-fg: var(--text, #15241F); --ah-muted: var(--muted, #55615b);
+  --ah-line: var(--line, #C2B9A7); --ah-accent: var(--accent, #9A7A2C); --ah-tint: var(--accent-tint, #efe2bf);
+  --ah-hover: var(--hover, #E9E3D7); --ah-head: var(--frame-bg, #15241F); --ah-head-fg: var(--frame-text, #ECE6DA);
+  --ah-input: var(--input, #FFFDF8);
+  font: 13px/1.5 system-ui, "Segoe UI", sans-serif; color: var(--ah-fg); box-sizing: border-box;
+}
+.ash-help *, .ah-pop *, .ah-welcome * { box-sizing: border-box; }
+.ash-help { position: fixed; right: 0; top: 0; bottom: 0; z-index: 110; width: min(440px, 92vw); display: flex; flex-direction: column;
+  background: var(--ah-bg); border-left: 1px solid var(--ah-line); box-shadow: -8px 0 28px rgba(0, 0, 0, .18); }
+.ash-help[hidden] { display: none; }
+.ah-head { display: flex; align-items: center; gap: 4px; padding: 6px 8px; background: var(--ah-head); color: var(--ah-head-fg); border-bottom: 2px solid var(--ah-accent); }
+.ah-ib { flex: none; width: 28px; height: 28px; border: 0; border-radius: 5px; background: transparent; color: inherit; font-size: 18px; line-height: 1; cursor: pointer; }
+.ah-ib:hover:not(:disabled) { background: rgba(255, 255, 255, .12); }
+.ah-ib:disabled { opacity: .35; cursor: default; }
+.ah-ib.ah-home { font-size: 15px; }
+.ah-search { flex: 1; min-width: 0; height: 28px; padding: 3px 9px; border: 1px solid transparent; border-radius: 6px; background: var(--ah-input); color: var(--ah-fg); font: inherit; }
+.ah-search:focus { outline: 2px solid var(--ah-accent); outline-offset: 0; }
+.ah-body { flex: 1; overflow: auto; padding: 14px 18px 28px; outline: none; }
+.ah-title { font-size: 19px; line-height: 1.3; margin: 2px 0 10px; }
+.ah-lead { color: var(--ah-muted); margin: 0 0 8px; }
+.ah-sec { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ah-muted); margin: 18px 0 6px; }
+.ah-list, .ah-tours, .ah-results, .ah-related ul { list-style: none; margin: 0; padding: 0; }
+.ah-list li a, .ah-related li a { display: block; padding: 4px 8px; margin: 0 -8px; border-radius: 5px; color: var(--ah-fg); text-decoration: none; }
+.ah-list li a:hover, .ah-related li a:hover { background: var(--ah-hover); }
+.ah-tourbtn, .ah-result { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; margin: 2px 0; padding: 7px 10px; text-align: left;
+  border: 1px solid var(--ah-line); border-radius: 7px; background: transparent; color: var(--ah-fg); font: inherit; cursor: pointer; }
+.ah-tourbtn:hover, .ah-result:hover, .ah-result:focus-visible { background: var(--ah-hover); border-color: var(--ah-accent); outline: none; }
+.ah-tt, .ah-rt { font-weight: 600; }
+.ah-td, .ah-rs { font-size: 12px; color: var(--ah-muted); }
+.ah-result { border-color: transparent; }
+.ah-none { color: var(--ah-muted); }
+.ah-crumb { font-size: 12px; color: var(--ah-muted); margin-bottom: 2px; }
+.ah-link { border: 0; padding: 0; background: none; color: var(--ah-accent); font: inherit; cursor: pointer; text-decoration: underline; }
+.ah-related { margin-top: 22px; padding-top: 10px; border-top: 1px solid var(--ah-line); }
+.ah-related h2 { font-size: 13px; margin: 0 0 6px; }
+.ah-notice { margin: 0 0 12px; padding: 8px 12px; border-radius: 6px; background: var(--ah-tint); border: 1px solid var(--ah-accent); }
+.ah-content h2 { font-size: 15.5px; margin: 20px 0 6px; }
+.ah-content h3 { font-size: 14px; margin: 16px 0 4px; }
+.ah-content p, .ah-content ul, .ah-content ol { margin: 6px 0 10px; }
+.ah-content ul, .ah-content ol { padding-left: 22px; }
+.ah-content li { margin: 3px 0; }
+.ah-content a { color: var(--ah-accent); }
+.ah-content img { max-width: 100%; height: auto; border: 1px solid var(--ah-line); border-radius: 6px; margin: 6px 0; }
+.ah-content table { border-collapse: collapse; width: 100%; margin: 8px 0 12px; font-size: 12.5px; }
+.ah-content th, .ah-content td { border: 1px solid var(--ah-line); padding: 4px 7px; text-align: left; vertical-align: top; }
+.ah-content th { background: var(--ah-hover); }
+.ah-content kbd { display: inline-block; min-width: 1.6em; padding: 0 5px; font: 11.5px ui-monospace, Consolas, monospace; text-align: center;
+  color: var(--ah-fg); background: var(--ah-input); border: 1px solid var(--ah-line); border-bottom-width: 2px; border-radius: 4px; }
+.ah-content code { font: 12px ui-monospace, Consolas, monospace; background: var(--ah-hover); padding: 0 4px; border-radius: 3px; }
+.ah-content .help-callout { margin: 10px 0; padding: 8px 12px; border-left: 4px solid var(--ah-accent); border-radius: 5px; background: var(--ah-tint); }
+.ah-content .help-callout > :last-child { margin-bottom: 0; }
+.ah-content .help-callout-title { font-weight: 600; margin: 0 0 3px; }
+.ah-content .help-warning, .ah-content .help-important { border-left-color: #a8442f; }
+.ah-content .help-showme { display: inline-flex; align-items: center; gap: 4px; padding: 1px 9px; border-radius: 11px; background: var(--ah-accent); color: #fff; text-decoration: none; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.ah-content .help-showme::before { content: "◎"; }
+.ah-content .help-showme:hover { filter: brightness(1.08); }
+.ah-flash { animation: ah-flash 1.6s ease-out; }
+@keyframes ah-flash { from { background: var(--ah-tint); } to { background: transparent; } }
+
+/* folded to a tab while a Show-me spotlight is on */
+.ah-tab { display: none; }
+.ash-help.ah-folded { width: 34px; box-shadow: none; }
+.ash-help.ah-folded > :not(.ah-tab) { display: none; }
+.ash-help.ah-folded .ah-tab { display: block; height: 100%; width: 100%; border: 0; background: var(--ah-head); color: var(--ah-head-fg); writing-mode: vertical-rl; font: 600 12px system-ui, sans-serif; letter-spacing: .08em; cursor: pointer; }
+
+/* spotlight + popover (Show me, tours) */
+.ah-spot { position: fixed; z-index: 115; pointer-events: none; border-radius: 7px; border: 2px solid var(--accent, #C9A55A);
+  box-shadow: 0 0 0 4px rgba(201, 165, 90, .35), 0 0 0 9999px rgba(10, 20, 16, .42); animation: ah-pulse 1.4s ease-in-out infinite; }
+@keyframes ah-pulse { 50% { box-shadow: 0 0 0 9px rgba(201, 165, 90, .15), 0 0 0 9999px rgba(10, 20, 16, .42); } }
+.ah-pop { position: fixed; z-index: 116; max-width: 340px; padding: 8px 12px; background: var(--ah-bg); border: 1px solid var(--ah-accent); border-radius: 8px; box-shadow: 0 10px 30px rgba(0, 0, 0, .25); }
+.ah-step h3 { margin: 2px 0 4px; font-size: 14.5px; }
+.ah-step p { margin: 4px 0; }
+.ah-step-n { font-size: 11.5px; color: var(--ah-muted); }
+.ah-step-how, .ah-step-miss { font-size: 12px; color: var(--ah-muted); font-style: italic; }
+.ah-step-btns { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }
+.ah-btn { padding: 4px 12px; border: 1px solid var(--ah-line); border-radius: 6px; background: var(--ah-input); color: var(--ah-fg); font: inherit; cursor: pointer; }
+.ah-btn:hover { background: var(--ah-hover); }
+.ah-btn.ah-primary { background: var(--ah-head); color: var(--ah-head-fg); border-color: var(--ah-head); }
+.ah-btn:focus-visible, .ah-ib:focus-visible, .ah-link:focus-visible { outline: 2px solid var(--ah-accent); outline-offset: 1px; }
+.ah-welcome { position: fixed; right: 18px; bottom: 34px; z-index: 112; width: 300px; padding: 12px 14px; background: var(--ah-bg); border: 1px solid var(--ah-accent); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .25); }
+.ah-welcome p { margin: 4px 0 2px; }
+.ah-q { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 8px; padding: 0; vertical-align: middle;
+  border: 1px solid var(--line, #C2B9A7); border-radius: 50%; background: transparent; color: var(--muted, #55615b); font: 600 12px system-ui, sans-serif; cursor: pointer; }
+.ah-q:hover { color: var(--accent, #9A7A2C); border-color: var(--accent, #9A7A2C); }
+@media (prefers-reduced-motion: reduce) { .ah-spot, .ah-flash { animation: none; } }
