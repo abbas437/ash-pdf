@@ -1,0 +1,20 @@
+{
+  ".welcome": "welcome",
+  "#theme-toggle": "welcome/light-and-dark-theme",
+  ".menubar": "interface-tour/menus",
+  ".options-bar": "interface-tour/options-bar",
+  ".statusbar": "interface-tour/status-bar",
+  "#btn-sidebar": "interface-tour/sidebar",
+  ".tabstrip": "open-and-tabs",
+  "#btn-open": "open-and-tabs/open-a-pdf",
+  "#btn-prev": "navigate-and-zoom/go-to-a-page",
+  "#btn-next": "navigate-and-zoom/go-to-a-page",
+  "input.page-input": "navigate-and-zoom/go-to-a-page",
+  "#btn-zoomout": "navigate-and-zoom/zoom",
+  "#btn-zoomin": "navigate-and-zoom/zoom",
+  "select.zoom-select": "navigate-and-zoom/zoom",
+  ".rm-strip": "navigate-and-zoom/reading-mode",
+  "[data-group=\"navigate\"]": "interface-tour/toolbar",
+  ".tb-more-btn": "customize-toolbar/narrow-windows",
+  "dialog:Customize toolbar": "customize-toolbar"
+}
