@@ -1,0 +1,13 @@
+{
+  "id": "sign-a-pdf",
+  "title": "Sign a PDF",
+  "description": "Add a visual signature to a page. This is a picture of your signature, not a digital certificate.",
+  "steps": [
+    { "target": "btn:sign", "title": "Open the Sign menu", "text": "Click Sign. The menu lists your saved signatures and initials. Open a PDF first if the items are greyed out.", "placement": "bottom", "advanceOn": "click" },
+    { "target": "btn:sign", "title": "Create a signature", "text": "In the Sign menu choose Manage signatures…. Add a new signature by drawing it, typing your name or importing an image, then choose Add to library. You only do this once.", "placement": "bottom" },
+    { "target": "btn:sign", "title": "Choose a signature to place", "text": "Open the Sign menu again and click the signature you want. The next click on the page will place it.", "placement": "bottom" },
+    { "target": "panel:viewer", "title": "Place it on the page", "text": "Click where the signature should go. Use the Select tool to move it or drag a corner to resize it. Press Esc to cancel placing.", "placement": "auto", "advanceOn": "event:annotation:added" },
+    { "target": "panel:options-bar", "title": "Apply the signature", "text": "With the signature selected, click Apply signature here (or in the Sign menu). It becomes part of the page and can no longer be moved. Undo reverses it until you close the file.", "placement": "bottom" },
+    { "target": "btn:save", "title": "Save the file", "text": "Save to keep the signature in the PDF. It is a visual signature only, so it does not prove who signed.", "placement": "bottom", "advanceOn": "event:file:saved" }
+  ]
+}
