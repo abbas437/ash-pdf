@@ -1,0 +1,20 @@
+{
+  "btn:find": { "selector": "#btn-find", "source": "renderer/app.js:476" },
+  "tool:select": { "selector": "[data-tool=\"select\"]", "source": "renderer/ui/tools-shapes.js:141" },
+  "tool:hand": { "selector": "[data-tool=\"hand\"]", "source": "renderer/ui/tools-hand.js:61" },
+  "tool:text": { "selector": "[data-tool=\"text\"]", "source": "renderer/ui/tools-text.js:986" },
+  "tool:textedit": { "selector": "[data-tool=\"textedit\"]", "source": "renderer/ui/textedit.js:142" },
+  "tool:image-edit": { "selector": "[data-tool=\"image-edit\"]", "source": "renderer/ui/imgedit.js:247" },
+  "tool:image": { "selector": "[data-tool=\"image\"]", "source": "renderer/ui/tools-stamp.js:545" },
+  "tool:stamp": { "selector": "[data-tool=\"stamp\"]", "source": "renderer/ui/tools-stamp.js:544" },
+  "tool:note": { "selector": "[data-tool=\"note\"]", "source": "renderer/ui/tools-markup.js:295" },
+  "tool:callout": { "selector": "[data-tool=\"callout\"]", "source": "renderer/ui/tools-callout.js:329" },
+  "tool:markup": { "selector": "[data-tool=\"markup\"]", "source": "renderer/ui/tools-callout.js:330" },
+  "tool:highlight": { "selector": "[data-tool=\"highlight\"]", "source": "renderer/ui/tools-shapes.js:149" },
+  "tool:underline": { "selector": "[data-tool=\"underline\"]", "source": "renderer/ui/tools-markup.js:22" },
+  "tool:strikeout": { "selector": "[data-tool=\"strikeout\"]", "source": "renderer/ui/tools-markup.js:23" },
+  "tool:squiggly": { "selector": "[data-tool=\"squiggly\"]", "source": "renderer/ui/tools-markup.js:24" },
+  "tool:draw": { "selector": "[data-tool=\"draw\"]", "source": "renderer/ui/tools-shapes.js:148" },
+  "tool:whiteout": { "selector": "[data-tool=\"whiteout\"]", "source": "renderer/ui/tools-shapes.js:150" },
+  "tool:redact": { "selector": "[data-tool=\"redact\"]", "source": "renderer/ui/tools-shapes.js:151" }
+}
