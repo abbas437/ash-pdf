@@ -1,0 +1,12 @@
+{
+  "dialog:Export to Word": "export-word-excel-image",
+  "dialog:Export to Excel": "export-word-excel-image",
+  "dialog:Export to image": "export-word-excel-image",
+  "dialog:Create PDF from Office": "create-pdf-from-office",
+  "dialog:Converting": "create-pdf-from-office",
+  "dialog:Reduce file size": "reduce-file-size",
+  "dialog:This document is digitally signed": "reduce-file-size",
+  "dialog:Recognize text (OCR)": "ocr",
+  "dialog:Recognize text": "ocr",
+  "dialog:Text recognition is not available": "ocr"
+}

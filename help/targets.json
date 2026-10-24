@@ -1,0 +1,14 @@
+{
+  "btn:open": "#btn-open",
+  "btn:theme": "#theme-toggle",
+  "btn:sidebar": "#btn-sidebar",
+  "btn:page": "input.page-input",
+  "btn:zoom": "select.zoom-select",
+  "btn:rotr": "#btn-rotr",
+  "btn:more": ".tb-more-btn",
+  "tool:select": "[data-tool=\"select\"]",
+  "tool:hand": "[data-tool=\"hand\"]",
+  "menu:File": ".menu-wrap:has(> .menu[aria-label=\"File\"]) > .menu-btn",
+  "panel:tabs": ".tabstrip",
+  "panel:options-bar": ".options-bar"
+}

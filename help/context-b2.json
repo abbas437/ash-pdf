@@ -1,0 +1,9 @@
+{
+  "[data-tool=\"text-highlight\"]": "highlight-text",
+  "[data-tool=\"underline\"]": "highlight-text",
+  "[data-tool=\"strikeout\"]": "highlight-text",
+  "[data-tool=\"squiggly\"]": "highlight-text",
+  "[data-tool=\"note\"]": "sticky-notes",
+  "[data-tool=\"callout\"]": "callouts",
+  "[data-tool=\"markup\"]": "markup-comment"
+}

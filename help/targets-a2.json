@@ -1,0 +1,6 @@
+{
+  "btn:split": { "selector": "#btn-split", "source": "renderer/ui/toolbar-menus.js:36" },
+  "btn:save": { "selector": "#btn-save", "source": "renderer/app.js:478" },
+  "btn:saveas": { "selector": "#btn-saveas", "source": "renderer/app.js:479" },
+  "btn:print": { "selector": "#btn-print", "source": "renderer/app.js:479" }
+}

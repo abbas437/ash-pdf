@@ -1,0 +1,6 @@
+{
+  "tool:text": { "selector": "[data-tool=\"text\"]", "source": "renderer/ui/toolbar.js:77 (dataset: { tool: def.id }); id 'text' at renderer/ui/tools-text.js:986" },
+  "panel:options-bar": { "selector": ".options-bar", "source": "renderer/app.js:54" },
+  "bar:text-format": { "selector": ".text-format-bar", "source": "renderer/ui/tools-text.js:869 (exists only while a text box is being edited)" },
+  "menu:Tools": { "selector": ".menubar .menu-wrap:has(> .menu[aria-label=\"Tools\"]) > .menu-btn", "source": "renderer/app.js:86-88 (the menu button has no id; matched through its list's aria-label)" }
+}

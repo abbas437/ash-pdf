@@ -1,0 +1,8 @@
+{
+  "tool:shapes": {"selector": "[data-tool=\"shapes\"]", "source": "renderer/ui/tools-shapes.js:147"},
+  "tool:draw": {"selector": "[data-tool=\"draw\"]", "source": "renderer/ui/tools-shapes.js:148"},
+  "tool:highlight": {"selector": "[data-tool=\"highlight\"]", "source": "renderer/ui/tools-shapes.js:149"},
+  "tool:stamp": {"selector": "[data-tool=\"stamp\"]", "source": "renderer/ui/tools-stamp.js:544"},
+  "panel:options-bar": {"selector": ".options-bar", "source": "renderer/app.js:54"},
+  "panel:comments": {"selector": "[data-sb-tab=\"comments\"]", "source": "renderer/ui/sidebar.js:79 (tab id from renderer/ui/comments.js:27)"}
+}

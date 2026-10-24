@@ -1,0 +1,5 @@
+{
+  "[data-tool=\"text\"]": "text-boxes",
+  ".text-format-bar": "text-boxes/format-part-of-the-text",
+  "dialog:Replace text": "replace-text"
+}

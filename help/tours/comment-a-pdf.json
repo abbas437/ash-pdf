@@ -1,0 +1,13 @@
+{
+  "id": "comment-a-pdf",
+  "title": "Comment on a PDF",
+  "description": "Highlight, add notes and callouts, and review all comments in one list.",
+  "steps": [
+    { "target": "tool:highlight", "title": "Highlight", "text": "Select some text on the page, then press H to highlight it. The Highlight tool here draws a coloured box over an area instead.", "placement": "bottom" },
+    { "target": "tool:note", "title": "Add a sticky note", "text": "Click the Sticky note tool (or press N), then click the page where the note should sit and type your comment.", "placement": "bottom", "advanceOn": "event:tool:note" },
+    { "target": "tool:callout", "title": "Add a callout", "text": "Click the Callout comment tool (or press C). Drag a box on the page, then type your text in it. The callout points at the spot you started from.", "placement": "bottom", "advanceOn": "event:tool:callout" },
+    { "target": "tool:markup", "title": "Markup with a comment", "text": "Click the Markup + comment tool (or press M). Drag a dotted shape around the item you mean, then type your comment beside it.", "placement": "bottom", "advanceOn": "event:tool:markup" },
+    { "target": "panel:comments", "title": "Review all comments", "text": "Open the Comments tab in the sidebar to see every comment in the file. Click one to go to it, or use Reply to answer it.", "placement": "right" },
+    { "target": "menu:Edit", "title": "Set your author name", "text": "Open the Edit menu and choose Author name… so your comments show who wrote them.", "placement": "bottom" }
+  ]
+}

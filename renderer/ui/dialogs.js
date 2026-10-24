@@ -4,16 +4,19 @@ import { icon } from './icons.js';
 
 let dialogSeq = 0;
 const openDialogs = [];
+let decorate = null;
+/** fn({dialog, titleEl, title, help}) runs for every dialog after its title is built (the help adapter adds data-help and a "?" button). */
+export function setDialogDecorator(fn) { decorate = fn; }
 
 /**
- * showDialog({title, body, buttons, initialFocus, className}) → Promise<value>
+ * showDialog({title, body, buttons, initialFocus, className, help}) → Promise<value>   (help: 'topic[/anchor]' for F1 and the "?" button)
  *   body: string | Node | (dialogEl) => Node
  *   buttons: [{label, value, primary?, danger?}] (default: [{label:'OK', value:'ok', primary:true}])
  *   Escape / backdrop resolve with the value of the button marked {cancel:true}, else null.
  * A button with {validate: (dialogEl) => boolean|Promise<boolean>} keeps the dialog open
  * when validate returns false.
  */
-export function showDialog({ title, body, buttons, initialFocus, className } = {}) {
+export function showDialog({ title, body, buttons, initialFocus, className, help } = {}) {
   buttons = buttons?.length ? buttons : [{ label: 'OK', value: 'ok', primary: true }];
   const id = `dlg-${++dialogSeq}`;
   const previousFocus = document.activeElement;
@@ -41,10 +44,13 @@ export function showDialog({ title, body, buttons, initialFocus, className } = {
     const content = typeof body === 'function' ? body(dialog) : body;
     if (content instanceof Node) bodyEl.append(content);
     else if (content != null) bodyEl.append(h('p', {}, String(content)));
-    dialog.append(h('h2.dialog-title', { id: `${id}-title` }, title ?? ''), bodyEl, footer);
+    const titleEl = h('h2.dialog-title', { id: `${id}-title` }, title ?? '');
+    dialog.append(titleEl, bodyEl, footer);
+    try { decorate?.({ dialog, titleEl, title: title ?? '', help }); } catch { /* help is optional */ }
 
     function onKey(e) {
       if (openDialogs[openDialogs.length - 1] !== backdrop) return;
+      if (e.target?.closest?.('[data-ash-help]')) return; // typing in the help panel opened from this dialog
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(cancelValue); return; }
       if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
         e.preventDefault();

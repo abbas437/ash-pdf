@@ -1,0 +1,6 @@
+{
+  "menu:Document": {
+    "selector": ".menu-wrap:has(> .menu[aria-label=\"Document\"]) > .menu-btn",
+    "source": "renderer/app.js:85-88"
+  }
+}

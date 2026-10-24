@@ -136,11 +136,17 @@ Restrictions the UI must respect: new windows and navigation are blocked (extern
 opened), and every permission request is denied, including `navigator.clipboard` — use
 `document.execCommand('copy')` or the native Ctrl+C in text selections.
 
+## Help
+
+The user guide is built into the app: press F1 or use Help ▸ User guide (search, guided tours, and "Show me" links that
+point at the real buttons). The same guide is published on https://ashdesignsuite.com. Its sources are in `help/`
+(`npm run help:build`, `npm run help:shots`).
+
 ## Limitations
 
-- Cannot edit the existing text of a page in place yet (you can add text, annotations and form values; Replace text covers simple cases).
-- Office conversions (File > Export to Word document, Create PDF from Office file) drive the Microsoft Office installed on the PC through PowerShell COM automation, so they work only on Windows with Office; Word's PDF Reflow keeps text and simple layouts best. A run is stopped after 120 s.
-- No OCR: scanned pages stay images; text search only works on PDFs that contain text.
+- Editing the existing text of a page (Edit text, D) works one line at a time; text inside form objects cannot be edited.
+- Office conversions (File > Export to Word document, Create PDF from Office file) drive the Microsoft Office installed on the PC through PowerShell COM automation, so they work only on Windows with Office (the built-in engines cover .docx and .xlsx without Office); Word's PDF Reflow keeps text and simple layouts best. A run is stopped after 5 minutes (10 for Word export).
+- Text recognition (Tools ▸ Recognize text) is English only.
 - No digital-signature validation or certificate signing yet; signed PDFs open, signatures are not verified, and saving changes invalidates them (the app warns before overwriting).
 - Encrypted PDFs: password-protected files can be viewed after entering the password; editing and saving encrypted files is limited.
 - PDF JavaScript is not run, and XFA forms are not supported.

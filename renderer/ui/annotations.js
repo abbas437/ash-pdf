@@ -786,7 +786,7 @@ export const objectAtPoint = (tab, page, x, y) => objectAt(ensureTab(tab), page,
 function onKey(e) {
   const tab = activeTab();
   if (!tab || dialogOpen() || isTyping(e.target) || e.altKey) return;
-  if (e.target.closest?.('.tabstrip, .menubar')) return;
+  if (e.target.closest?.('.tabstrip, .menubar, [data-ash-help]')) return;
   ensureTab(tab);
   const ctrl = e.ctrlKey || e.metaKey, k = e.key.toLowerCase(), sel = getSelection(tab);
   const run = (fn) => { e.preventDefault(); e.stopPropagation(); fn(); };

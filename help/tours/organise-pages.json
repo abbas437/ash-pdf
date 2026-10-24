@@ -1,0 +1,13 @@
+{
+  "id": "organise-pages",
+  "title": "Organise pages",
+  "description": "Reorder, rotate, insert, delete, extract and merge pages.",
+  "steps": [
+    { "target": "panel:thumbnails", "title": "Select pages", "text": "Open the Thumbnails tab in the sidebar. Click a page to select it. Hold Ctrl to add more pages, or Shift to select a range.", "placement": "right" },
+    { "target": "panel:thumbnails", "title": "Drag to reorder", "text": "Drag the selected thumbnail or thumbnails up or down the list and drop them where you want them to go.", "placement": "right" },
+    { "target": "btn:rotr", "title": "Rotate pages", "text": "With pages selected, click Rotate right to turn them 90 degrees clockwise. Rotate left is the button beside it.", "placement": "bottom" },
+    { "target": "btn:pages", "title": "Open the Pages menu", "text": "Click Pages. Here you can choose Delete pages…, Insert blank page, Insert from file…, Extract / Split… and Merge files….", "placement": "bottom", "advanceOn": "click" },
+    { "target": "btn:undo", "title": "Undo a mistake", "text": "Click Undo (Ctrl+Z) to reverse the last change, such as a move, a rotation or a deletion.", "placement": "bottom" },
+    { "target": "btn:save", "title": "Save the result", "text": "Click Save, or use Save as to keep the original file as it was.", "placement": "bottom" }
+  ]
+}

@@ -1,0 +1,3 @@
+{
+  "btn:pages": { "selector": "[data-tb-item=\"pages\"]", "source": "renderer/ui/toolbar-menus.js:33" }
+}

@@ -1,0 +1,13 @@
+{
+  "[data-tb-item=\"pages\"]": "insert-delete-pages",
+  "#btn-rotl": "rotate-reorder-reverse-interleave",
+  "#btn-rotr": "rotate-reorder-reverse-interleave",
+  "#sb-tab-thumbs": "page-thumbnails",
+  "dialog:Merge PDFs": "merge-split",
+  "dialog:Split PDF": "merge-split",
+  "dialog:Insert pages from PDF": "insert-delete-pages",
+  "dialog:Delete pages": "insert-delete-pages",
+  "dialog:Cannot delete every page": "insert-delete-pages",
+  "dialog:Reverse page order": "rotate-reorder-reverse-interleave",
+  "dialog:Interleave pages": "rotate-reorder-reverse-interleave"
+}
