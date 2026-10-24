@@ -16,6 +16,7 @@
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "licenses": "node scripts/licenses.js",
     "help:build": "node scripts/build-help.mjs",
+    "help:shots": "node scripts/help-shots.mjs",
     "predist": "node scripts/vendor.js",
     "dist": "electron-builder --win nsis portable --x64 --publish never"
   },
