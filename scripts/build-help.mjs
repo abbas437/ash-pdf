@@ -7,7 +7,7 @@
 //   node scripts/build-help.mjs        (npm run help:build)
 // Topic conventions (see the front-matter / link / callout rules in parseTopic and renderMarkdown).
 import { readFile, writeFile, readdir, mkdir, copyFile, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Marked } from 'marked';
@@ -131,10 +131,13 @@ export async function compileHelp(srcDir = join(ROOT, 'help')) {
   for (const f of existsSync(tourDir) ? (await readdir(tourDir)).filter((x) => x.endsWith('.json')).sort() : []) tours.push(checkTour(JSON.parse(await readFile(join(tourDir, f), 'utf8')), f));
   const warnings = [];
   for (const t of topics) for (const [, name] of t.html.matchAll(/<img src="img\/([^"]+)"/g)) if (!existsSync(join(srcDir, 'img', name))) warnings.push(`${t.id}: image img/${name} is missing from help/img`);
-  const targets = await readMaps(srcDir, ['targets.json', 'targets-b.json'], (k, v, f) => {
-    if (typeof v !== 'string' || !v.trim()) throw new Error(`${f}: target "${k}" must map to a CSS selector string`);
-  });
-  const context = await readMaps(srcDir, ['context.json', 'context-b.json'], (k, v, f) => {
+  const mapFiles = (prefix) => (existsSync(srcDir) ? readdirSync(srcDir) : []).filter((f) => f === `${prefix}.json` || (f.startsWith(`${prefix}-`) && f.endsWith('.json'))).sort((a, b) => (a === `${prefix}.json` ? -1 : b === `${prefix}.json` ? 1 : a.localeCompare(b)));
+  // Writers' target files may hold {selector, source} objects: keep the selector.
+  const targets = await readMaps(srcDir, mapFiles('targets'), (k, v, f) => {
+    const sel = typeof v === 'string' ? v : v?.selector;
+    if (typeof sel !== 'string' || !sel.trim()) throw new Error(`${f}: target "${k}" must map to a CSS selector string or {selector}`);
+  }, (v) => (typeof v === 'string' ? v : v.selector));
+  const context = await readMaps(srcDir, mapFiles('context'), (k, v, f) => {
     const id = typeof v === 'string' ? v.split('/')[0] : '';
     if (!topics.some((o) => o.id === id)) throw new Error(`${f}: "${k}" maps to unknown topic ${v}`);
   });
@@ -142,13 +145,13 @@ export async function compileHelp(srcDir = join(ROOT, 'help')) {
 }
 
 /** Merge the {key: value} JSON files that exist in srcDir (later files win); check(key, value, file) throws on a bad entry. */
-export async function readMaps(srcDir, names, check) {
+export async function readMaps(srcDir, names, check, map = (x) => x) {
   const out = {};
   for (const f of names) {
     if (!existsSync(join(srcDir, f))) continue;
     const v = JSON.parse(await readFile(join(srcDir, f), 'utf8'));
     if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${f}: must be a JSON object`);
-    for (const [k, x] of Object.entries(v)) { check(k, x, f); out[k] = x; }
+    for (const [k, x] of Object.entries(v)) { check(k, x, f); out[k] = map(x); }
   }
   return out;
 }
