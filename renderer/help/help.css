@@ -83,5 +83,6 @@
 .ah-welcome p { margin: 4px 0 2px; }
 .ah-q { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 8px; padding: 0; vertical-align: middle;
   border: 1px solid var(--line, #C2B9A7); border-radius: 50%; background: transparent; color: var(--muted, #55615b); font: 600 12px system-ui, sans-serif; cursor: pointer; }
+.ah-q-dlg { position: absolute; top: 14px; right: 14px; margin: 0; }
 .ah-q:hover { color: var(--accent, #9A7A2C); border-color: var(--accent, #9A7A2C); }
 @media (prefers-reduced-motion: reduce) { .ah-spot, .ah-flash { animation: none; } }

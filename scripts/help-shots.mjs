@@ -32,7 +32,9 @@ const shots = JSON.parse(await readFile(join(root, 'help', 'shots.json'), 'utf8'
 const server = createServer(async (req, res) => {
   const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));
   if (!file.startsWith(root + sep)) { res.writeHead(403).end(); return; }
-  try { res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' }).end(await readFile(file)); } catch { res.writeHead(404).end(); }
+  let body;
+  try { body = await readFile(file); } catch { res.writeHead(404).end(); return; }
+  res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' }).end(body);
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const base = `http://127.0.0.1:${server.address().port}`;

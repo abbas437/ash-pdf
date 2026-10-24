@@ -575,7 +575,7 @@ function showShortcuts() {
 
 // ---------------------------------------------------------------- keyboard
 document.addEventListener('keydown', (e) => {
-  if (dialogOpen()) return;
+  if (dialogOpen() || e.target?.closest?.('[data-ash-help]')) return;
   const ctrl = e.ctrlKey || e.metaKey;
   const tab = activeTab();
   const k = e.key.toLowerCase();

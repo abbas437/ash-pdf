@@ -50,6 +50,7 @@ export function showDialog({ title, body, buttons, initialFocus, className, help
 
     function onKey(e) {
       if (openDialogs[openDialogs.length - 1] !== backdrop) return;
+      if (e.target?.closest?.('[data-ash-help]')) return; // typing in the help panel opened from this dialog
       if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(cancelValue); return; }
       if (e.key === 'Enter' && e.target.tagName === 'INPUT') {
         e.preventDefault();

@@ -114,8 +114,10 @@ try {
   await hev('H.helpEvent("not-this-one");');
   await page.waitForTimeout(300);
   check(new RegExp(`· ${evIdx + 1} /`).test(await ev('return document.querySelector(".ah-pop .ah-step .ah-step-n")?.textContent ?? "";')), 'an unrelated event advanced the tour');
-  await hev('H.helpEvent(arg);', adv.slice(6));
+  await hev('H.helpEvent(arg); H.helpEvent(arg);', adv.slice(6)); // a repeated event moves on one step only
   await waitFor((n) => new RegExp(`· ${n} /`).test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), evIdx + 2, `tour to advance on ${adv}`);
+  await page.waitForTimeout(400);
+  check(new RegExp(`· ${evIdx + 2} /`).test(await ev('return document.querySelector(".ah-pop .ah-step .ah-step-n")?.textContent ?? "";')), 'a repeated event skipped a step');
   await page.keyboard.press('Escape');
   await waitFor(() => !document.querySelector('.ah-pop'), null, 'tour to end on Esc');
 
@@ -137,6 +139,12 @@ try {
   await waitFor(() => document.querySelector('.dialog[data-help] .ah-q'), null, 'dialog with data-help and a ? button');
   await page.click('.dialog .ah-q');
   await waitFor((t) => document.querySelector('.ash-help:not([hidden]) .ah-body h1')?.textContent?.trim() === t, dTitle, `panel to show "${dTitle}"`);
+  // Typing in the help search while the dialog is open must not press the dialog's buttons (Enter) or move focus back (Tab).
+  await page.fill('.ah-search', 'text box');
+  await page.press('.ah-search', 'Enter');
+  await page.waitForTimeout(200);
+  check(await ev('return !!document.querySelector(".dialog[data-help]");'), 'Enter in the help search closed the dialog');
+  check(await ev('return document.querySelector(".dialog .dialog-title")?.textContent === arg;', 'Author name'), 'the "?" sits inside the dialog title (accessible name changed)');
   await page.keyboard.press('Escape'); // closes the panel
   await ev('document.querySelector(".dialog [data-help]") ; for (const b of document.querySelectorAll(".dialog-buttons button")) if (/cancel/i.test(b.textContent)) b.click();');
   await waitFor(() => !document.querySelector('.dialog'), null, 'dialog to close');

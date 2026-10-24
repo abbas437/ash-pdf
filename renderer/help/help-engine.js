@@ -31,6 +31,7 @@ let hist = [], hpos = -1;
 let spot = null;                 // {el, ring, pop, raf, timer, onDown}
 let tour = null;                 // {t, i}
 let mouse = { x: -1, y: -1 };
+let returnFocus = null;
 const PREFIXES = ['', 'tool:', 'btn:', 'panel:', 'el:', 'menu:', 'cmd:', 'status:'];
 const host = () => A?.container?.() ?? document.body;
 
@@ -85,6 +86,8 @@ function buildPanel() {
     if (e.key === 'ArrowDown') { const first = body.querySelector('.ah-result'); if (first) { e.preventDefault(); first.focus(); } }
   });
   body.addEventListener('click', onBodyClick);
+  // Keys typed in the help panel stay there (no page turns, tool letters or deletes in the document).
+  panel.addEventListener('keydown', (e) => { if (e.key !== 'F1') e.stopPropagation(); });
   host().append(panel);
 }
 
@@ -98,8 +101,10 @@ export function isHelpOpen() { return !!panel && panel.isConnected && !panel.hid
 export function openHelp(topicId, anchor) {
   if (!A) return;
   if (!panel) buildPanel();
+  endTour();
   endSpot();
   if (panel.parentElement !== host()) host().append(panel);
+  if (panel.hidden) returnFocus = document.activeElement;
   place();
   panel.hidden = false;
   unfold();
@@ -115,6 +120,8 @@ export function closeHelp() {
   endSpot();
   panel.hidden = true;
   panel.classList.remove('ah-folded');
+  if (returnFocus?.isConnected) returnFocus.focus?.({ preventScroll: true });
+  returnFocus = null;
 }
 
 const fold = () => panel?.classList.add('ah-folded');
@@ -258,7 +265,8 @@ export async function resolveTarget(id) {
 }
 
 // ---------------------------------------------------------------- spotlight
-function drawSpot(el, { caption, tourStep } = {}) {
+function drawSpot(el0, { caption, tourStep } = {}) {
+  let el = el0;
   endSpot(true);
   const ring = mk('div', { class: `ah-spot${tourStep ? ' ah-spot-tour' : ''}`, 'aria-hidden': 'true' });
   const pop = mk('div', { class: 'ah-pop', role: tourStep ? 'dialog' : 'status', 'aria-live': 'polite' });
@@ -267,6 +275,11 @@ function drawSpot(el, { caption, tourStep } = {}) {
   spot = { el, ring, pop, raf: 0, timer: 0 };
   const follow = () => {
     if (!spot) return;
+    if (tourStep && el && !el.isConnected && !spot.again) { // the control was re-rendered: find it again
+      spot.again = true;
+      const me = spot;
+      resolveTarget(tourStep.target).then((n) => { if (spot === me && n) { el = n; me.el = n; } me.again = false; });
+    }
     const r = el?.isConnected ? el.getBoundingClientRect() : null;
     if (r && r.width) {
       const pad = 4;
@@ -311,6 +324,7 @@ function endSpot(keepPanel = false) {
 export async function showMe(targetId) {
   if (tour) endTour();
   const el = await resolveTarget(targetId);
+  if (tour) return false; // a tour started while the target was being found
   if (!el) { notice('That control is not visible right now. Open a document or widen the window, then try again.'); return false; }
   fold();
   el.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
@@ -372,17 +386,23 @@ function step(d) {
   showStep();
 }
 
+/** Move on from step i once (a double click or a repeated event must not skip a step). */
+function advanceFrom(i, ms) {
+  const t = tour?.t;
+  setTimeout(() => { if (tour && tour.t === t && tour.i === i) step(1); }, ms);
+}
+
 /** The app reports something happened (e.g. 'tool:text', 'file:opened'): a tour step waiting for it moves on. */
 export function helpEvent(name) {
   if (!tour) return;
   const st = tour.t.steps[tour.i];
-  if (st?.advanceOn === `event:${name}`) setTimeout(() => step(1), 120);
+  if (st?.advanceOn === `event:${name}`) advanceFrom(tour.i, 120);
 }
 
 function onTourClick(e) {
   if (!tour || !spot) return;
   const st = tour.t.steps[tour.i];
-  if (st?.advanceOn === 'click' && spot.el?.contains?.(e.target)) setTimeout(() => step(1), 150);
+  if (st?.advanceOn === 'click' && spot.el?.contains?.(e.target)) advanceFrom(tour.i, 150);
 }
 
 // ---------------------------------------------------------------- welcome

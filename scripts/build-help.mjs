@@ -87,7 +87,7 @@ const textOf = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').r
 export function siteHtml(html) {
   return html
     .replace(/<a href="#topic:([a-z0-9-]+)(?:\/([\w-]+))?" data-topic="[^"]*"(?: data-anchor="[^"]*")?/g, (_, id, a) => `<a href="${id}.html${a ? `#${a}` : ''}"`)
-    .replace(/<a href="#showme:[\w:.-]+" class="help-showme"[^>]*>([\s\S]*?)<\/a>/g, '<span class="help-inapp" title="$1">In the app: Help ▸ Show me</span>')
+    .replace(/<a href="#showme:[\w:.-]+" class="help-showme"[^>]*>([\s\S]*?)<\/a>/g, (_, inner) => `<span class="help-inapp" title="${escapeHtml(inner.replace(/<[^>]*>/g, ''))}">In the app: Help ▸ Show me</span>`)
     .replace(/ class="help-ext" data-ext="1"/g, ' class="help-ext" target="_blank" rel="noopener"');
 }
 

@@ -79,7 +79,10 @@ export function initHelpAdapter({ registerMenuItem, bus, api, showShortcuts }) {
     const ref = help ?? dialogTopic(title);
     if (!ref || !known.has(String(ref).split('/')[0])) return;
     dialog.setAttribute('data-help', ref);
-    titleEl.append(helpButton(ref));
+    const q = helpButton(ref);
+    q.classList.add('ah-q-dlg'); // beside the title, not inside it (the title is the dialog's accessible name)
+    if (getComputedStyle(dialog).position === 'static') dialog.style.position = 'relative';
+    titleEl.after(q);
   });
   registerMenuItem('Help', { id: 'guide', label: 'User guide', shortcut: 'F1', action: () => openHelp() });
   if (data.tours?.length) registerMenuItem('Help', { id: 'tours', label: 'Guided tours…', action: () => openHelp() });
