@@ -1,0 +1,8 @@
+{
+  "dialog:Crop pages": "crop-resize",
+  "dialog:Resize pages": "crop-resize",
+  "dialog:Replace pages": "replace-pages",
+  "dialog:Images to PDF": "images-to-pdf",
+  "dialog:Document properties": "document-properties",
+  "dialog:Edit document properties": "document-properties"
+}
