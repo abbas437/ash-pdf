@@ -1,6 +1,6 @@
 /* In-app help (help-engine.js). App-agnostic: uses the host app's tokens when present, ASH brand fallbacks otherwise. */
 .ash-help, .ah-pop, .ah-welcome {
-  --ah-bg: var(--surface-2, #FBF8F2); --ah-fg: var(--text, #15241F); --ah-muted: var(--muted, #55615b);
+  --ah-bg: var(--surface-2, #FBF8F2); --ah-fg: var(--text, #15241F); --ah-muted: var(--muted, var(--dim, #55615b));
   --ah-line: var(--line, #C2B9A7); --ah-accent: var(--accent, #9A7A2C); --ah-tint: var(--accent-tint, #efe2bf);
   --ah-hover: var(--hover, #E9E3D7); --ah-head: var(--frame-bg, #15241F); --ah-head-fg: var(--frame-text, #ECE6DA);
   --ah-input: var(--input, #FFFDF8);
@@ -82,7 +82,7 @@
 .ah-welcome { position: fixed; right: 18px; bottom: 34px; z-index: 112; width: 300px; padding: 12px 14px; background: var(--ah-bg); border: 1px solid var(--ah-accent); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, .25); }
 .ah-welcome p { margin: 4px 0 2px; }
 .ah-q { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; margin-left: 8px; padding: 0; vertical-align: middle;
-  border: 1px solid var(--line, #C2B9A7); border-radius: 50%; background: transparent; color: var(--muted, #55615b); font: 600 12px system-ui, sans-serif; cursor: pointer; }
+  border: 1px solid var(--line, #C2B9A7); border-radius: 50%; background: transparent; color: var(--muted, var(--dim, #55615b)); font: 600 12px system-ui, sans-serif; cursor: pointer; }
 .ah-q-dlg { position: absolute; top: 14px; right: 14px; margin: 0; }
 .ah-q:hover { color: var(--accent, #9A7A2C); border-color: var(--accent, #9A7A2C); }
 @media (prefers-reduced-motion: reduce) { .ah-spot, .ah-flash { animation: none; } }
