@@ -1,0 +1,7 @@
+{
+  "btn:pages": { "selector": "[data-tb-item=\"pages\"]", "source": "renderer/ui/toolbar-menus.js:33" },
+  "btn:rotl": { "selector": "#btn-rotl", "source": "renderer/app.js:482" },
+  "btn:rotr": { "selector": "#btn-rotr", "source": "renderer/app.js:482" },
+  "panel:thumbnails": { "selector": "#sb-tab-thumbs", "source": "renderer/ui/sidebar.js:78" },
+  "btn:sidebar": { "selector": "#btn-sidebar", "source": "renderer/app.js:483" }
+}
