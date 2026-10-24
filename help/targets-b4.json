@@ -1,0 +1,4 @@
+{
+  "tool:select": { "selector": "[data-tool=\"select\"]", "source": "renderer/ui/toolbar.js:77" },
+  "btn:sign": { "selector": "[data-tb-item=\"sign\"]", "source": "renderer/ui/sign.js:300" }
+}
