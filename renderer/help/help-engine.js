@@ -12,7 +12,8 @@
 //     top?: () => number,                              px from the window top where the panel starts
 //     imgBase?: string,                                base URL for img/… (default: this folder)
 //     home?: string,                                   topic shown by F1 with no context (default 'welcome')
-//     contextOf?: (el) => 'topic[/anchor]'|null }       F1 context for elements without data-help
+//     contextOf?: (el) => 'topic[/anchor]'|null,       F1 context for elements without data-help
+//     container?: () => Element }                      where the panel and spotlight live (a modal <dialog> in the top layer, else body)
 //   openHelp(topicId?, anchor?) / closeHelp() / isHelpOpen()
 //   showMe(targetId)             spotlight a control (the panel folds to a tab meanwhile); false if not found
 //   startTour(id) / endTour() / helpEvent(name)      tours advance on Next, a click on the target or an app event
@@ -31,6 +32,7 @@ let spot = null;                 // {el, ring, pop, raf, timer, onDown}
 let tour = null;                 // {t, i}
 let mouse = { x: -1, y: -1 };
 const PREFIXES = ['', 'tool:', 'btn:', 'panel:', 'el:', 'menu:', 'cmd:', 'status:'];
+const host = () => A?.container?.() ?? document.body;
 
 const mk = (tag, props = {}, ...kids) => {
   const el = document.createElement(tag);
@@ -83,7 +85,7 @@ function buildPanel() {
     if (e.key === 'ArrowDown') { const first = body.querySelector('.ah-result'); if (first) { e.preventDefault(); first.focus(); } }
   });
   body.addEventListener('click', onBodyClick);
-  document.body.append(panel);
+  host().append(panel);
 }
 
 function place() {
@@ -91,12 +93,13 @@ function place() {
   panel.style.top = `${top}px`;
 }
 
-export function isHelpOpen() { return !!panel && !panel.hidden; }
+export function isHelpOpen() { return !!panel && panel.isConnected && !panel.hidden; }
 
 export function openHelp(topicId, anchor) {
   if (!A) return;
   if (!panel) buildPanel();
   endSpot();
+  if (panel.parentElement !== host()) host().append(panel);
   place();
   panel.hidden = false;
   unfold();
@@ -260,7 +263,7 @@ function drawSpot(el, { caption, tourStep } = {}) {
   const ring = mk('div', { class: `ah-spot${tourStep ? ' ah-spot-tour' : ''}`, 'aria-hidden': 'true' });
   const pop = mk('div', { class: 'ah-pop', role: tourStep ? 'dialog' : 'status', 'aria-live': 'polite' });
   if (caption) pop.append(caption);
-  document.body.append(ring, pop);
+  host().append(ring, pop);
   spot = { el, ring, pop, raf: 0, timer: 0 };
   const follow = () => {
     if (!spot) return;
@@ -395,7 +398,7 @@ export async function maybeWelcome(tourId = 'first-steps') {
     mk('div', { class: 'ah-step-btns' },
       mk('button', { type: 'button', class: 'ah-btn', 'data-welcome': 'no', text: 'Not now', onclick: done }),
       mk('button', { type: 'button', class: 'ah-btn ah-primary', 'data-welcome': 'yes', text: 'Take the tour', onclick: () => { done(); startTour(tourId); } })));
-  document.body.append(card);
+  host().append(card);
   return true;
 }
 
@@ -417,7 +420,7 @@ function contextRef() {
   const under = mouse.x >= 0 ? document.elementFromPoint(mouse.x, mouse.y) : null;
   const a = under && !under.closest('[data-ash-help]') ? (contextTopicAt(under) ?? A.contextOf?.(under) ?? null) : null;
   if (a) return a;
-  const dlgs = [...document.querySelectorAll('[role="dialog"][data-help]')].filter((d) => !d.closest('[data-ash-help]') && visible(d));
+  const dlgs = [...document.querySelectorAll('[role="dialog"][data-help], dialog[open][data-help]')].filter((d) => !d.closest('[data-ash-help]') && visible(d));
   if (dlgs.length) return dlgs[dlgs.length - 1].getAttribute('data-help');
   const f = document.activeElement && contextTopicAt(document.activeElement);
   return f || null;
