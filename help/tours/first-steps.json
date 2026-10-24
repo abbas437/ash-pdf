@@ -1,0 +1,11 @@
+{
+  "id": "first-steps",
+  "title": "First steps",
+  "description": "Open a file, add some text and save it.",
+  "steps": [
+    { "target": "open", "title": "Open a PDF", "text": "Start here: open a PDF file from your computer (Ctrl+O), or drop one on the window.", "placement": "bottom" },
+    { "target": "text", "title": "Choose the Text tool", "text": "Click the Text tool, or press T.", "placement": "bottom", "advanceOn": "event:tool:text" },
+    { "target": "viewer", "title": "Place your text", "text": "Click on the page where the text should go and type. Press Ctrl+Enter to finish.", "placement": "auto" },
+    { "target": "save", "title": "Save", "text": "Save the file to keep your text (Ctrl+S).", "placement": "bottom" }
+  ]
+}

@@ -15,6 +15,7 @@
     "test:e2e": "node -e \"process.exit(require('fs').existsSync('test/e2e/run.mjs')?1:0)\" || node test/e2e/run.mjs",
     "smoke:browser": "node scripts/smoke-browser.mjs",
     "licenses": "node scripts/licenses.js",
+    "help:build": "node scripts/build-help.mjs",
     "predist": "node scripts/vendor.js",
     "dist": "electron-builder --win nsis portable --x64 --publish never"
   },
@@ -46,6 +47,7 @@
     "@xmldom/xmldom": "0.8.15",
     "electron": "^44.6.0",
     "electron-builder": "^26.15.3",
+    "marked": "18.1.1",
     "playwright-core": "^1.63.0"
   },
   "build": {

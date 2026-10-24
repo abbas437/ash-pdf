@@ -11,3 +11,5 @@ test/e2e/out/*-light.png
 test/e2e/out/*-dark.png
 test/e2e/out/redact-applied.png
 .scratch/
+# generated help website (npm run help:build)
+help-site/
