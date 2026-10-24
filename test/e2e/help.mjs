@@ -99,12 +99,23 @@ try {
   await page.click('.ah-home');
   await page.click('.ah-tourbtn[data-tour="first-steps"]');
   await waitFor(() => /^.*· 1 \//.test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), null, 'tour step 1');
+  // Next moves on; then the tour's first event step advances on that app event.
   await page.click('.ah-pop .ah-step-btns .ah-primary');
-  await waitFor(() => /· 2 \//.test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), null, 'tour step 2');
-  const adv = await hev('const st = data.tours.find((t) => t.id === "first-steps").steps[1]; return st.advanceOn;');
-  check(adv?.startsWith('event:'), `step 2 advanceOn is "${adv}", expected an event step`);
+  await waitFor(() => /· 2 \//.test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), null, 'tour step 2 after Next');
+  await page.click('.ah-pop .ah-step-btns button:not(.ah-primary):nth-last-child(2)'); // Back
+  await waitFor(() => /· 1 \//.test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), null, 'tour step 1 after Back');
+  const evIdx = await hev('return data.tours.find((t) => t.id === "first-steps").steps.findIndex((s) => s.advanceOn?.startsWith("event:"));');
+  check(evIdx >= 0, 'first-steps has no event step');
+  for (let i = 0; i < evIdx; i++) {
+    await page.click('.ah-pop .ah-step-btns .ah-primary');
+    await waitFor((n) => new RegExp(`· ${n} /`).test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), i + 2, `tour step ${i + 2}`);
+  }
+  const adv = await hev('return data.tours.find((t) => t.id === "first-steps").steps[arg].advanceOn;', evIdx);
+  await hev('H.helpEvent("not-this-one");');
+  await page.waitForTimeout(300);
+  check(new RegExp(`· ${evIdx + 1} /`).test(await ev('return document.querySelector(".ah-pop .ah-step .ah-step-n")?.textContent ?? "";')), 'an unrelated event advanced the tour');
   await hev('H.helpEvent(arg);', adv.slice(6));
-  await waitFor(() => /· 3 \//.test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), null, `tour to advance on ${adv}`);
+  await waitFor((n) => new RegExp(`· ${n} /`).test(document.querySelector('.ah-pop .ah-step .ah-step-n')?.textContent ?? ''), evIdx + 2, `tour to advance on ${adv}`);
   await page.keyboard.press('Escape');
   await waitFor(() => !document.querySelector('.ah-pop'), null, 'tour to end on Esc');
 
