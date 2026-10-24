@@ -1,0 +1,8 @@
+{
+  "tool:note": { "selector": "[data-tool=\"note\"]", "source": "renderer/ui/tools-markup.js:295" },
+  "tool:callout": { "selector": "[data-tool=\"callout\"]", "source": "renderer/ui/tools-callout.js:329" },
+  "tool:markup": { "selector": "[data-tool=\"markup\"]", "source": "renderer/ui/tools-callout.js:330" },
+  "tool:text-highlight": { "selector": "[data-tool=\"text-highlight\"]", "source": "renderer/ui/tools-markup.js:287" },
+  "tool:highlight": { "selector": "[data-tool=\"highlight\"]", "source": "renderer/ui/tools-shapes.js:149" },
+  "panel:options-bar": { "selector": ".options-bar", "source": "renderer/app.js:54" }
+}
