@@ -1,0 +1,10 @@
+{
+  "menu:File": {
+    "selector": ".menu-wrap:has(> .menu[aria-label=\"File\"]) > .menu-btn",
+    "source": "renderer/app.js:86"
+  },
+  "menu:Tools": {
+    "selector": ".menu-wrap:has(> .menu[aria-label=\"Tools\"]) > .menu-btn",
+    "source": "renderer/app.js:86"
+  }
+}
