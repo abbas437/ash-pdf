@@ -997,37 +997,212 @@ export default {
  ],
  "tours": [
   {
-   "id": "first-steps",
-   "title": "First steps",
-   "description": "Open a file, add some text and save it.",
+   "id": "comment-a-pdf",
+   "title": "Comment on a PDF",
+   "description": "Highlight, add notes and callouts, and review all comments in one list.",
    "steps": [
     {
-     "target": "open",
-     "title": "Open a PDF",
-     "text": "Start here: open a PDF file from your computer (Ctrl+O), or drop one on the window.",
+     "target": "tool:highlight",
+     "title": "Highlight",
+     "text": "Select some text on the page, then press H to highlight it. The Highlight tool here draws a coloured box over an area instead.",
      "placement": "bottom",
      "advanceOn": "next"
     },
     {
-     "target": "text",
+     "target": "tool:note",
+     "title": "Add a sticky note",
+     "text": "Click the Sticky note tool (or press N), then click the page where the note should sit and type your comment.",
+     "placement": "bottom",
+     "advanceOn": "event:tool:note"
+    },
+    {
+     "target": "tool:callout",
+     "title": "Add a callout",
+     "text": "Click the Callout comment tool (or press C). Drag a box on the page, then type your text in it. The callout points at the spot you started from.",
+     "placement": "bottom",
+     "advanceOn": "event:tool:callout"
+    },
+    {
+     "target": "tool:markup",
+     "title": "Markup with a comment",
+     "text": "Click the Markup + comment tool (or press M). Drag a dotted shape around the item you mean, then type your comment beside it.",
+     "placement": "bottom",
+     "advanceOn": "event:tool:markup"
+    },
+    {
+     "target": "panel:comments",
+     "title": "Review all comments",
+     "text": "Open the Comments tab in the sidebar to see every comment in the file. Click one to go to it, or use Reply to answer it.",
+     "placement": "right",
+     "advanceOn": "next"
+    },
+    {
+     "target": "menu:Edit",
+     "title": "Set your author name",
+     "text": "Open the Edit menu and choose Author name… so your comments show who wrote them.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    }
+   ]
+  },
+  {
+   "id": "first-steps",
+   "title": "First steps",
+   "description": "Open a PDF, find your way around, add some text and save it.",
+   "steps": [
+    {
+     "target": "btn:open",
+     "title": "Open a PDF",
+     "text": "Click Open and choose a PDF from your computer (Ctrl+O). You can also drop a file onto the window.",
+     "placement": "bottom",
+     "advanceOn": "event:file:opened"
+    },
+    {
+     "target": "btn:page",
+     "title": "Change page",
+     "text": "Type a page number in this box and press Enter to jump to it. The arrows beside it move one page at a time.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    },
+    {
+     "target": "btn:zoom",
+     "title": "Zoom in or out",
+     "text": "Pick a zoom level from this list, such as Fit width. The minus and plus buttons next to it zoom step by step.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    },
+    {
+     "target": "panel:thumbnails",
+     "title": "See every page",
+     "text": "Open the sidebar and use the Thumbnails tab to see small pictures of all the pages. Click one to go to that page.",
+     "placement": "right",
+     "advanceOn": "next"
+    },
+    {
+     "target": "tool:text",
      "title": "Choose the Text tool",
      "text": "Click the Text tool, or press T.",
      "placement": "bottom",
      "advanceOn": "event:tool:text"
     },
     {
-     "target": "viewer",
-     "title": "Place your text",
-     "text": "Click on the page where the text should go and type. Press Ctrl+Enter to finish.",
+     "target": "panel:viewer",
+     "title": "Type on the page",
+     "text": "Click on the page where the text should go and type something. Press Ctrl+Enter when you have finished.",
      "placement": "auto",
+     "advanceOn": "event:annotation:added"
+    },
+    {
+     "target": "btn:save",
+     "title": "Save your work",
+     "text": "Click Save to keep your text in the file (Ctrl+S).",
+     "placement": "bottom",
+     "advanceOn": "event:file:saved"
+    },
+    {
+     "target": "menu:Help",
+     "title": "Help is always here",
+     "text": "Open the Help menu, or press F1, to read the user guide and start another tour.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    }
+   ]
+  },
+  {
+   "id": "organise-pages",
+   "title": "Organise pages",
+   "description": "Reorder, rotate, insert, delete, extract and merge pages.",
+   "steps": [
+    {
+     "target": "panel:thumbnails",
+     "title": "Select pages",
+     "text": "Open the Thumbnails tab in the sidebar. Click a page to select it. Hold Ctrl to add more pages, or Shift to select a range.",
+     "placement": "right",
      "advanceOn": "next"
     },
     {
-     "target": "save",
-     "title": "Save",
-     "text": "Save the file to keep your text (Ctrl+S).",
+     "target": "panel:thumbnails",
+     "title": "Drag to reorder",
+     "text": "Drag the selected thumbnail or thumbnails up or down the list and drop them where you want them to go.",
+     "placement": "right",
+     "advanceOn": "next"
+    },
+    {
+     "target": "btn:rotr",
+     "title": "Rotate pages",
+     "text": "With pages selected, click Rotate right to turn them 90 degrees clockwise. Rotate left is the button beside it.",
      "placement": "bottom",
      "advanceOn": "next"
+    },
+    {
+     "target": "btn:pages",
+     "title": "Open the Pages menu",
+     "text": "Click Pages. Here you can choose Delete pages…, Insert blank page, Insert from file…, Extract / Split… and Merge files….",
+     "placement": "bottom",
+     "advanceOn": "click"
+    },
+    {
+     "target": "btn:undo",
+     "title": "Undo a mistake",
+     "text": "Click Undo (Ctrl+Z) to reverse the last change, such as a move, a rotation or a deletion.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    },
+    {
+     "target": "btn:save",
+     "title": "Save the result",
+     "text": "Click Save, or use Save as to keep the original file as it was.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    }
+   ]
+  },
+  {
+   "id": "sign-a-pdf",
+   "title": "Sign a PDF",
+   "description": "Add a visual signature to a page. This is a picture of your signature, not a digital certificate.",
+   "steps": [
+    {
+     "target": "btn:sign",
+     "title": "Open the Sign menu",
+     "text": "Click Sign. The menu lists your saved signatures and initials. Open a PDF first if the items are greyed out.",
+     "placement": "bottom",
+     "advanceOn": "click"
+    },
+    {
+     "target": "btn:sign",
+     "title": "Create a signature",
+     "text": "In the Sign menu choose Manage signatures…. Add a new signature by drawing it, typing your name or importing an image, then choose Add to library. You only do this once.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    },
+    {
+     "target": "btn:sign",
+     "title": "Choose a signature to place",
+     "text": "Open the Sign menu again and click the signature you want. The next click on the page will place it.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    },
+    {
+     "target": "panel:viewer",
+     "title": "Place it on the page",
+     "text": "Click where the signature should go. Use the Select tool to move it or drag a corner to resize it. Press Esc to cancel placing.",
+     "placement": "auto",
+     "advanceOn": "event:annotation:added"
+    },
+    {
+     "target": "panel:options-bar",
+     "title": "Apply the signature",
+     "text": "With the signature selected, click Apply signature here (or in the Sign menu). It becomes part of the page and can no longer be moved. Undo reverses it until you close the file.",
+     "placement": "bottom",
+     "advanceOn": "next"
+    },
+    {
+     "target": "btn:save",
+     "title": "Save the file",
+     "text": "Save to keep the signature in the PDF. It is a visual signature only, so it does not prove who signed.",
+     "placement": "bottom",
+     "advanceOn": "event:file:saved"
     }
    ]
   }
