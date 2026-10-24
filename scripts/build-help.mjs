@@ -7,7 +7,7 @@
 //   node scripts/build-help.mjs        (npm run help:build)
 // Topic conventions (see the front-matter / link / callout rules in parseTopic and renderMarkdown).
 import { readFile, writeFile, readdir, mkdir, copyFile, rm } from 'node:fs/promises';
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Marked } from 'marked';
@@ -187,14 +187,14 @@ q.addEventListener('input', () => {
 `;
 
 /** Write the website for compiled help into outDir. */
-export async function writeSite(data, outDir, { appName = 'ASH PDF Studio', imgDir } = {}) {
+export async function writeSite(data, outDir, { appName = productName(), imgDir } = {}) {
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
   const nav = (current) => data.sections.map((s) => `<h3>${escapeHtml(s.title)}</h3><ul>${s.topics.map((id) => `<li><a href="${id}.html"${id === current ? ' aria-current="page"' : ''}>${escapeHtml(data.topics.find((t) => t.id === id).title)}</a></li>`).join('')}</ul>`).join('')
     + (data.tours.length ? `<h3>Guided tours</h3><ul>${data.tours.map((t) => `<li><a href="tour-${t.id}.html"${`tour-${t.id}` === current ? ' aria-current="page"' : ''}>${escapeHtml(t.title)}</a></li>`).join('')}</ul>` : '');
   const home = `<h1>${escapeHtml(appName)} Help</h1>${data.sections.map((s) => `<h2>${escapeHtml(s.title)}</h2><ul>${s.topics.map((id) => `<li><a href="${id}.html">${escapeHtml(data.topics.find((t) => t.id === id).title)}</a></li>`).join('')}</ul>`).join('')}`;
   await writeFile(join(outDir, 'index.html'), page({ title: 'Home', body: home, nav: nav(''), appName }));
-  for (const t of data.topics) await writeFile(join(outDir, `${t.id}.html`), page({ title: t.title, body: `<h1>${escapeHtml(t.title)}</h1>${siteHtml(t.html)}`, nav: nav(t.id), appName }));
+  for (const t of data.topics) await writeFile(join(outDir, `${t.id}.html`), page({ title: t.title, body: `${/^\s*<h1[\s>]/.test(t.html) ? '' : `<h1>${escapeHtml(t.title)}</h1>`}${siteHtml(t.html)}`, nav: nav(t.id), appName }));
   for (const t of data.tours) {
     const body = `<h1>${escapeHtml(t.title)}</h1><p>${escapeHtml(t.description)}</p><p class="help-inapp">In the app: Help ▸ Guided tours</p><ol class="hs-tour">${t.steps.map((s) => `<li><strong>${escapeHtml(s.title)}</strong><br>${escapeHtml(s.text)}</li>`).join('')}</ol>`;
     await writeFile(join(outDir, `tour-${t.id}.html`), page({ title: t.title, body, nav: nav(`tour-${t.id}`), appName }));
@@ -203,6 +203,11 @@ export async function writeSite(data, outDir, { appName = 'ASH PDF Studio', imgD
   await copyFile(join(ROOT, 'renderer', 'help', 'help-search.js'), join(outDir, 'help-search.js'));
   await writeFile(join(outDir, 'site.js'), SITE_JS(data.index, Object.fromEntries(data.topics.map((t) => [t.id, t.title]))));
   if (imgDir) await copyImages(imgDir, join(outDir, 'img'));
+}
+
+/** The app's name from package.json (productName), for the website header. */
+function productName() {
+  try { return JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).productName ?? 'ASH'; } catch { return 'ASH'; }
 }
 
 async function copyImages(from, to) {
