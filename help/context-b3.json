@@ -1,0 +1,14 @@
+{
+  "[data-tool=\"shapes\"]": "shapes-drawing",
+  "[data-tool=\"draw\"]": "shapes-drawing",
+  "[data-tool=\"highlight\"]": "shapes-drawing",
+  "[data-tool=\"stamp\"]": "stamps",
+  "[data-sb-panel=\"comments\"]": "comments-panel",
+  "dialog:Create stamp": "stamps",
+  "dialog:Image stamp": "stamps",
+  "dialog:Rename stamp": "stamps",
+  "dialog:Reply": "comments-panel",
+  "dialog:Delete annotation": "comments-panel",
+  "dialog:Flatten annotations": "flatten-annotations",
+  "dialog:Author name": "author-name"
+}
