@@ -276,5 +276,7 @@ export default {
     "shortcuts"
    ]
   }
- ]
+ ],
+ "targets": {},
+ "context": {}
 };

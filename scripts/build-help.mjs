@@ -55,7 +55,7 @@ export function renderMarkdown(md) {
         const t = title ? ` title="${escapeHtml(title)}"` : '';
         let m;
         if ((m = /^#topic:([a-z0-9-]+)(?:\/([\w-]+))?$/.exec(href))) return `<a href="#topic:${m[1]}${m[2] ? `/${m[2]}` : ''}" data-topic="${m[1]}"${m[2] ? ` data-anchor="${m[2]}"` : ''}${t}>${inner}</a>`;
-        if ((m = /^#showme:([\w-]+)$/.exec(href))) return `<a href="#showme:${m[1]}" class="help-showme" data-showme="${m[1]}" role="button"${t}>${inner}</a>`;
+        if ((m = /^#showme:([\w:.-]+)$/.exec(href))) return `<a href="#showme:${m[1]}" class="help-showme" data-showme="${m[1]}" role="button"${t}>${inner}</a>`;
         if (/^(https?:|mailto:)/i.test(href)) return `<a href="${escapeHtml(href)}" class="help-ext" data-ext="1"${t}>${inner}</a>`;
         if (/^#[\w-]+$/.test(href)) return `<a href="${href}" data-anchor="${href.slice(1)}"${t}>${inner}</a>`;
         throw new Error(`unsupported link "${href}" (use #topic:<id>, #showme:<target>, #<anchor> or http(s)://)`);
@@ -66,10 +66,13 @@ export function renderMarkdown(md) {
       },
       blockquote({ tokens }) {
         const body = this.parser.parse(tokens);
-        const m = /^<p>\[!(\w+)\]\s*/.exec(body);
+        // > [!NOTE] … or the writers' form > **Note:** … (label stripped, used as the title)
+        const m = /^<p>\[!(\w+)\]\s*/.exec(body) ?? /^<p><strong>(\w+):<\/strong>\s*/.exec(body);
         if (m && CALLOUTS[m[1].toUpperCase()]) {
           const kind = m[1].toLowerCase();
-          return `<div class="help-callout help-${kind}" role="note"><p class="help-callout-title">${CALLOUTS[m[1].toUpperCase()]}</p><p>${body.slice(m[0].length)}</div>\n`;
+          const rest = body.slice(m[0].length);
+          const alone = /^<\/p>\s*/.exec(rest); // the label had its own paragraph: the rest is whole blocks
+          return `<div class="help-callout help-${kind}" role="note"><p class="help-callout-title">${CALLOUTS[m[1].toUpperCase()]}</p>${alone ? rest.slice(alone[0].length) : `<p>${rest}`}</div>\n`;
         }
         return `<blockquote>${body}</blockquote>\n`;
       },
@@ -84,7 +87,7 @@ const textOf = (html) => html.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/g, ' ').r
 export function siteHtml(html) {
   return html
     .replace(/<a href="#topic:([a-z0-9-]+)(?:\/([\w-]+))?" data-topic="[^"]*"(?: data-anchor="[^"]*")?/g, (_, id, a) => `<a href="${id}.html${a ? `#${a}` : ''}"`)
-    .replace(/<a href="#showme:[\w-]+" class="help-showme"[^>]*>([\s\S]*?)<\/a>/g, '<span class="help-inapp" title="$1">In the app: Help ▸ Show me</span>')
+    .replace(/<a href="#showme:[\w:.-]+" class="help-showme"[^>]*>([\s\S]*?)<\/a>/g, '<span class="help-inapp" title="$1">In the app: Help ▸ Show me</span>')
     .replace(/ class="help-ext" data-ext="1"/g, ' class="help-ext" target="_blank" rel="noopener"');
 }
 
@@ -99,7 +102,12 @@ function checkTour(t, file) {
   return { id: t.id, title: t.title, description: t.description ?? '', steps: t.steps.map((s) => ({ target: s.target ?? null, title: s.title, text: s.text, placement: s.placement ?? 'auto', advanceOn: s.advanceOn ?? 'next' })) };
 }
 
-/** Read help/ → {sections, topics, tours, index}. Throws on any broken topic, link or tour. */
+/**
+ * Read help/ → {sections, topics, tours, index, targets, context, warnings}. Throws on any broken topic,
+ * link, tour or map entry. targets: help/targets.json + targets-b.json ({showMeId: selector});
+ * context: help/context.json + context-b.json ({selector | "dialog:<Title>": "topic[/anchor]"}).
+ * warnings: images referenced but missing from help/img (the build still succeeds).
+ */
 export async function compileHelp(srcDir = join(ROOT, 'help')) {
   const files = (await readdir(join(srcDir, 'topics'))).filter((f) => f.endsWith('.md')).sort();
   const topics = [];
@@ -121,7 +129,28 @@ export async function compileHelp(srcDir = join(ROOT, 'help')) {
   const tourDir = join(srcDir, 'tours');
   const tours = [];
   for (const f of existsSync(tourDir) ? (await readdir(tourDir)).filter((x) => x.endsWith('.json')).sort() : []) tours.push(checkTour(JSON.parse(await readFile(join(tourDir, f), 'utf8')), f));
-  return { sections, topics, tours, index: topics.map(indexEntry) };
+  const warnings = [];
+  for (const t of topics) for (const [, name] of t.html.matchAll(/<img src="img\/([^"]+)"/g)) if (!existsSync(join(srcDir, 'img', name))) warnings.push(`${t.id}: image img/${name} is missing from help/img`);
+  const targets = await readMaps(srcDir, ['targets.json', 'targets-b.json'], (k, v, f) => {
+    if (typeof v !== 'string' || !v.trim()) throw new Error(`${f}: target "${k}" must map to a CSS selector string`);
+  });
+  const context = await readMaps(srcDir, ['context.json', 'context-b.json'], (k, v, f) => {
+    const id = typeof v === 'string' ? v.split('/')[0] : '';
+    if (!topics.some((o) => o.id === id)) throw new Error(`${f}: "${k}" maps to unknown topic ${v}`);
+  });
+  return { sections, topics, tours, index: topics.map(indexEntry), targets, context, warnings };
+}
+
+/** Merge the {key: value} JSON files that exist in srcDir (later files win); check(key, value, file) throws on a bad entry. */
+export async function readMaps(srcDir, names, check) {
+  const out = {};
+  for (const f of names) {
+    if (!existsSync(join(srcDir, f))) continue;
+    const v = JSON.parse(await readFile(join(srcDir, f), 'utf8'));
+    if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error(`${f}: must be a JSON object`);
+    for (const [k, x] of Object.entries(v)) { check(k, x, f); out[k] = x; }
+  }
+  return out;
 }
 
 const page = ({ title, body, nav, appName }) => `<!doctype html>
@@ -182,7 +211,8 @@ async function copyImages(from, to) {
 
 export async function buildHelp({ srcDir = join(ROOT, 'help'), dataFile = join(ROOT, 'renderer', 'help', 'help-data.js'), siteDir = join(ROOT, 'help-site') } = {}) {
   const data = await compileHelp(srcDir);
-  const out = { sections: data.sections, topics: data.topics.map(({ order: _o, ...t }) => t), tours: data.tours, index: data.index };
+  for (const w of data.warnings) console.warn(`help: warning: ${w}`);
+  const out = { sections: data.sections, topics: data.topics.map(({ order: _o, ...t }) => t), tours: data.tours, index: data.index, targets: data.targets, context: data.context };
   await mkdir(resolve(dataFile, '..'), { recursive: true });
   await writeFile(dataFile, `// Generated by scripts/build-help.mjs from help/ — do not edit; run npm run help:build.\nexport default ${JSON.stringify(out, null, 1)};\n`);
   await copyImages(join(srcDir, 'img'), join(resolve(dataFile, '..'), 'img'));

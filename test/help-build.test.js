@@ -57,6 +57,54 @@ test('callouts, tables, kbd and images render', () => {
   assert.match(html, /<img src="img\/x.png" alt="Alt &quot;q&quot;"/);
 });
 
+test('writer callouts: a blockquote starting **Note:** / **Tip:** / **Important:** / **Warning:** is a callout', () => {
+  for (const [label, kind] of [['Note', 'note'], ['Tip', 'tip'], ['Important', 'important'], ['Warning', 'warning']]) {
+    const html = renderMarkdown(`> **${label}:** Press <kbd>F1</kbd> here.`);
+    assert.match(html, new RegExp(`^<div class="help-callout help-${kind}" role="note"><p class="help-callout-title">${label}</p><p>Press <kbd>F1</kbd> here.</p>\\n</div>`), label);
+    assert.doesNotMatch(html, /<strong>|<blockquote>/, label);
+  }
+  // label alone on the first line, more paragraphs after it
+  assert.match(renderMarkdown('> **Tip:**\n>\n> One.\n>\n> Two.'), /<p class="help-callout-title">Tip<\/p><p>One.<\/p>\n<p>Two.<\/p>\n<\/div>/);
+  // bold text that is not a callout label, or a label later in the quote, stays a blockquote
+  assert.match(renderMarkdown('> **Bold:** quote'), /^<blockquote>/);
+  assert.match(renderMarkdown('> Text **Note:** x'), /^<blockquote>/);
+});
+
+test('compileHelp: missing images warn (build succeeds); targets and context maps are merged and checked', async () => {
+  const dir = await fixture({
+    'topics/a.md': topic('a', 'A', 'S', 1, '![x](img/there.png) ![y](img/gone.png) [Show](#showme:tool:text)'),
+    'targets.json': JSON.stringify({ open: '#btn-open', viewer: '.viewer-host' }),
+    'targets-b.json': JSON.stringify({ viewer: 'main.viewer-host', thumbs: '#sb-tab-thumbs' }),
+    'context.json': JSON.stringify({ '.toolbar': 'a', 'dialog:Print': 'a/sub' }),
+  });
+  try {
+    await mkdir(join(dir, 'img'));
+    await writeFile(join(dir, 'img', 'there.png'), '');
+    const d = await compileHelp(dir);
+    assert.deepEqual(d.warnings, ['a: image img/gone.png is missing from help/img']);
+    assert.deepEqual(d.targets, { open: '#btn-open', viewer: 'main.viewer-host', thumbs: '#sb-tab-thumbs' }, 'targets-b.json wins on a clash');
+    assert.deepEqual(d.context, { '.toolbar': 'a', 'dialog:Print': 'a/sub' });
+    assert.match(d.topics[0].html, /data-showme="tool:text"/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+  const none = await fixture({ 'topics/a.md': topic('a', 'A', 'S', 1, 'x') });
+  try { const d = await compileHelp(none); assert.deepEqual([d.targets, d.context, d.warnings], [{}, {}, []]); } finally { await rm(none, { recursive: true, force: true }); }
+  for (const files of [{ 'context-b.json': JSON.stringify({ '.x': 'nope' }) }, { 'targets.json': JSON.stringify({ open: 3 }) }, { 'targets.json': '[]' }]) {
+    const bad = await fixture({ 'topics/a.md': topic('a', 'A', 'S', 1, 'x'), ...files });
+    try { await assert.rejects(compileHelp(bad)); } finally { await rm(bad, { recursive: true, force: true }); }
+  }
+});
+
+test('buildHelp emits targets and context into help-data.js', async () => {
+  const dir = await fixture({ 'topics/a.md': topic('a', 'A', 'S', 1, 'x'), 'targets.json': '{"open":"#btn-open"}', 'context.json': '{".bar":"a"}' });
+  try {
+    const { buildHelp } = await import('../scripts/build-help.mjs');
+    const dataFile = join(dir, 'out', 'help-data.js');
+    await buildHelp({ srcDir: dir, dataFile, siteDir: join(dir, 'site') });
+    const { default: data } = await import(`file://${dataFile}`);
+    assert.deepEqual([data.targets, data.context], [{ open: '#btn-open' }, { '.bar': 'a' }]);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
 test('website output rewrites topic links to pages and Show-me links to a note', () => {
   const html = renderMarkdown('[A](#topic:a-topic/sub) [B](#topic:b) [Show me](#showme:text) [W](https://ashpmcs.com)');
   const site = siteHtml(html);
