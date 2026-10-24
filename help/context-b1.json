@@ -1,0 +1,10 @@
+{
+  "[data-tool=\"textedit\"]": "edit-text",
+  "[data-tool=\"image\"]": "images",
+  "[data-tool=\"image-edit\"]": "images",
+  "[data-tool=\"whiteout\"]": "redaction",
+  "[data-tool=\"redact\"]": "redaction",
+  "[data-tool=\"forms\"]": "forms",
+  "dialog:Apply redactions": "redaction",
+  "dialog:Flatten form": "forms"
+}
