@@ -1,0 +1,7 @@
+{
+  "tool:textedit": { "selector": "[data-tool=\"textedit\"]", "source": "renderer/ui/textedit.js:142" },
+  "tool:image": { "selector": "[data-tool=\"image\"]", "source": "renderer/ui/tools-stamp.js:545" },
+  "tool:image-edit": { "selector": "[data-tool=\"image-edit\"]", "source": "renderer/ui/imgedit.js:247" },
+  "tool:redact": { "selector": "[data-tool=\"redact\"]", "source": "renderer/ui/tools-shapes.js:151" },
+  "tool:forms": { "selector": "[data-tool=\"forms\"]", "source": "renderer/ui/forms.js:45" }
+}
