@@ -1,0 +1,15 @@
+{
+  "#btn-split": "split-view",
+  "#btn-save": "save-and-print",
+  "#btn-saveas": "save-and-print",
+  "#btn-print": "save-and-print",
+  "#btn-undo": "undo-redo",
+  "#btn-redo": "undo-redo",
+  "dialog:Split view": "split-view",
+  "dialog:Print": "save-and-print",
+  "dialog:Unsaved changes": "save-and-print",
+  "dialog:Read-only document": "save-and-print",
+  "dialog:This document is digitally signed": "save-and-print",
+  "dialog:This document is certified against changes": "save-and-print",
+  "dialog:Preferences": "preferences"
+}
