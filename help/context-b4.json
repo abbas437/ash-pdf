@@ -1,0 +1,10 @@
+{
+  "[data-tool=\"select\"]": "select-group-clipboard",
+  "[data-tb-item=\"sign\"]": "signatures",
+  "dialog:Manage signatures": "signatures",
+  "dialog:New signature": "signatures",
+  "dialog:Signature is locked": "signatures",
+  "dialog:Signature block": "signatures",
+  "dialog:Place on pages": "signatures",
+  "dialog:Apply signature": "signatures"
+}
