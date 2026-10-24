@@ -140,10 +140,11 @@ function render() {
   b.replaceChildren();
   const t = cur.id && topics.get(cur.id);
   if (!t) { renderHome(b); b.scrollTop = 0; return; }
-  b.append(mk('div', { class: 'ah-crumb' }, mk('button', { type: 'button', class: 'ah-link', 'data-nav': 'home', text: 'Contents' }), ` › ${t.section ?? ''}`),
-    mk('h1', { class: 'ah-title', text: t.title }));
+  b.append(mk('div', { class: 'ah-crumb' }, mk('button', { type: 'button', class: 'ah-link', 'data-nav': 'home', text: 'Contents' }), ` › ${t.section ?? ''}`));
   const art = mk('article', { class: 'ah-content help-content' });
   art.innerHTML = t.html; // trusted: compiled from our own help/ sources at build time
+  const h1 = art.querySelector(':scope > h1:first-child');
+  if (h1) h1.classList.add('ah-title'); else b.append(mk('h1', { class: 'ah-title', text: t.title }));
   const base = A.imgBase ?? new URL('./', import.meta.url).href;
   for (const img of art.querySelectorAll('img[src]')) {
     const src = img.getAttribute('src');
