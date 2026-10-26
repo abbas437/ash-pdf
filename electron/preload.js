@@ -7,13 +7,16 @@
 // The surface below is the whole renderer <-> main contract; it is documented in
 // README.md ("Renderer contract: window.api") and mirrored by renderer/shim.js.
 'use strict';
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   isElectron: true,
   version: () => ipcRenderer.invoke('app:version'),
   openFiles: (opts) => ipcRenderer.invoke('dialog:open', opts ?? {}),
   readFile: (path) => ipcRenderer.invoke('file:read', path),
+  // A PDF dropped on the window: its path comes from Electron (webUtils) for a real dropped File only, so the
+  // renderer cannot name an arbitrary path; main grants it like a file chosen in the Open dialog. null if none.
+  openDropped: (file) => { let p = ''; try { p = webUtils.getPathForFile(file); } catch { /* not a file on disk */ } return p ? ipcRenderer.invoke('file:dropped', p) : Promise.resolve(null); },
   saveFile: (opts) => ipcRenderer.invoke('dialog:save', opts ?? {}),
   writeFile: (path, bytes) => ipcRenderer.invoke('file:write', path, bytes),
   // multi-page image export (src/core/imgexport.js)

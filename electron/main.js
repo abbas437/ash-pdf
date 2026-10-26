@@ -613,6 +613,13 @@ function registerIpc() {
     return Promise.all(filePaths.map(describeFile));
   });
 
+  // A PDF dropped on the window (path from webUtils.getPathForFile in the preload): granted like an opened file.
+  handle('file:dropped', async (p) => {
+    if (typeof p !== 'string' || p.length >= 4096 || !isAbsolute(p) || extname(p).toLowerCase() !== '.pdf' || !(await isFile(p))) return null;
+    grant(p);
+    return { path: p, name: basename(p) };
+  });
+
   handle('file:read', async (p) => {
     if (isGranted(p)) return readGranted(p);
     const root = await grantedRoot(p);

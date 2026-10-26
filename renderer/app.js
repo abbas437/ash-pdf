@@ -731,7 +731,12 @@ window.addEventListener('drop', async (e) => {
     return;
   }
   if (v && editable(v.tab)) { await insertDroppedFiles(v.tab, e.dataTransfer?.files, v.at); return; }
-  for (const f of pdfFiles(e.dataTransfer?.files)) await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
+  for (const f of pdfFiles(e.dataTransfer?.files)) {
+    // On the desktop a dropped PDF keeps its path, so Save writes back to it (like a file opened with File ▸ Open).
+    const granted = await api.openDropped?.(f).catch(() => null);
+    if (granted?.path) await openFileObject(granted);
+    else await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
+  }
 });
 window.addEventListener('beforeunload', (e) => { if (state.tabs.some((t) => t.dirty)) { e.preventDefault(); e.returnValue = ''; } });
 

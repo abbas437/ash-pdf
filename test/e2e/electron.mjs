@@ -662,6 +662,24 @@ try {
   await win.keyboard.press('Escape'); // cancels the editor
   await win.keyboard.press('v');
 
+  step = 'a dropped PDF keeps its path (webUtils, granted by main): Save writes back to it';
+  {
+    const dropDoc = await PDFDocument.create();
+    dropDoc.addPage([300, 300]);
+    const dropFile = join(tmp, 'dropped-one.pdf');
+    await writeFile(dropFile, await dropDoc.save());
+    await win.evaluate(() => { const i = Object.assign(document.createElement('input'), { type: 'file', id: 'e2e-drop-input' }); i.style.display = 'none'; document.body.append(i); });
+    await win.setInputFiles('#e2e-drop-input', dropFile);
+    const got = await win.evaluate(async () => window.api.openDropped(document.getElementById('e2e-drop-input').files[0]));
+    expect('openDropped grants the dropped file', JSON.stringify(got), got?.name === 'dropped-one.pdf' && /dropped-one\.pdf$/.test(got.path));
+    expect('a File that is not on disk is refused', 'null', (await win.evaluate(() => window.api.openDropped(new File(['x'], 'fake.pdf')))) === null);
+    await win.evaluate(() => { const f = document.getElementById('e2e-drop-input').files[0]; const dt = new DataTransfer(); dt.items.add(f); document.querySelector('.tabstrip').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); });
+    await win.waitForFunction(() => { const a = window.ashStudio.state; const t = a.tabs.find((x) => x.id === a.activeId); return t?.name === 'dropped-one.pdf'; }, null, { timeout: 15000 });
+    const tabPath = await win.evaluate(() => { const a = window.ashStudio.state; return a.tabs.find((x) => x.id === a.activeId).path; });
+    expect('the dropped tab has the file path', String(tabPath), /dropped-one\.pdf$/.test(String(tabPath)));
+    await win.evaluate(() => document.getElementById('e2e-drop-input').remove());
+  }
+
   step = 'no renderer errors';
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('pdf electron e2e: OK');
