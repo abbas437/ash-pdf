@@ -3,6 +3,18 @@
 A free, open-source (MIT) PDF viewer and editor for Windows, published by
 ASH Technical & Project Management Services (ASH PMCS).
 
+<p>
+  <a href="https://github.com/abbas437/ash-pdf/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/Download-Windows%2010%2F11%20x64-1f4d3a?style=for-the-badge&logo=windows&logoColor=white"></a>
+  <a href="https://github.com/abbas437/ash-pdf/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/abbas437/ash-pdf?style=for-the-badge&label=latest&color=b08d3c"></a>
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/licence-MIT-555555?style=for-the-badge"></a>
+</p>
+
+**[Download the latest version](https://github.com/abbas437/ash-pdf/releases/latest)** (installer or portable .exe, no admin rights needed) ·
+[Download page on ashdesignsuite.com](https://ashdesignsuite.com/studio/#pdf) ·
+[User guide](https://ashdesignsuite.com/help/pdf-studio/)
+
+![ASH PDF Studio with two PDFs open in tabs, page thumbnails on the left and the text-format bar above the page](help/img/interface-tour.png)
+
 ## Features
 
 - **Viewer**: fast rendering (Mozilla pdf.js), tabs, zoom, thumbnails, bookmarks, layers panel (show/hide drawing layers), light theme by default with an optional dark theme.
@@ -58,6 +70,8 @@ npm run dist          # Windows installer + portable exe into dist/ (run on Wind
 `vX.Y.Z` it also creates a GitHub Release with those three files (`gh release create --generate-notes`).
 To release: set `version` in `package.json`, commit, then `git tag v0.1.0 && git push --tags`.
 A second job (`smoke`, Ubuntu) runs `npm ci`, `vendor` and the unit tests.
+After a release, `node scripts/winget-manifest.mjs <version> SHA256SUMS.txt` writes the Windows Package Manager
+manifests to `winget/manifests/`; `winget/README.md` explains how to test and submit them.
 
 ## Project layout
 

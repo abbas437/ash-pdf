@@ -2,7 +2,8 @@
 // Compiles help/ (topics/*.md, tours/*.json, img/) into
 //   renderer/help/help-data.js  ES module {sections, topics, tours, index} for the in-app engine (committed)
 //   renderer/help/img/          the topic images
-//   help-site/                  static website: index.html + <topic-id>.html, search, tours (gitignored)
+//   help-site/                  static website: index.html + <topic-id>.html, search, tours (gitignored);
+//                               help/site.json (optional) adds canonical URLs, meta descriptions, the Download link and sitemap.xml
 // Markdown is turned into HTML here (marked, a devDependency): the app has no Markdown dependency.
 //   node scripts/build-help.mjs        (npm run help:build)
 // Topic conventions (see the front-matter / link / callout rules in parseTopic and renderMarkdown).
@@ -156,14 +157,36 @@ export async function readMaps(srcDir, names, check, map = (x) => x) {
   return out;
 }
 
-const page = ({ title, body, nav, appName }) => `<!doctype html>
+const page = ({ title, body, nav, appName, site = {}, file = '', description = '' }) => {
+  const desc = description || site.description || '';
+  const canonical = site.baseUrl ? site.baseUrl + (file === 'index' ? '' : file) : '';
+  return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${escapeHtml(title)} — ${escapeHtml(appName)} Help</title><link rel="stylesheet" href="site.css"></head>
+<title>${escapeHtml(title)} — ${escapeHtml(appName)} Help</title>${desc ? `<meta name="description" content="${escapeHtml(desc)}">` : ''}${canonical ? `<link rel="canonical" href="${escapeHtml(canonical)}">` : ''}<link rel="stylesheet" href="site.css"></head>
 <body class="help-site"><header class="hs-head"><a class="hs-brand" href="index.html">${escapeHtml(appName)} Help</a>
-<nav class="hs-links"><a href="https://ashdesignsuite.com">ASH Design Suite</a><a href="https://ashpmcs.com">ASH PMCS</a><a class="hs-dl" href="#download">Download</a></nav></header>
+<nav class="hs-links"><a href="https://ashdesignsuite.com">ASH Design Suite</a><a href="https://ashpmcs.com">ASH PMCS</a><a class="hs-dl" href="${escapeHtml(site.downloadUrl || '#download')}">Download</a></nav></header>
 <div class="hs-main"><aside class="hs-side"><input type="search" id="hs-q" placeholder="Search help" aria-label="Search help"><ol id="hs-results" hidden></ol>${nav}</aside>
 <main class="hs-content help-content">${body}</main></div><script type="module" src="site.js"></script></body></html>
 `;
+};
+
+/** A meta description for a topic page: its first real lead paragraph (before the first h2; callouts and Show-me buttons left out), else
+ *  "<title> in <app>: <section headings>"; plain text, cut at a sentence or word end, at most max characters. */
+export function describe(html, { title = '', appName = '', max = 155 } = {}) {
+  const plain = (h) => h.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
+  const body = String(html ?? '').replace(/<div class="help-callout[\s\S]*?<\/div>/g, '').replace(/<a [^>]*class="help-showme"[^>]*>[\s\S]*?<\/a>[^.<]*\.?/g, '');
+  const lead = body.split(/<h2[\s>]/i)[0];
+  let text = [...lead.matchAll(/<p[\s>][\s\S]*?<\/p>/gi)].map((m) => plain(m[0]).replace(/\s+([.,;:])/g, '$1')).find((t) => t.length >= 40 && !t.endsWith(':')) ?? '';
+  if (!text && title) {
+    const heads = [...body.matchAll(/<h2[\s>][\s\S]*?<\/h2>/gi)].map((m) => plain(m[0])).filter(Boolean).map((h) => (/^[A-Z][a-z]+\b/.test(h) && !/^(Ctrl|Esc|Enter|Space|Del|Shift|Alt|Tab|Windows|Word|Excel)\b/.test(h) ? h[0].toLowerCase() + h.slice(1) : h));
+    text = `${title}${appName ? ` in ${appName}` : ''}${heads.length ? `: ${heads.join(', ')}` : ''}.`;
+  }
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const stop = cut.lastIndexOf('. ');
+  if (stop > max * 0.5) return cut.slice(0, stop + 1);
+  return cut.slice(0, cut.lastIndexOf(' ')).replace(/[,;:]$/, '') + '…';
+}
 
 const SITE_CSS = `body{margin:0;font:15px/1.55 system-ui,Segoe UI,sans-serif;background:#f6f2e8;color:#1f2a24}a{color:#1f4d3a}
 .hs-head{display:flex;align-items:center;gap:24px;padding:12px 24px;background:#1f4d3a;color:#f6f2e8;border-bottom:3px solid #b08d3c}
@@ -187,17 +210,21 @@ q.addEventListener('input', () => {
 `;
 
 /** Write the website for compiled help into outDir. */
-export async function writeSite(data, outDir, { appName = productName(), imgDir } = {}) {
+export async function writeSite(data, outDir, { appName = productName(), imgDir, site = {} } = {}) {
   await rm(outDir, { recursive: true, force: true });
   await mkdir(outDir, { recursive: true });
   const nav = (current) => data.sections.map((s) => `<h3>${escapeHtml(s.title)}</h3><ul>${s.topics.map((id) => `<li><a href="${id}.html"${id === current ? ' aria-current="page"' : ''}>${escapeHtml(data.topics.find((t) => t.id === id).title)}</a></li>`).join('')}</ul>`).join('')
     + (data.tours.length ? `<h3>Guided tours</h3><ul>${data.tours.map((t) => `<li><a href="tour-${t.id}.html"${`tour-${t.id}` === current ? ' aria-current="page"' : ''}>${escapeHtml(t.title)}</a></li>`).join('')}</ul>` : '');
   const home = `<h1>${escapeHtml(appName)} Help</h1>${data.sections.map((s) => `<h2>${escapeHtml(s.title)}</h2><ul>${s.topics.map((id) => `<li><a href="${id}.html">${escapeHtml(data.topics.find((t) => t.id === id).title)}</a></li>`).join('')}</ul>`).join('')}`;
-  await writeFile(join(outDir, 'index.html'), page({ title: 'Home', body: home, nav: nav(''), appName }));
-  for (const t of data.topics) await writeFile(join(outDir, `${t.id}.html`), page({ title: t.title, body: `${/^\s*<h1[\s>]/.test(t.html) ? '' : `<h1>${escapeHtml(t.title)}</h1>`}${siteHtml(t.html)}`, nav: nav(t.id), appName }));
+  await writeFile(join(outDir, 'index.html'), page({ title: site.homeTitle || 'Home', body: home, nav: nav(''), appName, site, file: 'index' }));
+  for (const t of data.topics) await writeFile(join(outDir, `${t.id}.html`), page({ title: t.title, body: `${/^\s*<h1[\s>]/.test(t.html) ? '' : `<h1>${escapeHtml(t.title)}</h1>`}${siteHtml(t.html)}`, nav: nav(t.id), appName, site, file: t.id, description: describe(t.html, { title: t.title, appName }) }));
   for (const t of data.tours) {
     const body = `<h1>${escapeHtml(t.title)}</h1><p>${escapeHtml(t.description)}</p><p class="help-inapp">In the app: Help ▸ Guided tours</p><ol class="hs-tour">${t.steps.map((s) => `<li><strong>${escapeHtml(s.title)}</strong><br>${escapeHtml(s.text)}</li>`).join('')}</ol>`;
-    await writeFile(join(outDir, `tour-${t.id}.html`), page({ title: t.title, body, nav: nav(`tour-${t.id}`), appName }));
+    await writeFile(join(outDir, `tour-${t.id}.html`), page({ title: t.title, body, nav: nav(`tour-${t.id}`), appName, site, file: `tour-${t.id}`, description: t.description }));
+  }
+  if (site.baseUrl) {
+    const urls = ['', ...data.topics.map((t) => t.id), ...data.tours.map((t) => `tour-${t.id}`)].map((f) => `  <url><loc>${escapeHtml(site.baseUrl + f)}</loc></url>`);
+    await writeFile(join(outDir, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`);
   }
   await writeFile(join(outDir, 'site.css'), SITE_CSS);
   await copyFile(join(ROOT, 'renderer', 'help', 'help-search.js'), join(outDir, 'help-search.js'));
@@ -224,7 +251,10 @@ export async function buildHelp({ srcDir = join(ROOT, 'help'), dataFile = join(R
   await mkdir(resolve(dataFile, '..'), { recursive: true });
   await writeFile(dataFile, `// Generated by scripts/build-help.mjs from help/ — do not edit; run npm run help:build.\nexport default ${JSON.stringify(out, null, 1)};\n`);
   await copyImages(join(srcDir, 'img'), join(resolve(dataFile, '..'), 'img'));
-  await writeSite(out, siteDir, { imgDir: join(srcDir, 'img') });
+  // help/site.json (optional): { baseUrl, downloadUrl, description, homeTitle } for the website copy (canonical, meta, sitemap).
+  const site = existsSync(join(srcDir, 'site.json')) ? JSON.parse(await readFile(join(srcDir, 'site.json'), 'utf8')) : {};
+  if (site.baseUrl && !/^https:\/\/[^\s]+\/$/.test(site.baseUrl)) throw new Error('help/site.json: baseUrl must be an https URL ending in /');
+  await writeSite(out, siteDir, { imgDir: join(srcDir, 'img'), site });
   return out;
 }
 

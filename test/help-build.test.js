@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { compileHelp, parseTopic, renderMarkdown, siteHtml, writeSite, escapeHtml } from '../scripts/build-help.mjs';
+import { compileHelp, parseTopic, renderMarkdown, siteHtml, writeSite, escapeHtml, describe } from '../scripts/build-help.mjs';
 import { indexEntry, searchHelp } from '../renderer/help/help-search.js';
 
 const topic = (id, title, section, order, body, keywords = '') => `---\nid: ${id}\ntitle: ${title}\nsection: ${section}\norder: ${order}\nkeywords: ${keywords}\n---\n${body}\n`;
@@ -129,6 +129,41 @@ test('front-matter values are escaped in the website pages', async () => {
     assert.match(page, /href="#download"/);
     assert.equal(escapeHtml(`a"'<>&`), 'a&quot;&#39;&lt;&gt;&amp;');
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('help/site.json gives the website pages a description, canonical, download link and sitemap', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'help-site-'));
+  try {
+    const data = { sections: [{ id: 's', title: 'S', topics: ['x'] }], topics: [{ id: 'x', title: 'X', html: '<h1>X</h1><p>First <strong>para</strong> &amp; more, long enough for a lead.</p><p>Second.</p>' }],
+      tours: [{ id: 't', title: 'T', description: 'Tour "one"', steps: [] }], index: [] };
+    const site = { baseUrl: 'https://example.com/help/app/', downloadUrl: 'https://example.com/studio/#app', homeTitle: 'User guide', description: 'Home description' };
+    await writeSite(data, dir, { site });
+    const [home, x, tour, map] = await Promise.all(['index.html', 'x.html', 'tour-t.html', 'sitemap.xml'].map((f) => readFile(join(dir, f), 'utf8')));
+    assert.match(home, /<title>User guide — /);
+    assert.match(home, /<meta name="description" content="Home description">/);
+    assert.match(home, /<link rel="canonical" href="https:\/\/example.com\/help\/app\/">/);
+    assert.match(x, /<meta name="description" content="First para &amp; more, long enough for a lead.">/);
+    assert.match(x, /<link rel="canonical" href="https:\/\/example.com\/help\/app\/x">/);
+    assert.match(x, /class="hs-dl" href="https:\/\/example.com\/studio\/#app"/);
+    assert.match(tour, /<meta name="description" content="Tour &quot;one&quot;">/);
+    assert.match(map, /<loc>https:\/\/example.com\/help\/app\/<\/loc>[\s\S]*<loc>https:\/\/example.com\/help\/app\/x<\/loc>[\s\S]*<loc>https:\/\/example.com\/help\/app\/tour-t<\/loc>/);
+  } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+test('describe uses the first real paragraph, cut at a sentence or word end, else the title and headings', () => {
+  assert.equal(describe('<p>Short but long enough to be a real lead paragraph.</p>'), 'Short but long enough to be a real lead paragraph.');
+  const long = `<p>${'One two three four five six seven eight nine ten. '.repeat(3)}${'word '.repeat(40)}</p>`;
+  assert.equal(describe(long), 'One two three four five six seven eight nine ten. '.repeat(3).trim());
+  const words = describe(`<p>${'alpha beta, '.repeat(30)}</p>`);
+  assert.ok(words.length <= 156 && words.endsWith('…') && !/,…$/.test(words), words);
+  const callout = '<div class="help-callout help-tip" role="note"><p class="help-callout-title">Tip</p><p>A tip that is long enough to be picked by mistake.</p></div>';
+  const showme = '<p><a href="#showme:x" class="help-showme" data-showme="x" role="button">Show me the Hatch button</a></p>';
+  assert.equal(describe(`${callout}${showme}<p>Other ways to open:</p><p>The real lead paragraph of this topic, &amp; more.</p>`), 'The real lead paragraph of this topic, & more.');
+  assert.equal(describe('<h1>M</h1><h2>Merge PDFs</h2><ol><li>x</li></ol><h2>Split a PDF</h2>', { title: 'Merge and split', appName: 'App' }), 'Merge and split in App: merge PDFs, split a PDF.');
+  assert.equal(describe('<p>Each open drawing has a tab above the drawing area. <a href="#showme:t" class="help-showme" data-showme="t" role="button">Show me</a> the tab bar.</p>'), 'Each open drawing has a tab above the drawing area.');
+  assert.equal(describe('<h1>T</h1><h2>Steps</h2><p>A paragraph deep in the topic, not its lead paragraph.</p>', { title: 'T', appName: 'App' }), 'T in App: steps.');
+  assert.equal(describe('<h2>PAN</h2><h2>Ctrl keys</h2><h2>Wheel speed</h2>', { title: 'Zoom', appName: 'App' }), 'Zoom in App: PAN, Ctrl keys, wheel speed.');
+  assert.equal(describe('<ul><li>no paragraph</li></ul>'), '');
 });
 
 test('searchHelp ranks title over keyword over body text', () => {
