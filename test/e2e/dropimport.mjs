@@ -80,6 +80,11 @@ try {
   const png = (name) => ({ name, data: b64(PNG), type: 'image/png' });
 
   step = 'boot';
+  // The browser shim freezes window.api; keep a writable copy so the test can stub openFiles / officeHtmlToPdf.
+  await page.addInitScript(() => {
+    let api;
+    Object.defineProperty(window, 'api', { configurable: true, get: () => api, set: (v) => { api = { ...v }; } });
+  });
   await page.goto(`${base}/renderer/index.html`, { waitUntil: 'load' });
   await page.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 10_000 });
   await ev('await app.openBytes({ name: "a.pdf", bytes: Uint8Array.from(atob(arg), (c) => c.charCodeAt(0)) });', b64(three));
@@ -87,9 +92,10 @@ try {
 
   step = 'a PNG dropped on page 2 is placed there';
   let p = await pagePoint(1, 0.4);
+  let at = await toPage(p); // the page point under the pointer at drop time
   eq(await fileDrag({ ...p, files: [png('dot.png')] }), 'Place picture on page 2', 'hint over page 2');
   await page.waitForFunction(() => window.ashStudio.annotations.list(window.ashStudio.state.tabs[0]).length === 1, null, { timeout: 5000 });
-  let at = await toPage(p), objs = await images();
+  let objs = await images();
   eq(objs.map((o) => [o.page, o.mime]), [[1, 'image/png']], 'one image on page index 1');
   near(objs[0].cx, at.x, 'centred x'); near(objs[0].cy, at.y, 'centred y');
   eq(await ev('return tab.numPages;'), 3, 'no page added');
