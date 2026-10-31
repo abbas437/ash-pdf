@@ -16,6 +16,7 @@ import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsav
 import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan } from './pagehistory-lib.js';
 import { unitFactor, rectToMargins, marginsToRect, pickPages, cropBoxFor, sizesDiffer, inkBox, inkMargins, overlayBoxes } from './crop-lib.js';
 import { startCropDraw } from './crop-draw.js';
+import { IMAGE_EXTS, DOC_EXTS, fileKind } from './image-import-lib.js';
 
 const core = () => import('../../src/core/pdfOps.js');
 const UNDO_CAP = 20;
@@ -237,6 +238,53 @@ export async function insertSources(tab, sources, at) {
     const from = sources.length === 1 ? sources[0].name : `${sources.length} files`;
     return { bytes: out, map: shiftMap(n, start, count), select: range(count, start), note: `Inserted ${count} page${count === 1 ? '' : 's'} from ${from}` };
   });
+}
+
+// ---------------------------------------------------------------- pictures and documents as pages
+/** Images in a new PDF (one per page): pageSize 'fit' (page = image) or [w, h] (18 pt margins, orientation follows the image). */
+export async function imagesAsPdf(list, pageSize = 'fit') {
+  const { toPlaceable } = await import('./image-import.js');
+  const imgs = [];
+  for (const f of list) { const p = await toPlaceable(f.bytes, f.name); imgs.push({ bytes: p.bytes, type: p.mime === 'image/png' ? 'png' : 'jpg' }); }
+  return (await core()).imagesToPdf(imgs, { pageSize, margin: pageSize === 'fit' ? 0 : 18 });
+}
+const pageSizeOf = (tab, i) => { const P = app.viewer?.pageSize?.(tab, Math.max(0, Math.min(i, tab.numPages - 1))); return P ? [P.width, P.height] : 'A4'; };
+/**
+ * Files [{name, bytes}] (PDF, images, .docx/.xlsx/.txt/.md) -> insertSources sources, in order; images become pages
+ * of `pageSize`, documents are converted (office.js documentToPdf). Unsupported files are listed in one toast;
+ * a failed conversion shows the Office dialog's error (documents) or a toast (images) and drops that file.
+ */
+export async function fileSources(files, pageSize) {
+  const sources = [], skipped = [];
+  for (const f of files) {
+    const kind = fileKind(f);
+    try {
+      if (kind === 'pdf') sources.push(f);
+      else if (kind === 'image') sources.push({ name: f.name, bytes: await imagesAsPdf([f], pageSize) });
+      else if (kind === 'doc') sources.push({ name: f.name, bytes: await (await import('./office.js')).documentToPdf(f.name, f.bytes) });
+      else skipped.push(f.name);
+    } catch (e) {
+      if (kind === 'doc') showError('Could not create the PDF', { message: (await import('./office.js')).officeMessage(e) }); else toast(e.message);
+    }
+  }
+  if (skipped.length) toast(`Not inserted: ${skipped.map((n) => `${n} (unsupported type)`).join(', ')}`);
+  return sources;
+}
+/** Insert files of any supported kind before page `at` of `tab`, as one undo step (images sized like the page there). */
+export async function insertFiles(tab, files, at) {
+  if (!editable(tab)) return false;
+  const sources = await fileSources(files, pageSizeOf(tab, at));
+  return sources.length ? insertSources(tab, sources, at) : false;
+}
+export const INSERT_EXTS = ['pdf', ...IMAGE_EXTS, ...DOC_EXTS];
+/** Pages ▸ Insert from file…: pick files, insert them in order after the last selected page (or the current page). */
+export async function insertFromFile(tab = activeTab()) {
+  if (!editable(tab)) return false;
+  const picked = await window.api.openFiles({ filters: [{ name: 'PDF, images, Word, Excel or text', extensions: INSERT_EXTS }], multiple: true });
+  if (!picked?.length) return false;
+  const files = await Promise.all(picked.map(async (f) => ({ name: f.name ?? String(f.path).split(/[\\/]/).pop(), bytes: f.bytes instanceof Uint8Array ? f.bytes : await window.api.readFile(f.path) })));
+  const sel = selectionOf(tab);
+  return insertFiles(tab, files, sel[sel.length - 1] + 1);
 }
 
 export function reorder(tab, order) {
@@ -862,12 +910,13 @@ export async function imagesDialog() {
   const err = errEl();
   const add = h('button.btn', { type: 'button', id: 'pt-img-add' }, 'Add images…');
   add.addEventListener('click', () => {
-    window.api.openFiles({ filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }], multiple: true }).then(async (files) => {
+    window.api.openFiles({ filters: [{ name: 'Images', extensions: IMAGE_EXTS }], multiple: true }).then(async (files) => {
+      const { toPlaceable } = await import('./image-import.js');
       for (const f of files ?? []) {
         const name = f.name ?? String(f.path).split(/[\\/]/).pop();
-        const ext = name.split('.').pop().toLowerCase();
-        if (!['png', 'jpg', 'jpeg'].includes(ext)) { setErr(err, `"${name}" is not a PNG or JPG image.`); continue; }
-        imgs.push({ name, type: ext === 'png' ? 'png' : 'jpg', bytes: f.bytes instanceof Uint8Array ? f.bytes : await window.api.readFile(f.path) });
+        let p; // GIF, WebP, BMP and SVG become PNG here
+        try { p = await toPlaceable(f.bytes instanceof Uint8Array ? f.bytes : await window.api.readFile(f.path), name); } catch (e) { setErr(err, e.message); continue; }
+        imgs.push({ name, type: p.mime === 'image/png' ? 'png' : 'jpg', bytes: p.bytes });
       }
       list.render();
     }).catch((e) => setErr(err, e.message));
@@ -879,7 +928,7 @@ export async function imagesDialog() {
     h('label.ocr-check', {}, searchable, h('span', {}, 'Make searchable (recognize text, English)')), err);
   const v = await showDialog({
     title: 'Images to PDF', body: form, className: 'pt-dialog', initialFocus: '#pt-img-add',
-    buttons: [CANCEL, { label: 'Create PDF', value: 'ok', primary: true, validate: () => (imgs.length ? setErr(err, null) : setErr(err, 'Add at least one PNG or JPG image.', add)) }],
+    buttons: [CANCEL, { label: 'Create PDF', value: 'ok', primary: true, validate: () => (imgs.length ? setErr(err, null) : setErr(err, 'Add at least one image (PNG, JPEG, GIF, WebP, BMP or SVG).', add)) }],
   });
   if (v !== 'ok') return;
   try {
@@ -1169,6 +1218,7 @@ export function initPageTools(appApi) {
   M('Edit', { id: 'annots-author', label: 'Author name…', action: () => authorDialog() });
   M('Tools', { separator: true });
   item('Tools', { id: 'insert-pages', label: 'Insert pages from PDF…', action: withTab(insertFromDialog) });
+  item('Tools', { id: 'insert-from-file', label: 'Insert from file…', action: withTab(insertFromFile) });
   item('Tools', { id: 'replace-pages', label: 'Replace pages…', action: withTab(replaceDialog) });
   item('Tools', { id: 'interleave-pages', label: 'Interleave pages from PDF…', action: withTab(interleaveDialog) });
   item('Tools', { id: 'reverse-pages', label: 'Reverse page order…', action: withTab(reverseDialog) }, (t) => t.numPages > 1);
@@ -1179,5 +1229,5 @@ export function initPageTools(appApi) {
   item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
   item('Document', { id: 'apply-redactions', label: 'Apply redactions…', action: withTab((t) => import('./redact.js').then((m) => m.applyRedactionsDialog(t))) },
     (t) => !!t.objects?.some((o) => o.type === 'redactMark'));
-  app.pageTools = { runOp, insertSources, undo, redo, undoAny, redoAny, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
+  app.pageTools = { runOp, insertSources, insertFiles, insertFromFile, imagesAsPdf, undo, redo, undoAny, redoAny, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
 }

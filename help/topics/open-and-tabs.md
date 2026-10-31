@@ -12,7 +12,7 @@ keywords: open, drag, drop, recent, tabs, new window, close, reorder, encrypted
 
 Other ways to open:
 
-- **Drag and drop**: drop PDF files on the start screen or on the tab bar to open them as new tabs. Only PDF files can be opened.
+- **Drag and drop**: drop PDF files on the start screen or on the tab bar to open them as new tabs. Pictures dropped there open as a new PDF (one page per picture); Word, Excel and text files are converted and opened (desktop app). Other files are skipped with a message.
 - **File ▸ Recent files…** reopens a file you used recently.
 - **File ▸ New window** (<kbd>Ctrl</kbd>+<kbd>N</kbd>) opens an empty window; **File ▸ Open in new window…** opens a file in a new window.
 

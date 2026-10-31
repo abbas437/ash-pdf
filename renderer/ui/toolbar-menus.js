@@ -20,7 +20,7 @@ export function initToolbarMenus(app) {
       { separator: true },
       { id: 'delete-pages', label: 'Delete pages…', enabled: editable, action: on((t) => P.deletePages(t, selectionOf(t))) },
       { id: 'insert-blank', label: 'Insert blank page', enabled: editable, action: on((t) => { const s = selectionOf(t); P.insertBlank(t, s[s.length - 1] + 1); }) },
-      { id: 'insert-file', label: 'Insert from file…', enabled: editable, action: on(P.insertFromDialog) },
+      { id: 'insert-file', label: 'Insert from file…', enabled: editable, action: on(P.insertFromFile) },
       { separator: true },
       { id: 'extract-split', label: 'Extract / Split…', enabled: editable, action: on(P.splitDialog) },
       { id: 'merge', label: 'Merge files…', enabled: editable, action: on(P.mergeDialog) },

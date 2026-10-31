@@ -16,6 +16,7 @@ import { flattenedCopy } from './viewextras.js';
 import { encodeImage } from './exports.js';
 import { pdfToDocx } from './docx-export.js';
 import { docxToHtml, sheetsToHtml } from './office-html.js';
+import { textToHtml } from './image-import-lib.js';
 
 const UNAVAILABLE = 'Requires Microsoft Office on Windows';
 let status = { available: false, reason: UNAVAILABLE };
@@ -139,20 +140,29 @@ export async function officeToPdf(app) {
 const BUILTIN_NOTE = 'The built-in engine converts Word documents (.docx: headings, paragraphs, lists, tables and images) '
   + 'and Excel workbooks (.xlsx: every sheet as a table). Older .xls, PowerPoint (.pptx) and .doc files need Microsoft Office.';
 
+/**
+ * Built-in conversion of a document file to PDF bytes: .docx / .xlsx (office-html.js) and .txt / .md as plain
+ * text (image-import-lib.js), printed by main (window.api.officeHtmlToPdf; the browser build throws).
+ */
+export async function documentToPdf(name, bytes) {
+  const ext = /\.(docx|xlsx|txt|md)$/i.exec(name)?.[1].toLowerCase();
+  if (!ext) throw new Error('The built-in engine converts .docx, .xlsx, .txt and .md files; other Office files need Microsoft Office');
+  const base = name.replace(/\.[^.]+$/, '');
+  let out;
+  if (ext === 'docx') out = await docxToHtml(bytes, (await import('mammoth')).default, base);
+  else if (ext === 'xlsx') out = sheetsToHtml(await (await import('read-excel-file')).default(new Blob([bytes])), base);
+  else out = { html: textToHtml(new TextDecoder().decode(bytes), base), landscape: false };
+  return window.api.officeHtmlToPdf({ html: out.html, landscape: out.landscape });
+}
+
 /** Built-in Office -> PDF: pick a .docx or .xlsx, convert it here, print it in main -> the new tab, or null. */
 export async function builtinOfficeToPdf(app) {
   const [file] = await window.api.openFiles({ filters: [{ name: 'Word or Excel', extensions: ['docx', 'xlsx'] }] });
   if (!file) return null;
-  const base = file.name.replace(/\.[^.]+$/, '');
   try {
-    const ext = /\.(docx|xlsx)$/i.exec(file.name)?.[1].toLowerCase();
-    if (!ext) throw new Error('The built-in engine converts .docx and .xlsx files; other Office files need Microsoft Office');
-    let out;
-    if (ext === 'docx') out = await docxToHtml(file.bytes, (await import('mammoth')).default, base);
-    else out = sheetsToHtml(await (await import('read-excel-file')).default(new Blob([file.bytes])), base);
-    const { html, landscape } = out;
-    const bytes = await window.api.officeHtmlToPdf({ html, landscape });
-    return await app.openBytes({ name: `${base}.pdf`, path: null, bytes });
+    if (!/\.(docx|xlsx)$/i.test(file.name)) throw new Error('The built-in engine converts .docx and .xlsx files; other Office files need Microsoft Office');
+    const bytes = await documentToPdf(file.name, file.bytes);
+    return await app.openBytes({ name: `${file.name.replace(/\.[^.]+$/, '')}.pdf`, path: null, bytes });
   } catch (err) { showError('Could not create the PDF', { message: officeMessage(err) }); return null; }
 }
 
