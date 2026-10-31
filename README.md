@@ -40,7 +40,7 @@ Each release has two files (x64):
 
 `SHA256SUMS.txt` lists the checksums: `Get-FileHash .\ASH-PDF-Studio-Setup-0.1.0.exe` in PowerShell must match.
 
-**Unsigned executables.** The .exe files are not code-signed yet (that needs a paid certificate).
+**Unsigned executables.** The .exe files are not code-signed yet (see [Code signing policy](#code-signing-policy)).
 Windows SmartScreen will show "Windows protected your PC" on first run: click *More info* > *Run anyway*
 only if you downloaded the file from this project's GitHub Releases page and the checksum matches.
 
@@ -165,6 +165,22 @@ point at the real buttons). The same guide is published on https://ashdesignsuit
 - Encrypted PDFs: password-protected files can be viewed after entering the password; editing and saving encrypted files is limited.
 - PDF JavaScript is not run, and XFA forms are not supported.
 - Windows x64 only for now.
+
+## Code signing policy
+
+Releases are **not code-signed yet** (see the install notes above). We are applying for the free code signing
+that SignPath Foundation offers open-source projects. Once it is granted, Windows releases will be signed with
+free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
+[SignPath Foundation](https://signpath.org/), and this section will say so.
+
+- **What gets signed:** only the installer and portable files built by this repository's GitHub Actions workflow
+  (`.github/workflows/build.yml`) from the tagged source. Nothing built elsewhere is signed.
+- **Team roles:** committers and reviewers: the repository owner, [abbas437](https://github.com/abbas437)
+  (Ahmad Abbas, ASH PMCS); code changes are prepared with an AI coding assistant working in this repository
+  and every change is tested by the CI build. Approver for each signed release: Ahmad Abbas.
+- **Privacy:** ASH PDF Studio makes no network connections of its own: no telemetry, no update check, no account.
+  Your files stay on your computer. The only connections are web links you click (help pages, project pages),
+  which open in your default browser.
 
 ## Licence
 
