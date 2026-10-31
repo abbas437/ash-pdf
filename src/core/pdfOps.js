@@ -10,10 +10,14 @@ import {
   PRODUCER,
 } from './internal.js';
 
-const PAGE_SIZES = {
-  A4: [595.28, 841.89],
-  Letter: [612, 792],
-};
+/** Portrait [width, height] in points. */
+export const PAGE_SIZES = Object.freeze({
+  A4: Object.freeze([595.28, 841.89]),
+  A3: Object.freeze([841.89, 1190.55]),
+  A5: Object.freeze([419.53, 595.28]),
+  Letter: Object.freeze([612, 792]),
+  Legal: Object.freeze([612, 1008]),
+});
 
 /**
  * Parse a 1-based page range string ("1-3,5,8-", "-4") into sorted unique
@@ -364,6 +368,20 @@ export async function setMetadata(bytes, meta = {}) {
   if (creator !== undefined) doc.setCreator(String(creator));
   doc.setProducer(String(producer));
   return saveEdited(doc);
+}
+
+/**
+ * New PDF of `pages` blank pages, width x height points each (72..14400 pt = 1..200 in,
+ * the range PDF viewers accept for a user-space page).
+ */
+export async function createBlankPdf({ width, height, pages = 1 } = {}) {
+  for (const [k, v] of [['width', width], ['height', height]]) {
+    if (!Number.isFinite(v) || v < 72 || v > 14400) throw new RangeError(`${k} must be 72..14400 pt`);
+  }
+  if (!Number.isInteger(pages) || pages < 1 || pages > 500) throw new RangeError('pages must be an integer 1..500');
+  const doc = await createPdf();
+  for (let i = 0; i < pages; i++) doc.addPage([width, height]);
+  return doc.save();
 }
 
 /**
