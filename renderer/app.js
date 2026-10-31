@@ -20,14 +20,15 @@ import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
 import { initTextTools } from './ui/tools-text.js';
 import { initCalloutTools } from './ui/tools-callout.js';
-import { initStampTools } from './ui/tools-stamp.js';
+import { initStampTools, placeImages } from './ui/tools-stamp.js';
+import { fileKind } from './ui/image-import-lib.js';
 import { initImageEdit } from './ui/imgedit.js';
 import { initMarkupTools } from './ui/tools-markup.js';
 import { initComments } from './ui/comments.js';
 import { initSignatures } from './ui/signatures.js';
 import { initSign } from './ui/sign.js';
 import { initForms } from './ui/forms.js';
-import { initPageTools, idle as pageOpsIdle, rotate as rotatePages, selectionOf, editable, insertSources, pageDrag, endDrag as endPageDrag } from './ui/pagetools.js';
+import { initPageTools, idle as pageOpsIdle, rotate as rotatePages, selectionOf, editable, insertSources, insertFiles, fileSources, imagesAsPdf, pageDrag, endDrag as endPageDrag } from './ui/pagetools.js';
 import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
 import { initViewExtras, initViewExtrasMenus, printDialog } from './ui/viewextras.js';
@@ -624,9 +625,14 @@ for (const type of ['pointerdown', 'pointermove', 'pointerup']) {
 bus.on('tool:changed', ({ tool }) => { viewerHost.style.cursor = getTool(tool)?.cursor ?? ''; });
 
 // ---------------------------------------------------------------- drag & drop, launch files
-// PDF files dropped on the page view of an editable document are inserted there (before the page under
-// the pointer in its upper half, after it in its lower half); dropped on the tab strip, on the welcome
-// screen or on a read-only document they open as new tabs. Page thumbnails dragged onto another tab's
+// Files dropped on the page view of an editable document: PDFs and documents (.docx, .xlsx, .txt, .md,
+// converted by office.js documentToPdf) are inserted as pages at the line (before the page under the
+// pointer in its upper half, after it in its lower half); pictures (PNG, JPEG, GIF, WebP, BMP, SVG) are
+// placed ON the page at the drop point (one undo step, each next one 16 pt down-right), or with Shift
+// inserted as pages at the line. A mixed drop places its pictures first, then inserts the rest as pages
+// in the order dropped. Dropped on the tab strip, on the welcome screen or on a read-only document,
+// PDFs open as tabs, documents open as `<name>.pdf` and the pictures together as one new PDF (a page
+// per picture, fitted). Other files are skipped with one "Not inserted: …" toast. Page thumbnails dragged onto another tab's
 // header switch to it after a short hover; dropped on its pages (or its thumbnails, see pagetools.js)
 // they are copied there, dropped on the header they are appended. Esc cancels (the browser ends the drag).
 const dropLine = h('div.drop-insert-line', { hidden: true, 'aria-hidden': 'true' });
@@ -649,11 +655,9 @@ function clearDrop() {
 }
 const hasFiles = (e) => !!e.dataTransfer?.types?.includes('Files');
 const tabById = (id) => state.tabs.find((t) => t.id === id) ?? null;
-const pdfFiles = (list) => {
-  const all = [...(list ?? [])], pdfs = all.filter((f) => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
-  if (!pdfs.length && all.length) toast('Only PDF files can be opened');
-  return pdfs;
-};
+const pdfFiles = (list) => [...(list ?? [])].filter((f) => fileKind(f) === 'pdf');
+const imageFiles = (list) => [...(list ?? [])].filter((f) => fileKind(f) === 'image');
+const readFiles = (list) => Promise.all(list.map(async (f) => ({ name: f.name, type: f.type, bytes: new Uint8Array(await f.arrayBuffer()) })));
 /** Where a drop at the pointer inserts into the page view under it: {tab, at, line} or null. */
 function viewDropAt(e) {
   const sc = e.target.closest?.('.viewer-scroll');
@@ -677,13 +681,47 @@ function springTo(tabEl) {
   clearTimeout(spring?.timer);
   spring = id == null ? null : { id, timer: id === state.activeId ? 0 : setTimeout(() => { if (tabById(id)) activate(id); }, SPRING_MS) };
 }
-/** Insert dropped PDF files into `tab` before page index `at` (one undo step); used by the thumbnail list too. */
+/** Insert dropped files (PDFs, pictures and documents as pages) into `tab` before page index `at` (one undo step); used by the thumbnail list too. */
 async function insertDroppedFiles(tab, list, at) {
-  const files = pdfFiles(list);
-  if (!files.length) return false;
-  const sources = await Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
-  return insertSources(tab, sources, at);
+  return insertFiles(tab, await readFiles([...(list ?? [])]), at);
 }
+/** Drop on the page view of an editable document: pictures on the page under the point (Shift: as pages), the rest as pages at the line. */
+async function dropOnView(v, list, e) {
+  const all = [...(list ?? [])], imgs = e.shiftKey ? [] : imageFiles(all), hit = viewer.clientToPage(v.tab, e.clientX, e.clientY);
+  if (imgs.length && hit) await placeImages(v.tab, { page: hit.pageIndex, x: hit.x, y: hit.y }, await readFiles(imgs));
+  const rest = all.filter((f) => !(hit && imgs.includes(f)));
+  if (rest.length) await insertDroppedFiles(v.tab, rest, v.at);
+}
+/** Drop with no editable page view under it: PDFs open as tabs, documents as `<name>.pdf`, pictures together as one new PDF. */
+async function openDropped(list) {
+  const all = [...(list ?? [])], imgs = imageFiles(all);
+  const skipped = all.filter((f) => !fileKind(f)).map((f) => `${f.name} (unsupported type)`);
+  if (skipped.length) toast(`Not inserted: ${skipped.join(', ')}`);
+  for (const f of all) {
+    const kind = fileKind(f);
+    if (kind === 'pdf') {
+      // On the desktop a dropped PDF keeps its path, so Save writes back to it (like a file opened with File ▸ Open).
+      const granted = await api.openDropped?.(f).catch(() => null);
+      if (granted?.path) await openFileObject(granted);
+      else await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
+    } else if (kind === 'doc') {
+      const [src] = await fileSources(await readFiles([f]));
+      if (src) await openBytes({ name: `${f.name.replace(/\.[^.]+$/, '')}.pdf`, path: null, bytes: src.bytes });
+    } else if (f === imgs[0]) { // the pictures, at the first one's place, named like Images to PDF
+      try {
+        const bytes = await imagesAsPdf(await readFiles(imgs));
+        await openBytes({ name: `${f.name.replace(/\.[^.]+$/, '')}${imgs.length > 1 ? '-images' : ''}.pdf`, path: null, bytes });
+      } catch (err) { toast(err.message); }
+    }
+  }
+}
+const viewHint = (v, e) => {
+  const kinds = new Set([...(e.dataTransfer?.items ?? [])].map((it) => fileKind({ name: '', type: it.type })));
+  const imagesOnly = kinds.size === 1 && kinds.has('image'); // names are hidden until the drop; MIME types are known
+  if (imagesOnly && e.shiftKey) return `Insert as pages at page ${v.at + 1} (Shift)`;
+  if (imagesOnly) { const hit = viewer.clientToPage(v.tab, e.clientX, e.clientY); if (hit) return `Place picture on page ${hit.pageIndex + 1}`; }
+  return `Insert at page ${v.at + 1} · drop on the tab bar to open`;
+};
 window.addEventListener('dragover', (e) => {
   const files = hasFiles(e), pd = !files && pageDrag(e);
   if (!files && !pd) return;
@@ -698,7 +736,7 @@ window.addEventListener('dragover', (e) => {
     e.dataTransfer.dropEffect = 'copy';
     document.body.classList.add('drop-target');
     const v = !inStrip && viewDropAt(e);
-    if (v && editable(v.tab)) { showLine(v.line); dropHint(`Insert at page ${v.at + 1} · drop on the tab bar to open`, e); } else dropHint(state.tabs.length ? 'Open in a new tab' : null, e);
+    if (v && editable(v.tab)) { showLine(v.line); dropHint(viewHint(v, e), e); } else dropHint(state.tabs.length ? 'Open in a new tab' : null, e);
     return;
   }
   const target = tabEl ? tabById(tabEl.dataset.tabId) : null;
@@ -730,13 +768,8 @@ window.addEventListener('drop', async (e) => {
     if (target && target !== pd.tab && editable(target)) insertSources(target, [{ name: pd.tab.name, tab: pd.tab, indices: pd.sel, expect: pd.bytes }], tabEl ? Infinity : v.at);
     return;
   }
-  if (v && editable(v.tab)) { await insertDroppedFiles(v.tab, e.dataTransfer?.files, v.at); return; }
-  for (const f of pdfFiles(e.dataTransfer?.files)) {
-    // On the desktop a dropped PDF keeps its path, so Save writes back to it (like a file opened with File ▸ Open).
-    const granted = await api.openDropped?.(f).catch(() => null);
-    if (granted?.path) await openFileObject(granted);
-    else await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
-  }
+  if (v && editable(v.tab)) { await dropOnView(v, e.dataTransfer?.files, e); return; }
+  await openDropped(e.dataTransfer?.files);
 });
 window.addEventListener('beforeunload', (e) => { if (state.tabs.some((t) => t.dirty)) { e.preventDefault(); e.returnValue = ''; } });
 

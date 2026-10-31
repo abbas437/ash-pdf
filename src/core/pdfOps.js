@@ -374,7 +374,10 @@ export async function setMetadata(bytes, meta = {}) {
  */
 export async function imagesToPdf(images, { pageSize = 'fit', margin = 0 } = {}) {
   if (!Array.isArray(images) || images.length === 0) throw new TypeError('imagesToPdf expects a non-empty array');
-  if (pageSize !== 'fit' && !PAGE_SIZES[pageSize]) throw new RangeError(`Unknown pageSize "${pageSize}"`);
+  // pageSize: 'fit', a PAGE_SIZES name, or [width, height] in points (orientation follows each image).
+  const custom = Array.isArray(pageSize);
+  if (custom && !(pageSize.length === 2 && pageSize.every((v) => Number.isFinite(v) && v > 0))) throw new RangeError('pageSize [width, height] must be two positive numbers');
+  if (!custom && pageSize !== 'fit' && !PAGE_SIZES[pageSize]) throw new RangeError(`Unknown pageSize "${pageSize}"`);
   if (!Number.isFinite(margin) || margin < 0) throw new RangeError('margin must be a non-negative number');
   const doc = await createPdf();
   for (const { bytes, type } of images) {
@@ -390,8 +393,8 @@ export async function imagesToPdf(images, { pageSize = 'fit', margin = 0 } = {})
       pw = iw + 2 * margin;
       ph = ih + 2 * margin;
     } else {
-      [pw, ph] = PAGE_SIZES[pageSize];
-      if (iw > ih) [pw, ph] = [ph, pw];
+      [pw, ph] = custom ? pageSize : PAGE_SIZES[pageSize];
+      if ((iw > ih) !== (pw > ph) && iw !== ih) [pw, ph] = [ph, pw];
     }
     const availW = pw - 2 * margin;
     const availH = ph - 2 * margin;

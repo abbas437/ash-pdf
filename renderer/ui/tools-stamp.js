@@ -19,6 +19,8 @@ import { STANDARD_STAMPS, DYNAMIC_STAMPS, stampShape, stampSubtext, stampLayout 
 import { DATE_FORMATS, removeBackground } from '../../src/core/siglib.js';
 import { loadImage } from './signatures.js';
 import { pastedImageSize } from './clipboard-lib.js';
+import { toPlaceable } from './image-import.js';
+import { IMAGE_EXTS } from './image-import-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const SHAPES = [['rect', 'Rectangle'], ['rounded', 'Rounded'], ['circle', 'Circle'], ['ellipse', 'Ellipse']];
@@ -467,9 +469,12 @@ async function arm(bytes, frac, label, more = {}) {
   return true;
 }
 async function pickImage() {
-  const files = await window.api.openFiles({ filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }] });
+  const files = await window.api.openFiles({ filters: [{ name: 'Images', extensions: IMAGE_EXTS }] });
   const f = files?.[0];
-  if (f) await arm(f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(f.bytes), IMAGE_FRAC, 'image');
+  if (!f) return;
+  let img;
+  try { img = await toPlaceable(f.bytes instanceof Uint8Array ? f.bytes : new Uint8Array(f.bytes), f.name); } catch (e) { app.toast(e.message); return; }
+  await arm(img.bytes, IMAGE_FRAC, 'image');
 }
 function disarm() {
   if (pending?.url) URL.revokeObjectURL(pending.url);
@@ -495,19 +500,28 @@ const imageTool = {
   },
 };
 /**
- * Paste: an image annotation from PNG / JPEG `bytes` centred on `target` {page, x, y} (page points),
- * no larger than half the page (clipboard-lib.js pastedImageSize), kept on the page; it becomes the selection.
+ * Paste / drop: an image annotation from `bytes` (PNG, JPEG, GIF, WebP, BMP or SVG; image-import.js) centred on
+ * `target` {page, x, y} (page points), no larger than half the page (clipboard-lib.js pastedImageSize), kept on
+ * the page; it becomes the selection.
  */
-export async function placeImage(tab, target, bytes) {
-  const mime = sniffImage(bytes);
-  if (!mime) { app.toast('Only PNG and JPEG images can be placed'); return false; }
-  let bmp;
-  try { bmp = await createImageBitmap(new Blob([bytes], { type: mime })); } catch { app.toast('The image could not be read'); return false; }
-  const P = pageBox(tab, target.page), { w, h: hh } = pastedImageSize(bmp.width, bmp.height, P);
-  bmp.close();
-  const x = Math.min(Math.max(0, target.x - w / 2), P.width - w), y = Math.min(Math.max(0, target.y - hh / 2), P.height - hh);
-  addObjects(tab, [{ type: 'image', page: target.page, x, y, w, h: hh, bytes, mime, opacity: 1, rotation: 0 }]);
-  return true;
+export const placeImage = (tab, target, bytes, name) => placeImages(tab, target, [{ bytes, name }]);
+/** Several images in ONE undo step: the first centred on `target`, each next one 16 pt further down-right. */
+export async function placeImages(tab, target, list) {
+  const objs = [];
+  for (const [k, item] of list.entries()) {
+    let img, bmp;
+    try {
+      img = await toPlaceable(item.bytes, item.name);
+      bmp = await createImageBitmap(new Blob([img.bytes], { type: img.mime }));
+    } catch (e) { app.toast(img ? 'The image could not be read' : e.message); continue; }
+    const P = pageBox(tab, target.page), { w, h: hh } = pastedImageSize(bmp.width, bmp.height, P);
+    bmp.close();
+    const cx = target.x + 16 * k, cy = target.y + 16 * k;
+    const x = Math.min(Math.max(0, cx - w / 2), P.width - w), y = Math.min(Math.max(0, cy - hh / 2), P.height - hh);
+    objs.push({ type: 'image', page: target.page, x, y, w, h: hh, bytes: img.bytes, mime: img.mime, opacity: 1, rotation: 0 });
+  }
+  if (objs.length) addObjects(tab, objs);
+  return objs.length > 0;
 }
 function imageOptions(c) {
   c.append(
