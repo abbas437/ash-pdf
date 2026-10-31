@@ -249,9 +249,9 @@ try {
   // ------------------------------------------------------------ images
   step = 'image rejected';
   await key('Escape');
-  await pickFile(() => key('i'), { name: 'fake.png', mimeType: 'image/png', buffer: GIF });
-  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /Only PNG and JPEG/.test(t.textContent)));
-  check(!(await ev('return document.body.classList.contains("img-armed");')), 'GIF armed the image tool');
+  await pickFile(() => key('i'), { name: 'fake.png', mimeType: 'image/png', buffer: Buffer.from('not an image at all') });
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /fake\.png is not a supported image/.test(t.textContent)));
+  check(!(await ev('return document.body.classList.contains("img-armed");')), 'garbage armed the image tool');
   n0 = (await objs()).length;
   await page.mouse.click(...await toClient(0, 300, 600));
   check((await objs()).length === n0, 'a rejected file was placed');
@@ -259,6 +259,8 @@ try {
   step = 'png clamped';
   await pickFile(() => page.click('.opt-image-pick'), { name: 'green.png', mimeType: 'image/png', buffer: PNG });
   await page.waitForFunction(() => document.body.classList.contains('img-armed'));
+  // the stacked messages (the rejection text is long) can cover the bottom-right corner: wait for them to go
+  await page.waitForFunction(() => !document.querySelector('.toast'), null, { timeout: 15_000 });
   await page.mouse.click(...await toClient(0, 600, 780));
   o = (await objs()).at(-1);
   check(o.type === 'image' && o.mime === 'image/png' && o.bytes === PNG.length, `png object ${JSON.stringify(o)}`);
