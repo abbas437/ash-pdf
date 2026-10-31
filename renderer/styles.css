@@ -135,6 +135,9 @@ body.hand-panning, body.hand-panning * { cursor: grabbing !important; }
 .welcome-card { text-align: center; padding: 36px 48px; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; }
 .welcome-card h1 { margin: 8px 0 4px; font-size: 22px; font-weight: 600; letter-spacing: .2px; }
 .welcome-card p { color: var(--muted); margin: 0 0 18px; }
+.welcome-actions { display: flex; gap: 8px; justify-content: center; }
+.np-custom { display: grid; grid-template-columns: 1fr 1fr; gap: 0 12px; }
+.np-custom[hidden] { display: none; }
 .welcome-mark { color: var(--brass); }
 .session-offer { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); display: grid; gap: 10px; justify-items: center; }
 .session-offer-buttons { display: flex; gap: 8px; }

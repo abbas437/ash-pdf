@@ -27,6 +27,7 @@ import { initComments } from './ui/comments.js';
 import { initSignatures } from './ui/signatures.js';
 import { initSign } from './ui/sign.js';
 import { initForms } from './ui/forms.js';
+import { initNewPdf, newPdfDialog } from './ui/newpdf.js';
 import { initPageTools, idle as pageOpsIdle, rotate as rotatePages, selectionOf, editable, insertSources, pageDrag, endDrag as endPageDrag } from './ui/pagetools.js';
 import { initAdvancedSearch } from './ui/advsearch.js';
 import { initPageMarks } from './ui/pagemarks.js';
@@ -59,8 +60,10 @@ const welcome = h('div.welcome', {},
   h('div.welcome-card', {},
     h('div.welcome-logo-wrap', {}, h('img.brand-logo.lt.welcome-logo', { src: 'assets/brand/ash-logo-horizontal.svg', alt: 'ASH' }), h('img.brand-logo.rev.welcome-logo', { src: 'assets/brand/ash-logo-horizontal-reversed.svg', alt: '' })),
     h('h1', {}, 'ASH PDF Studio'),
-    h('p', {}, 'ASH PDF Studio is ready. Open a PDF or drop files here.'),
-    h('button.btn.primary', { type: 'button', onclick: () => openDialog() }, 'Open PDF…')));
+    h('p', {}, 'Open a PDF, create a new one, or drop files here.'),
+    h('div.welcome-actions', {},
+      h('button.btn.primary', { type: 'button', onclick: () => openDialog() }, 'Open PDF…'),
+      h('button.btn', { type: 'button', onclick: () => newPdfDialog() }, 'New PDF…'))));
 const status = {
   page: h('span.st-page'), zoom: h('span.st-zoom'), name: h('span.st-name'),
   dirty: h('span.st-dirty', { title: 'Unsaved changes', hidden: true }), badge: h('span.st-badge', { hidden: true }),
@@ -529,6 +532,7 @@ async function setTheme(theme, persist = true) {
 const zoomTo = (v) => withTab((t) => viewer.setZoom(t, v));
 const M = registerMenuItem;
 const session = initSession({ state, bus, viewer, activate, welcomeCard: welcome.firstChild, openFile: openFileObject });
+M('File', { id: 'newpdf', label: 'New PDF…', shortcut: 'Ctrl+Shift+N', action: () => newPdfDialog() });
 M('File', { id: 'open', label: 'Open…', shortcut: 'Ctrl+O', action: () => openDialog() });
 if (api.isElectron) {
   M('File', { id: 'newwindow', label: 'New window', shortcut: 'Ctrl+N', action: () => api.newWindow() });
@@ -568,7 +572,7 @@ M('Help', { id: 'keys', label: 'Keyboard shortcuts', action: () => help.openTopi
 M('Help', { id: 'about', label: 'About ASH PDF Studio', action: async () => showDialog({ title: 'About ASH PDF Studio', className: 'about-dlg', body: h('div', {}, h('img.brand-logo.lt.about-logo', { src: 'assets/brand/ash-logo-horizontal.svg', alt: 'ASH Technical & Project Management Services' }), h('img.brand-logo.rev.about-logo', { src: 'assets/brand/ash-logo-horizontal-reversed.svg', alt: '' }), h('p', {}, `Version ${await api.version()}. Free and open source (MIT). Uses pdf.js (Apache-2.0) and pdf-lib (MIT).`), h('p.about-tm', {}, 'The ASH logo and icon are trademarks of ASH Technical & Project Management Services and are not covered by the MIT licence.')) }) });
 
 function showShortcuts() {
-  const keys = [['Ctrl+O', 'Open'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'], ['Ctrl+Shift+PageUp / PageDown', 'Move tab left / right'],
+  const keys = [['Ctrl+Shift+N', 'New PDF'], ['Ctrl+O', 'Open'], ['Ctrl+S / Ctrl+Shift+S', 'Save / Save as'], ['Ctrl+P', 'Print'], ['Ctrl+W', 'Close tab'], ['Ctrl+Tab', 'Next tab'], ['Ctrl+Shift+PageUp / PageDown', 'Move tab left / right'],
     ['Ctrl+F', 'Find'], ['Ctrl+G / Ctrl+Shift+G', 'Group / Ungroup objects'], ['Ctrl+,', 'Preferences'], ['Ctrl+= / Ctrl+-', 'Zoom in / out'], ['Ctrl+0 / Ctrl+1', 'Fit page / Actual size'], ['Home / End', 'First / last page'], ['Page Up / Page Down', 'Previous / next page']];
   showDialog({ title: 'Keyboard shortcuts', body: h('table.props', {}, keys.map(([k, v]) => h('tr', {}, h('th', {}, k), h('td', {}, v)))) });
 }
@@ -581,6 +585,7 @@ document.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
   const run = (fn) => { e.preventDefault(); fn(); };
   if (ctrl && k === 'o') return run(() => openDialog());
+  if (ctrl && e.shiftKey && k === 'n') return run(() => newPdfDialog()); // before Ctrl+N (New window)
   if (ctrl && k === 'n' && api.isElectron) return run(() => api.newWindow());
   if (ctrl && k === 's') return run(() => tab && saveTab(tab, e.shiftKey));
   if (ctrl && k === 'p') return run(() => tab && printTab(tab));
@@ -758,6 +763,7 @@ initSign(app);
 app.annotations = annotations;
 app.pageMarks = pageMarks;
 initPageTools(app);
+initNewPdf(app); // File > New PDF… (registered first in the File menu above)
 initOffice(app); // File > Export to Word, Create PDF from Office file
 initExports(app); // File > Export to Excel, Export page as image
 initCompress(app); // File > Reduce file size

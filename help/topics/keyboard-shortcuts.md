@@ -16,6 +16,7 @@ This is the complete list of keys in ASH PDF Studio. On macOS, use <kbd>Cmd</kbd
 
 | Keys | Action |
 | --- | --- |
+| <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>N</kbd> | [New blank PDF](#topic:create-new-pdf) |
 | <kbd>Ctrl</kbd>+<kbd>O</kbd> | Open a file |
 | <kbd>Ctrl</kbd>+<kbd>N</kbd> | New window (desktop app only) |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> | Save |

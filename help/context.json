@@ -16,5 +16,6 @@
   ".rm-strip": "navigate-and-zoom/reading-mode",
   "[data-group=\"navigate\"]": "interface-tour/toolbar",
   ".tb-more-btn": "customize-toolbar/narrow-windows",
-  "dialog:Customize toolbar": "customize-toolbar"
+  "dialog:Customize toolbar": "customize-toolbar",
+  "dialog:New PDF": "create-new-pdf"
 }
