@@ -35,7 +35,6 @@ const JPEG = await solid(40, 20, { r: 0, g: 0, b: 230 }).jpeg({ quality: 95 }).t
 // White background with a red block: after background removal the corner must be transparent.
 const STAMPPNG = await sharp({ create: { width: 60, height: 40, channels: 3, background: { r: 255, g: 255, b: 255 } } })
   .composite([{ input: await solid(20, 20, { r: 200, g: 0, b: 0 }).png().toBuffer(), left: 20, top: 10 }]).png().toBuffer();
-const GIF = Buffer.from('R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==', 'base64');
 
 const server = createServer(async (req, res) => {
   const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));
