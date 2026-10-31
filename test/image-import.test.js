@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument } from 'pdf-lib';
-import { detectImage, isSvgText, unsupportedImage, svgRasterSize, fileKind, textToHtml } from '../renderer/ui/image-import-lib.js';
+import { detectImage, isSvgText, unsupportedImage, svgRasterSize, fileKind, textToHtml, fitRaster, tooLarge } from '../renderer/ui/image-import-lib.js';
 import { imagesToPdf } from '../src/core/pdfOps.js';
 
 const enc = (s) => new TextEncoder().encode(s);
@@ -23,9 +23,9 @@ test('detectImage: SVG with BOM, XML declaration, comments and doctype', () => {
   assert.equal(isSvgText('hello <svg>'), false);
 });
 
-test('detectImage: extension only as a fallback; unknown is null with a user message', () => {
-  assert.equal(detectImage(enc('????'), 'Logo.WEBP'), 'webp');
-  assert.equal(detectImage(enc('????'), 'pic.jpg'), 'jpeg');
+test('detectImage: extension fallback for SVG only; unknown is null with a user message', () => {
+  assert.equal(detectImage(enc('????'), 'Logo.SVG'), 'svg');
+  for (const n of ['Logo.WEBP', 'pic.jpg', 'a.png', 'a.gif', 'a.bmp']) assert.equal(detectImage(enc('????'), n), null, n);
   assert.equal(detectImage(enc('PK\x03\x04'), 'a.zip'), null);
   assert.equal(unsupportedImage('a.zip'), 'a.zip is not a supported image (PNG, JPEG, GIF, WebP, BMP or SVG)');
 });
@@ -34,6 +34,14 @@ test('svgRasterSize: ×2, longest side capped at 4000, 1000 px without a size', 
   assert.deepEqual(svgRasterSize(100, 50), { width: 200, height: 100 });
   assert.deepEqual(svgRasterSize(3000, 1500), { width: 4000, height: 2000 });
   assert.deepEqual(svgRasterSize(0, 0), { width: 1000, height: 1000 });
+});
+
+test('fitRaster: unchanged up to 4000 px, else the longest side is scaled to 4000', () => {
+  assert.deepEqual(fitRaster(4000, 100), { width: 4000, height: 100 });
+  assert.deepEqual(fitRaster(5000, 100), { width: 4000, height: 80 });
+  assert.deepEqual(fitRaster(100, 8000), { width: 50, height: 4000 });
+  assert.deepEqual(fitRaster(1, 10000), { width: 1, height: 4000 });
+  assert.equal(tooLarge('big.webp'), 'big.webp is too large or could not be converted');
 });
 
 test('fileKind: by extension or MIME type', () => {

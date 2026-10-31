@@ -661,8 +661,20 @@ function clearDrop() {
 const hasFiles = (e) => !!e.dataTransfer?.types?.includes('Files');
 const tabById = (id) => state.tabs.find((t) => t.id === id) ?? null;
 const pdfFiles = (list) => [...(list ?? [])].filter((f) => fileKind(f) === 'pdf');
-const imageFiles = (list) => [...(list ?? [])].filter((f) => fileKind(f) === 'image');
-const readFiles = (list) => Promise.all(list.map(async (f) => ({ name: f.name, type: f.type, bytes: new Uint8Array(await f.arrayBuffer()) })));
+/**
+ * Read the supported files of a drop, each on its own (a folder's File rejects on arrayBuffer): {files, skipped}
+ * with `skipped` as "name (reason)" for unsupported or unreadable entries. One bad entry never costs the rest.
+ */
+async function readFiles(list) {
+  const files = [], skipped = [];
+  for (const f of list) {
+    if (!fileKind(f)) { skipped.push(`${f.name} (unsupported type)`); continue; }
+    try { files.push({ name: f.name, type: f.type, bytes: new Uint8Array(await f.arrayBuffer()) }); }
+    catch { skipped.push(`${f.name} (could not be read)`); }
+  }
+  return { files, skipped };
+}
+const toastSkipped = (skipped) => { if (skipped.length) toast(`Not inserted: ${skipped.join(', ')}`); };
 /** Where a drop at the pointer inserts into the page view under it: {tab, at, line} or null. */
 function viewDropAt(e) {
   const sc = e.target.closest?.('.viewer-scroll');
@@ -688,43 +700,57 @@ function springTo(tabEl) {
 }
 /** Insert dropped files (PDFs, pictures and documents as pages) into `tab` before page index `at` (one undo step); used by the thumbnail list too. */
 async function insertDroppedFiles(tab, list, at) {
-  return insertFiles(tab, await readFiles([...(list ?? [])]), at);
+  try {
+    const { files, skipped } = await readFiles([...(list ?? [])]);
+    toastSkipped(skipped);
+    return files.length ? await insertFiles(tab, files, at) : false;
+  } catch (err) { showError('Could not insert the dropped files', err); return false; }
 }
 /** Drop on the page view of an editable document: pictures on the page under the point (Shift: as pages), the rest as pages at the line. */
 async function dropOnView(v, list, e) {
-  const all = [...(list ?? [])], imgs = e.shiftKey ? [] : imageFiles(all), hit = viewer.clientToPage(v.tab, e.clientX, e.clientY);
-  if (imgs.length && hit) await placeImages(v.tab, { page: hit.pageIndex, x: hit.x, y: hit.y }, await readFiles(imgs));
-  const rest = all.filter((f) => !(hit && imgs.includes(f)));
-  if (rest.length) await insertDroppedFiles(v.tab, rest, v.at);
+  const hit = viewer.clientToPage(v.tab, e.clientX, e.clientY);
+  const { files, skipped } = await readFiles([...(list ?? [])]);
+  const imgs = e.shiftKey || !hit ? [] : files.filter((f) => fileKind(f) === 'image'), rest = files.filter((f) => !imgs.includes(f));
+  toastSkipped(skipped);
+  if (imgs.length) await placeImages(v.tab, { page: hit.pageIndex, x: hit.x, y: hit.y }, imgs);
+  if (rest.length) await insertFiles(v.tab, rest, v.at);
 }
 /** Drop with no editable page view under it: PDFs open as tabs, documents as `<name>.pdf`, pictures together as one new PDF. */
 async function openDropped(list) {
-  const all = [...(list ?? [])], imgs = imageFiles(all);
-  const skipped = all.filter((f) => !fileKind(f)).map((f) => `${f.name} (unsupported type)`);
-  if (skipped.length) toast(`Not inserted: ${skipped.join(', ')}`);
+  const all = [...(list ?? [])], skipped = [];
+  const imgs = all.filter((f) => fileKind(f) === 'image');
+  skipped.push(...all.filter((f) => !fileKind(f)).map((f) => `${f.name} (unsupported type)`));
   for (const f of all) {
     const kind = fileKind(f);
-    if (kind === 'pdf') {
-      // On the desktop a dropped PDF keeps its path, so Save writes back to it (like a file opened with File ▸ Open).
-      const granted = await api.openDropped?.(f).catch(() => null);
-      if (granted?.path) await openFileObject(granted);
-      else await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
-    } else if (kind === 'doc') {
-      const [src] = await fileSources(await readFiles([f]));
-      if (src) await openBytes({ name: `${f.name.replace(/\.[^.]+$/, '')}.pdf`, path: null, bytes: src.bytes });
-    } else if (f === imgs[0]) { // the pictures, at the first one's place, named like Images to PDF
-      try {
-        const bytes = await imagesAsPdf(await readFiles(imgs));
-        await openBytes({ name: `${f.name.replace(/\.[^.]+$/, '')}${imgs.length > 1 ? '-images' : ''}.pdf`, path: null, bytes });
-      } catch (err) { toast(err.message); }
-    }
+    try {
+      if (kind === 'pdf') {
+        // On the desktop a dropped PDF keeps its path, so Save writes back to it (like a file opened with File ▸ Open).
+        const granted = await api.openDropped?.(f).catch(() => null);
+        if (granted?.path) await openFileObject(granted);
+        else await openBytes({ name: f.name, path: null, bytes: new Uint8Array(await f.arrayBuffer()) });
+      } else if (kind === 'doc') {
+        const { files, skipped: bad } = await readFiles([f]);
+        skipped.push(...bad);
+        const [src] = await fileSources(files);
+        if (src) await openBytes({ name: `${f.name.replace(/\.[^.]+$/, '')}.pdf`, path: null, bytes: src.bytes });
+      } else if (f === imgs[0]) { // the pictures, at the first one's place, named like Images to PDF
+        const { files, skipped: bad } = await readFiles(imgs);
+        skipped.push(...bad);
+        const bytes = await imagesAsPdf(files, 'fit', skipped);
+        if (bytes) await openBytes({ name: `${f.name.replace(/\.[^.]+$/, '')}${imgs.length > 1 ? '-images' : ''}.pdf`, path: null, bytes });
+      }
+    } catch { skipped.push(`${f.name} (could not be read)`); }
   }
+  toastSkipped(skipped);
 }
 const viewHint = (v, e) => {
-  const kinds = new Set([...(e.dataTransfer?.items ?? [])].map((it) => fileKind({ name: '', type: it.type })));
-  const imagesOnly = kinds.size === 1 && kinds.has('image'); // names are hidden until the drop; MIME types are known
-  if (imagesOnly && e.shiftKey) return `Insert as pages at page ${v.at + 1} (Shift)`;
-  if (imagesOnly) { const hit = viewer.clientToPage(v.tab, e.clientX, e.clientY); if (hit) return `Place picture on page ${hit.pageIndex + 1}`; }
+  // names are hidden until the drop; MIME types are known (empty for some files, then a picture can't be ruled out)
+  const kinds = new Set([...(e.dataTransfer?.items ?? [])].map((it) => (it.type ? fileKind({ name: '', type: it.type }) ?? 'other' : 'unknown')));
+  const imagesOnly = kinds.size === 1 && kinds.has('image');
+  if (e.shiftKey && imagesOnly) return `Insert as pages at page ${v.at + 1} (Shift)`;
+  const hit = !e.shiftKey && (kinds.has('image') || kinds.has('unknown')) && viewer.clientToPage(v.tab, e.clientX, e.clientY);
+  if (hit && imagesOnly) return `Place picture on page ${hit.pageIndex + 1}`;
+  if (hit) return `Insert at page ${v.at + 1} · pictures are placed on the page`;
   return `Insert at page ${v.at + 1} · drop on the tab bar to open`;
 };
 window.addEventListener('dragover', (e) => {
@@ -760,8 +786,11 @@ window.addEventListener('dragover', (e) => {
 window.addEventListener('dragleave', (e) => { if (e.target === document.documentElement || !e.relatedTarget) clearDrop(); });
 window.addEventListener('dragend', () => { clearDrop(); endPageDrag(); }, true);
 window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && (spring || !dropHintEl.hidden)) { clearDrop(); endPageDrag(); } }, true);
-window.addEventListener('drop', async (e) => {
+window.addEventListener('drop', (e) => {
   e.preventDefault();
+  dropped(e).catch((err) => showError('Could not insert the dropped files', err)); // no rejection escapes a drop
+});
+async function dropped(e) {
   if (document.querySelector('.dialog-backdrop')) { clearDrop(); return; } // a modal dialog takes drops on itself only
   const files = hasFiles(e), pd = !files && pageDrag(e);
   const tabEl = e.target.closest?.('.doc-tab'), inStrip = tabstrip.contains(e.target);
@@ -770,12 +799,12 @@ window.addEventListener('drop', async (e) => {
   if (pd) {
     endPageDrag();
     const target = tabEl ? tabById(tabEl.dataset.tabId) : v?.tab;
-    if (target && target !== pd.tab && editable(target)) insertSources(target, [{ name: pd.tab.name, tab: pd.tab, indices: pd.sel, expect: pd.bytes }], tabEl ? Infinity : v.at);
+    if (target && target !== pd.tab && editable(target)) await insertSources(target, [{ name: pd.tab.name, tab: pd.tab, indices: pd.sel, expect: pd.bytes }], tabEl ? Infinity : v.at);
     return;
   }
   if (v && editable(v.tab)) { await dropOnView(v, e.dataTransfer?.files, e); return; }
   await openDropped(e.dataTransfer?.files);
-});
+}
 window.addEventListener('beforeunload', (e) => { if (state.tabs.some((t) => t.dirty)) { e.preventDefault(); e.returnValue = ''; } });
 
 bus.on('tab:dirtyChanged', refresh);

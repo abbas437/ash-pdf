@@ -241,12 +241,19 @@ export async function insertSources(tab, sources, at) {
 }
 
 // ---------------------------------------------------------------- pictures and documents as pages
-/** Images in a new PDF (one per page): pageSize 'fit' (page = image) or [w, h] (18 pt margins, orientation follows the image). */
-export async function imagesAsPdf(list, pageSize = 'fit') {
+/**
+ * Images in a new PDF (one per page): pageSize 'fit' (page = image) or [w, h] (18 pt margins, orientation follows the image).
+ * A picture that cannot be converted throws, unless `skipped` (an array) is given: it is then left out, its
+ * "<name> (could not be read)" is pushed there, and null comes back when none is left.
+ */
+export async function imagesAsPdf(list, pageSize = 'fit', skipped = null) {
   const { toPlaceable } = await import('./image-import.js');
   const imgs = [];
-  for (const f of list) { const p = await toPlaceable(f.bytes, f.name); imgs.push({ bytes: p.bytes, type: p.mime === 'image/png' ? 'png' : 'jpg' }); }
-  return (await core()).imagesToPdf(imgs, { pageSize, margin: pageSize === 'fit' ? 0 : 18 });
+  for (const f of list) {
+    try { const p = await toPlaceable(f.bytes, f.name); imgs.push({ bytes: p.bytes, type: p.mime === 'image/png' ? 'png' : 'jpg' }); }
+    catch (e) { if (!skipped) throw e; skipped.push(`${f.name} (could not be read)`); }
+  }
+  return imgs.length ? (await core()).imagesToPdf(imgs, { pageSize, margin: pageSize === 'fit' ? 0 : 18 }) : null;
 }
 const pageSizeOf = (tab, i) => { const P = app.viewer?.pageSize?.(tab, Math.max(0, Math.min(i, tab.numPages - 1))); return P ? [P.width, P.height] : 'A4'; };
 /**
@@ -270,11 +277,27 @@ export async function fileSources(files, pageSize) {
   if (skipped.length) toast(`Not inserted: ${skipped.map((n) => `${n} (unsupported type)`).join(', ')}`);
   return sources;
 }
-/** Insert files of any supported kind before page `at` of `tab`, as one undo step (images sized like the page there). */
-export async function insertFiles(tab, files, at) {
+const insertChains = new Map(); // tab id -> tail of its queued insertFiles calls
+/**
+ * Insert files of any supported kind before page `at` of `tab`, as one undo step (images sized like the page before
+ * the insert point, the first page at the start). Calls on one tab run in call order; a tab closed, or pages changed,
+ * while the files were being converted aborts with a toast (`at` and the sources no longer fit).
+ */
+export function insertFiles(tab, files, at) {
+  const run = (insertChains.get(tab.id) ?? Promise.resolve()).then(() => insertFilesNow(tab, files, at));
+  const tail = run.catch(() => {});
+  insertChains.set(tab.id, tail);
+  tail.then(() => { if (insertChains.get(tab.id) === tail) insertChains.delete(tab.id); });
+  return run;
+}
+async function insertFilesNow(tab, files, at) {
   if (!editable(tab)) return false;
-  const sources = await fileSources(files, pageSizeOf(tab, at));
-  return sources.length ? insertSources(tab, sources, at) : false;
+  const before = tab.bytes;
+  const sources = await fileSources(files, pageSizeOf(tab, Math.max(0, at - 1)));
+  if (!sources.length) return false;
+  if (!state.tabs.includes(tab)) { toast('The document was closed before the files were ready'); return false; }
+  if (tab.bytes !== before) { toast('The document changed while the files were being converted; drop them again'); return false; }
+  return insertSources(tab, sources, at);
 }
 export const INSERT_EXTS = ['pdf', ...IMAGE_EXTS, ...DOC_EXTS];
 /** Pages ▸ Insert from file…: pick files, insert them in order after the last selected page (or the current page). */
@@ -463,7 +486,7 @@ function wireList({ tab, count }) {
     line?.remove();
     app.dropHint?.(null);
     const pos = dropPos(els, e.clientY);
-    if (files) { app.insertDroppedFiles?.(tab, e.dataTransfer.files, pos); return; }
+    if (files) { app.insertDroppedFiles?.(tab, e.dataTransfer.files, pos)?.catch((err) => showError('Could not insert the dropped files', err)); return; }
     endDrag();
     if (d.tab === tab) reorder(tab, moveOrder(els.length, d.sel, pos));
     else insertSources(tab, [{ name: d.tab.name, tab: d.tab, indices: d.sel, expect: d.bytes }], pos);

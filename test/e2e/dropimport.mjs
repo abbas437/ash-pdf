@@ -3,7 +3,8 @@
 // tools-stamp.js placeImages, image-import.js, pagetools.js insertFiles / insertFromFile): pictures
 // dropped on a page are placed on it (GIF and SVG converted to PNG, several in one undo step), Shift
 // inserts them as pages, a picture dropped on the tab strip opens as a new PDF, a .txt is converted and
-// inserted, unsupported files are reported, Insert from file inserts a picture as a page.
+// inserted, unsupported and unreadable entries are reported in one toast without costing the rest of the
+// drop, Insert from file inserts a picture as a page right after the selected one, sized like the page before it.
 // Chromium via playwright-core. Prints "DROPIMPORT OK".
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -53,10 +54,17 @@ try {
     const app = window.ashStudio, t = app.state.tabs[k];
     return t?.numPages === n && (t.id !== app.state.activeId || document.querySelectorAll('.thumb-list .thumb').length === n);
   }, [k, n], { timeout: 10_000 });
+  const sizes = (k) => ev(`const t = tabs[arg]; const d = await v.pdfjs.getDocument({ data: t.bytes.slice() }).promise; const out = [];
+    for (let i = 1; i <= d.numPages; i++) { const vp = (await d.getPage(i)).getViewport({ scale: 1 }); out.push([Math.round(vp.width), Math.round(vp.height)]); }
+    await d.loadingTask.destroy(); return out;`, k);
   const images = () => ev('return app.annotations.list(tab).filter((o) => o.type === "image").map((o) => ({ page: o.page, mime: o.mime, cx: o.x + o.w / 2, cy: o.y + o.h / 2 }));');
   const fileDrag = (arg) => page.evaluate(({ x, y, files, shift = false }) => {
     const dt = new DataTransfer();
-    for (const f of files) dt.items.add(new File([Uint8Array.from(atob(f.data), (c) => c.charCodeAt(0))], f.name, { type: f.type ?? '' }));
+    for (const f of files) {
+      const file = new File([Uint8Array.from(atob(f.data ?? ''), (c) => c.charCodeAt(0))], f.name, { type: f.type ?? '' });
+      if (f.reject) file.arrayBuffer = () => Promise.reject(new DOMException('is a directory', 'NotReadableError')); // like a folder
+      dt.items.add(file);
+    }
     const el = document.elementFromPoint(x, y);
     const fire = (type) => el.dispatchEvent(new DragEvent(type, { dataTransfer: dt, clientX: x, clientY: y, shiftKey: shift, bubbles: true, cancelable: true }));
     fire('dragenter');
@@ -145,6 +153,17 @@ try {
   await ev('window.api.openFiles = async () => [{ name: "pic.png", bytes: Uint8Array.from(atob(arg), (c) => c.charCodeAt(0)) }]; tab.currentPage = 0; app.thumbs.setSelection?.([0]); await pt.insertFromFile(tab);', b64(PNG));
   await settle(0, 4);
   eq(await ev('return [tab.bytesUndo.length, tab.numPages];'), [1, 4], 'one undo step, +1 page');
+  eq(await texts(0), ['A 1', '', 'A 2', 'A 3'], 'picture page right after the selected page');
+  eq((await sizes(0))[1], [612, 792], 'new page the size of the page before it');
+  await ev('await pt.undoAny(tab);');
+  await settle(0, 3);
+
+  step = 'a PDF is inserted although one entry cannot be read; the skipped entries are named in one toast';
+  p = await pagePoint(0, 0.75);
+  await fileDrag({ ...p, files: [{ name: 'one.pdf', data: b64(onePage), type: 'application/pdf' }, { name: 'broken.png', type: 'image/png', reject: true }, { name: 'x.zip', data: b64(Buffer.from('PK\x03\x04')), type: 'application/zip' }] });
+  await settle(0, 4);
+  eq(await texts(0), ['A 1', 'T 1', 'A 2', 'A 3'], 'the PDF pages were inserted');
+  await toastHas('Not inserted: broken.png (could not be read), x.zip (unsupported type)');
   await ev('await pt.undoAny(tab);');
   await settle(0, 3);
 
@@ -154,6 +173,13 @@ try {
   await page.waitForFunction(() => window.ashStudio.state.tabs.length === 2, null, { timeout: 10_000 });
   await settle(1, 1);
   eq(await ev('return [tabs[1].name, tabs[0].numPages];'), ['photo.pdf', 3], 'new tab');
+
+  step = 'pictures on the tab strip: the unreadable one is skipped and named';
+  await fileDrag({ ...p, files: [png('good1.png'), { name: 'bad.png', data: b64(Buffer.from('not a picture')), type: 'image/png' }, png('good2.png')] });
+  await page.waitForFunction(() => window.ashStudio.state.tabs.length === 3, null, { timeout: 10_000 });
+  await settle(2, 2);
+  eq(await ev('return tabs[2].name;'), 'good1-images.pdf', 'new tab named after the first picture');
+  await toastHas('bad.png (could not be read)');
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {

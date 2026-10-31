@@ -24,7 +24,7 @@ Choose Pages ▸ **Insert from file…** (also on the Tools menu) to add pages f
 1. Pick one or more files: PDF, pictures (PNG, JPEG, GIF, WebP, BMP, SVG), Word (`.docx`), Excel (`.xlsx`) or text (`.txt`, `.md`).
 2. They are inserted after the last selected page (or the current page), in the order you picked them, as one step that **Undo** reverses.
 
-Each picture becomes a page the size of the page it is inserted next to, turned to match the picture, with the picture centred inside 18 pt margins. Word, Excel and text files are converted the same way as [File ▸ Create PDF from Office](#topic:create-pdf-from-office) with the built-in engine.
+Each picture becomes a page the size of the page before it (the first page when inserted at the start), turned to match the picture, with the picture centred inside 18 pt margins. Word, Excel and text files are converted the same way as [File ▸ Create PDF from Office](#topic:create-pdf-from-office) with the built-in engine.
 
 > **Note:** Converting Word, Excel and text files needs the desktop app. PDFs and pictures work everywhere.
 
