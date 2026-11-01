@@ -169,10 +169,10 @@ point at the real buttons). The same guide is published on https://ashdesignsuit
 
 ## Code signing policy
 
-Releases are **not code-signed yet** (see the install notes above). We are applying for the free code signing
-that SignPath Foundation offers open-source projects. Once it is granted, Windows releases will be signed with
-free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by
-[SignPath Foundation](https://signpath.org/), and this section will say so.
+Releases are **not code-signed yet** (see the install notes above), so Windows SmartScreen warns on first run;
+check the SHA-256 against `SHA256SUMS.txt` before running a download. We plan to sign releases once the project
+qualifies for free open-source signing or a publisher certificate is in place; this section will then name the
+certificate. The rules below apply from the first signed release.
 
 - **What gets signed:** only the installer and portable files built by this repository's GitHub Actions workflow
   (`.github/workflows/build.yml`) from the tagged source. Nothing built elsewhere is signed.
