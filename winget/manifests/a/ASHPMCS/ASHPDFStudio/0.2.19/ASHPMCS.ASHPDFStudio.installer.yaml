@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+# Created by scripts/winget-manifest.mjs
+
+PackageIdentifier: ASHPMCS.ASHPDFStudio
+PackageVersion: 0.2.19
+InstallerLocale: en-US
+MinimumOSVersion: 10.0.0.0
+InstallerType: nullsoft
+Scope: user
+InstallModes:
+- interactive
+- silent
+- silentWithProgress
+InstallerSwitches:
+  Custom: /currentuser
+UpgradeBehavior: install
+FileExtensions:
+- pdf
+ReleaseDate: 2026-11-02
+AppsAndFeaturesEntries:
+- DisplayName: "ASH PDF Studio 0.2.19"
+  Publisher: "ASH Technical & Project Management Services (ASH PMCS)"
+  DisplayVersion: 0.2.19
+Installers:
+- Architecture: x64
+  InstallerUrl: https://github.com/abbas437/ash-pdf/releases/download/v0.2.19/ASH-PDF-Studio-Setup-0.2.19.exe
+  InstallerSha256: F70AD31C9FCE5023BBA1963A2057632197081578178B11AB88D4B900055B717C
+ManifestType: installer
+ManifestVersion: 1.10.0
