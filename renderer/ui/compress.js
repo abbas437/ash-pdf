@@ -9,11 +9,36 @@ import { currentBytes } from './office.js';
 
 const core = () => import('../../src/core/optimize.js');
 
-/** Renderer codec for optimizePdf: createImageBitmap decodes, OffscreenCanvas scales and encodes. */
+// Chromium leaves a canvas blank (it reads back as transparent black) when it is larger than its limits,
+// with no error: a 291-megapixel map scan came out as an all-black page. Every canvas here is checked
+// first; an image that does not fit is left as it is (optimizePdf counts the throw as skipped).
+export const CANVAS_LIMITS = { area: 16384 * 16384, side: 32767 };
+export function fitsCanvas(w, h, lim = CANVAS_LIMITS) {
+  return w > 0 && h > 0 && w <= lim.side && h <= lim.side && w * h <= lim.area;
+}
+function needCanvas(w, h) {
+  if (!fitsCanvas(w, h)) throw new Error(`image of ${w} x ${h} pixels is larger than a canvas can hold`);
+}
+
+/**
+ * Renderer codec for optimizePdf. JPEGs are decoded straight at the target size (createImageBitmap
+ * resize), so only the smaller picture is ever held; Flate images go through decode / encode.
+ */
 export const canvasCodec = {
+  async transcodeJpeg(bytes, { width, height, quality }) {
+    needCanvas(width, height);
+    const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }), { resizeWidth: width, resizeHeight: height, resizeQuality: 'high' });
+    try {
+      if (bmp.width !== width || bmp.height !== height) throw new Error('the image decoded at an unexpected size');
+      const c = new OffscreenCanvas(width, height);
+      c.getContext('2d').drawImage(bmp, 0, 0);
+      return new Uint8Array(await (await c.convertToBlob({ type: 'image/jpeg', quality })).arrayBuffer());
+    } finally { bmp.close(); }
+  },
   async decodeImage(bytes) {
     const bmp = await createImageBitmap(new Blob([bytes], { type: 'image/jpeg' }));
     try {
+      needCanvas(bmp.width, bmp.height);
       const c = new OffscreenCanvas(bmp.width, bmp.height);
       const ctx = c.getContext('2d');
       ctx.drawImage(bmp, 0, 0);
@@ -21,6 +46,8 @@ export const canvasCodec = {
     } finally { bmp.close(); }
   },
   async encodeJpeg(src, { width, height, quality }) {
+    needCanvas(src.width, src.height);
+    needCanvas(width, height);
     const s = new OffscreenCanvas(src.width, src.height);
     const data = src.data instanceof Uint8ClampedArray ? src.data : new Uint8ClampedArray(src.data.buffer, src.data.byteOffset, src.data.length);
     s.getContext('2d').putImageData(new ImageData(data, src.width, src.height), 0, 0);

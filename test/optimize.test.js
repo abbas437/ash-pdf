@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument, PDFName, PDFRawStream } from 'pdf-lib';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
-import { optimizePdf, PRESETS } from '../src/core/optimize.js';
+import { optimizePdf, PRESETS, jpegSize } from '../src/core/optimize.js';
 import { makePdf, renderPage, isColor } from './helpers.js';
 
 // Node implementations of the injected codec (the renderer uses OffscreenCanvas / createImageBitmap).
@@ -131,4 +131,54 @@ test('an ICCBased RGB Flate scan is recompressed and keeps its profile', async (
   assert.equal(s.dict.get(PDFName.of('Filter')), PDFName.of('DCTDecode'));
   const cs = s.dict.lookup(PDFName.of('ColorSpace'));
   assert.equal(String(cs.lookup(0)), '/ICCBased');
+});
+
+test('jpegSize reads the SOF header; anything else is null', () => {
+  assert.deepEqual(jpegSize(photo(321, 123)), { width: 321, height: 123, components: 3 });
+  assert.equal(jpegSize(new Uint8Array([0xff, 0xd8, 0xff, 0xda, 0, 2, 0, 0, 0, 0, 0, 0])), null);
+  assert.equal(jpegSize(new Uint8Array([1, 2, 3, 4, 5, 6])), null);
+  assert.equal(jpegSize(new Uint8Array(0)), null);
+});
+
+// A transcodeJpeg codec gets the JPEG bytes and the target size, never a full-size pixel buffer: the
+// renderer decodes a huge scan straight at the smaller size (a full-size canvas would come out black).
+test('JPEG images go through transcodeJpeg at the target size when the codec offers it', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const img = await doc.embedJpg(photo(2000, 2000));
+  page.drawImage(img, { x: 0, y: 90, width: 612, height: 612 });
+  const bytes = await doc.save();
+  const calls = [];
+  const transcodeJpeg = async (jpeg, opts) => {
+    calls.push({ size: jpegSize(jpeg), ...opts });
+    const src = await codec.decodeImage(jpeg);
+    return codec.encodeJpeg(src, opts);
+  };
+  const decodeImage = async () => { throw new Error('full-size decode must not be used for a JPEG'); };
+  const res = await optimizePdf(bytes, { ...PRESETS.balanced, encodeJpeg: codec.encodeJpeg, decodeImage, transcodeJpeg });
+  assert.equal(res.imagesRecompressed, 1);
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].size, { width: 2000, height: 2000, components: 3 });
+  const side = Math.round(2000 * (150 / (2000 / (792 / 72)))); // 11 in at 150 dpi
+  assert.equal(calls[0].width, side); assert.equal(calls[0].height, side);
+  const out = await PDFDocument.load(res.bytes);
+  const [[, stream]] = imageStreams(out);
+  assert.equal(stream.dict.get(PDFName.of('Width')).asNumber(), side);
+  const r = await renderPage(res.bytes, 0);
+  assert.ok(isColor(r.sample(100, 792 - 90 - 612 + 100), [220, 20, 20], 60), 'red quarter still rendered');
+});
+
+test('a JPEG whose own size differs from /Width /Height is left alone on the transcode path', async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]);
+  const img = await doc.embedJpg(photo(2000, 2000));
+  page.drawImage(img, { x: 0, y: 90, width: 612, height: 612 });
+  const tampered = await PDFDocument.load(await doc.save());
+  const [[, s]] = imageStreams(tampered);
+  s.dict.set(PDFName.of('Width'), tampered.context.obj(1999));
+  const bytes = await tampered.save();
+  let called = 0;
+  const res = await optimizePdf(bytes, { ...PRESETS.balanced, ...codec, transcodeJpeg: async () => { called++; return new Uint8Array(10); } });
+  assert.equal(called, 0);
+  assert.equal(res.imagesRecompressed, 0);
 });

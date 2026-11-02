@@ -18,6 +18,10 @@
 //   decodeImage(jpegBytes) -> Promise<{ width, height, data: RGBA Uint8(Clamped)Array }>
 //   encodeJpeg({ width, height, data: RGBA }, { width, height, quality }) -> Promise<Uint8Array>
 //     (scales the source to the requested size, then encodes a baseline RGB JPEG)
+//   transcodeJpeg(jpegBytes, { width, height, quality }) -> Promise<Uint8Array>   (optional)
+//     decodes a JPEG straight at the requested size and encodes it; used for JPEG images when given, so a
+//     huge scan is never held at full resolution (a browser canvas larger than its limit stays blank and
+//     would come out black). The image's own size (from its SOF header) must match /Width /Height.
 // A recompressed stream replaces the original only when it is at least MIN_GAIN smaller; the result is
 // the original bytes when the whole file did not get smaller.
 import { PDFName, PDFNumber, PDFArray, PDFDict, PDFRef, PDFRawStream, PDFStream, decodePDFRawStream } from 'pdf-lib';
@@ -93,6 +97,28 @@ function skipReason(ref, stream, maskRefs) {
   return null;
 }
 
+/** Pixel size of a JPEG from its SOF header: { width, height, components }, or null when not found. */
+export function jpegSize(bytes) {
+  const b = bytes;
+  if (!(b?.length > 4) || b[0] !== 0xff || b[1] !== 0xd8) return null;
+  let i = 2;
+  while (i + 9 < b.length) {
+    if (b[i] !== 0xff) return null;
+    const m = b[i + 1];
+    if (m === 0xff) { i++; continue; }                       // fill byte
+    if (m === 0xd8 || m === 0x01 || (m >= 0xd0 && m <= 0xd7)) { i += 2; continue; } // markers without a length
+    const len = (b[i + 2] << 8) | b[i + 3];
+    if (len < 2) return null;
+    // SOF0..SOF15 except DHT (C4), JPG (C8) and DAC (CC)
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) {
+      return { height: (b[i + 5] << 8) | b[i + 6], width: (b[i + 7] << 8) | b[i + 8], components: b[i + 9] };
+    }
+    if (m === 0xda) return null;                             // start of scan before any SOF
+    i += 2 + len;
+  }
+  return null;
+}
+
 /** Flate image -> RGBA. */
 function flateToRgba(stream, w, h, gray) {
   const raw = decodePDFRawStream(stream).decode();
@@ -142,7 +168,7 @@ function reachable(context) {
   return seen;
 }
 
-export async function optimizePdf(bytes, { maxDpi = PRESETS.balanced.maxDpi, quality = PRESETS.balanced.quality, decodeImage, encodeJpeg, password } = {}) {
+export async function optimizePdf(bytes, { maxDpi = PRESETS.balanced.maxDpi, quality = PRESETS.balanced.quality, decodeImage, encodeJpeg, transcodeJpeg, password } = {}) {
   if (typeof encodeJpeg !== 'function' || typeof decodeImage !== 'function') {
     throw coreError('BAD_ARGS', 'optimizePdf needs decodeImage and encodeJpeg functions');
   }
@@ -178,14 +204,21 @@ export async function optimizePdf(bytes, { maxDpi = PRESETS.balanced.maxDpi, qua
       const dpi = Math.max(w, h) / pageSideIn;
       const scale = dpi > maxDpi ? maxDpi / dpi : 1;
       const ow = Math.max(1, Math.round(w * scale)), oh = Math.max(1, Math.round(h * scale));
-      let src;
-      if (dct) {
-        src = await decodeImage(obj.getContents());
-        if (src?.width !== w || src?.height !== h) { skipped++; continue; }
+      let jpeg;
+      if (dct && typeof transcodeJpeg === 'function') {
+        const size = jpegSize(obj.getContents());
+        if (size?.width !== w || size?.height !== h) { skipped++; continue; }
+        jpeg = await transcodeJpeg(obj.getContents(), { width: ow, height: oh, quality });
       } else {
-        src = { width: w, height: h, data: flateToRgba(obj, w, h, gray) };
+        let src;
+        if (dct) {
+          src = await decodeImage(obj.getContents());
+          if (src?.width !== w || src?.height !== h) { skipped++; continue; }
+        } else {
+          src = { width: w, height: h, data: flateToRgba(obj, w, h, gray) };
+        }
+        jpeg = await encodeJpeg(src, { width: ow, height: oh, quality });
       }
-      const jpeg = await encodeJpeg(src, { width: ow, height: oh, quality });
       if (!(jpeg instanceof Uint8Array) || jpeg.length >= obj.getContents().length * MIN_GAIN) { skipped++; continue; }
       const dict = { Type: 'XObject', Subtype: 'Image', Width: ow, Height: oh, ColorSpace: 'DeviceRGB', BitsPerComponent: 8, Filter: 'DCTDecode' };
       const next = context.stream(jpeg, dict);
