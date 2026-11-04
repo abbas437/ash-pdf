@@ -143,6 +143,15 @@ describe('signature identity (sig, group) in the private extra key', () => {
     assert.equal(by.sn.sig, undefined);
     assert.ok(!('sig' in by.pl) && !('group' in by.pl), 'plain image gets no sig/group');
   });
+  test('an image stamp keeps its stampImg id (Apply stamp after reopening)', async () => {
+    const img = makeImage('png');
+    const add = [{ id: 'st', page: 0, type: 'image', x: 60, y: 60, w: 50, h: 30, bytes: img, mime: 'image/png', stampImg: 'custom-7' },
+      { id: 'pl', page: 0, type: 'image', x: 140, y: 300, w: 40, h: 20, bytes: img, mime: 'image/png' }];
+    const { objects } = await readAnnotations(await writeAnnotations(await makePdf(1), { add }, OPTS));
+    const by = Object.fromEntries(objects.map((o) => [o.id, o]));
+    assert.equal(by.st.stampImg, 'custom-7');
+    assert.ok(!('stampImg' in by.pl), 'plain image gets no stampImg');
+  });
   test('malformed or foreign-typed extra JSON is ignored', async () => {
     for (const bad of ['{not json', 'null', '[1]', '{"sig":5,"group":{"a":1}}']) {
       const out = await writeAnnotations(await makePdf(1), { add: objs(makeImage('png')) }, OPTS);

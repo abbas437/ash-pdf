@@ -333,6 +333,35 @@ try {
   const ord = await ev('return tab.objects.map((o) => o.id);');
   check(ord.indexOf(wo) < ord.indexOf(ws.id), 'undo changed the z-order of whiteout and signature');
 
+  step = 'apply stamp';
+  // A Stamp tool stamp alone: the options bar offers "Apply stamp"; it is burned into the page like a
+  // signature (same confirmation, one undo step).
+  await ev('an.select(tab, []);'); await frames();
+  const stBox = [390, 660, 590, 720]; // clear of the signature copy on this page
+  const st = await ev('return an.add(tab, { type: "stamp", page: 1, x: arg[0], y: arg[1], w: arg[2] - arg[0], h: arg[3] - arg[1], text: "APPROVED", color: "#1b2a80", rotation: 0, borderWidth: 4 }).id;', stBox);
+  check(await ink(await tabBytes(), 1, stBox) < 0.01, 'the stamp is in the page content before Apply');
+  await ev('an.select(tab, [arg]); app.setTool?.("select");', st); await frames();
+  await page.waitForSelector('.opt-sign-apply');
+  check((await page.textContent('.opt-sign-apply')).trim() === 'Apply stamp', `button reads "${(await page.textContent('.opt-sign-apply')).trim()}"`);
+  await page.click('.opt-sign-apply');
+  await page.waitForSelector('.sign-apply-wrap .sign-apply');
+  check(/Apply the stamp to the page\?/.test(await page.textContent('.sign-apply-wrap .sign-apply')), 'stamp confirm text');
+  await page.click('.sign-apply-wrap .dialog-buttons button:text-is("Apply")');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return !t.objects.some((o) => o.id === id); }, st, { timeout: 10_000 });
+  const stInk = await ink(await tabBytes(), 1, stBox);
+  check(stInk > 0.03, `applied stamp not in the page content (dark ${stInk.toFixed(3)})`);
+  await key('Control+z');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.some((o) => o.id === id); }, st, { timeout: 10_000 });
+  check(await ink(await tabBytes(), 1, stBox) < 0.01, 'undo left the stamp in the page content');
+  // An image stamp (Stamp palette > Custom > From image) is an image with stampImg: same button.
+  await ev('an.select(tab, []);'); await frames();
+  const imgSt = await ev('const s = tab.objects.find((o) => o.sig); const { id, sig, group, ...rest } = s; return an.add(tab, { ...rest, page: 1, x: 100, y: 80, stampImg: "custom-1" }).id;');
+  await ev('an.select(tab, [arg]); app.setTool?.("select");', imgSt); await frames();
+  await page.waitForSelector('.opt-sign-apply');
+  check((await page.textContent('.opt-sign-apply')).trim() === 'Apply stamp', 'image stamp: button is not "Apply stamp"');
+  check(!(await page.$('.opt-sign-pages')), 'image stamp offers "Place on pages…" (signatures only)');
+  await ev('an.remove(tab, [arg]); an.select(tab, []);', imgSt); await frames();
+
   step = 'screenshots';
   for (const theme of ['light', 'dark']) {
     await page.evaluate((t) => window.ashStudio.setTheme(t, false), theme);

@@ -37,6 +37,16 @@ On the Custom tab:
 2. Choose **From image…** to make an image stamp from a PNG or JPEG. Tick **Remove light background** and adjust the Threshold if the picture has a white background.
 3. Use the pencil icon to rename a custom stamp, or the cross to delete it.
 
+## Apply a stamp to the page
+
+A placed stamp stays an annotation that anyone can move or delete. To fix it into the page like a rubber stamp on paper:
+
+1. Select the stamp with the Select tool (a text stamp, an image stamp from the Custom tab, or a stamp made in another PDF app).
+2. Click **Apply stamp** in the options bar. With signatures and stamps selected together the button reads **Apply to page**.
+3. Confirm. The stamp becomes part of the page content and can no longer be moved or edited, here or in other viewers, once the file is saved.
+
+**Undo** reverses it until you close the file. If other objects lie under the stamp, the confirmation lists them and applies them with it. It works and asks exactly like [Apply signature](#topic:signatures), including the **Ask before applying a signature or stamp to the page** setting in [Preferences](#topic:preferences).
+
 ## Default stamp shape
 
 Stamps are rectangles unless you choose otherwise. To change the shape for new stamps, open **Edit ▸ Preferences…**, go to **Annotations** and set **Default stamp shape** to Rectangle, Rounded, Circle or Ellipse. See [Preferences](#topic:preferences).

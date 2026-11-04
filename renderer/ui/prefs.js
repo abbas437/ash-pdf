@@ -1,5 +1,5 @@
 // Edit > Preferences… (Ctrl+,): the user's default settings in one dialog, sectioned
-// General / Documents / Annotations (incl. Ask before applying a signature) / Toolbar, plus View > Show tool labels and View > Coloured tool icons.
+// General / Documents / Annotations (incl. Ask before applying a signature or stamp) / Toolbar, plus View > Show tool labels and View > Coloured tool icons.
 //   initPrefs({ registerMenuItem, setTheme }) -> { openPrefs, loadPrefs }
 //   prefsForNewTab() -> {zoomMode, zoom} for a tab about to be built
 //   applySidebarOnOpen() after a document opened
@@ -87,7 +87,7 @@ const SECTIONS = [
     h('label.prefs-field', {}, h('span', {}, 'Author name'),
       h('input.input', { type: 'text', name: 'annotations.author', maxlength: String(AUTHOR_MAX), placeholder: DEFAULT_AUTHOR, autocomplete: 'off' })),
     select('stamps.shape', 'Default stamp shape', [['rect', 'Rectangle'], ['rounded', 'Rounded'], ['circle', 'Circle'], ['ellipse', 'Ellipse']]),
-    check('sign.applyNoConfirm', 'Ask before applying a signature to the page', true),
+    check('sign.applyNoConfirm', 'Ask before applying a signature or stamp to the page', true),
   ]],
   ['toolbar', 'Toolbar', () => [check('ui.toolLabels', 'Show tool labels under the icons'), check('ui.toolColors', 'Coloured tool icons')]],
 ];

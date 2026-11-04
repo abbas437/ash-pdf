@@ -40,7 +40,7 @@ Preferences hold your default settings in one dialog.
 | --- | --- |
 | Author name | Empty, which uses the built-in author name (up to 120 characters) |
 | Default stamp shape | Rectangle, Rounded, Circle, Ellipse |
-| Ask before applying a signature to the page | Off |
+| Ask before applying a signature or stamp to the page | Off |
 
 ## Toolbar
 

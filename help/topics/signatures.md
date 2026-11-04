@@ -43,6 +43,6 @@ Other items in the menu:
 
 Applying burns the signature into the page content like a wet signature. It then cannot be moved or edited, here or in other viewers, once the file is saved. **Undo** reverses it until you close the file ([Undo and redo](#topic:undo-redo)). If other objects lie under the signature, the confirmation lists them and applies them with it.
 
-Applying asks for confirmation first. To stop that, tick **Don't ask again** in the dialog, or untick **Ask before applying a signature to the page** under Annotations in [Preferences](#topic:preferences). It still asks when the document is already digitally signed, because saving over it invalidates that signature; **Save as** a copy keeps the original intact ([Save and print](#topic:save-and-print)).
+Applying asks for confirmation first. To stop that, tick **Don't ask again** in the dialog, or untick **Ask before applying a signature or stamp to the page** under Annotations in [Preferences](#topic:preferences). It still asks when the document is already digitally signed, because saving over it invalidates that signature; **Save as** a copy keeps the original intact ([Save and print](#topic:save-and-print)).
 
-> **Tip:** To add a stamp rather than a signature, see [Stamps](#topic:stamps).
+> **Tip:** Stamps can be applied the same way: select a stamp and choose **Apply stamp** (see [Stamps](#topic:stamps)).

@@ -375,7 +375,7 @@ async function imageStampDialog(item) {
 /** Choose a custom stamp: text stamps become the active stamp, image stamps arm the image tool. */
 function chooseStamp(s) {
   if (s.kind !== 'image') { useStamp(s); return; }
-  armImage(s.bytes, { frac: 0.25, label: 'stamp' });
+  armImage(s.bytes, { frac: 0.25, label: 'stamp', extra: { stampImg: s.id } }); // stampImg: Apply stamp (sign.js) knows it
 }
 let palette = null;
 function closePalette() { palette?.remove(); palette = null; document.removeEventListener('pointerdown', outside, true); }

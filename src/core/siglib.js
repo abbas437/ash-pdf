@@ -114,7 +114,7 @@ const TYPE_LABEL = { rect: 'Rectangle', ellipse: 'Ellipse', cloud: 'Cloud', line
   strikeout: 'Strikeout', squiggly: 'Squiggly underline', textHighlight: 'Text highlight' };
 /** Short name of an object for the Apply signature confirmation list. */
 export function objectLabel(o) {
-  const name = o.type === 'image' && o.sig ? 'Signature' : TYPE_LABEL[o.type] ?? o.type;
+  const name = o.type === 'image' && o.sig ? 'Signature' : o.type === 'image' && o.stampImg ? 'Stamp' : TYPE_LABEL[o.type] ?? o.type;
   const t = String(o.text ?? '').replace(/\s+/g, ' ').trim();
   return t ? `${name} “${t.length > 24 ? `${t.slice(0, 23)}…` : t}”` : name;
 }
