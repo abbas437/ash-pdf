@@ -362,6 +362,43 @@ try {
   check(!(await page.$('.opt-sign-pages')), 'image stamp offers "Place on pages…" (signatures only)');
   await ev('an.remove(tab, [arg]); an.select(tab, []);', imgSt); await frames();
 
+  step = 'apply stamp: grouped stamp, mixed selection, Sign menu';
+  // A stamp grouped (Ctrl+G) with a rectangle: Apply stamp burns the stamp only; the rectangle stays an object.
+  const gst = await ev('return an.add(tab, { type: "stamp", page: 1, x: 390, y: 520, w: 200, h: 50, text: "CHECKED", color: "#1b2a80", rotation: 0, borderWidth: 4, group: "gx" }).id;');
+  const grect = await ev('return an.add(tab, { type: "rect", page: 1, x: 80, y: 700, w: 100, h: 50, stroke: "#000000", strokeWidth: 2, fill: "#203080", group: "gx" }).id;');
+  await ev('an.select(tab, [arg]); app.setTool?.("select");', gst); await frames();
+  await page.waitForSelector('.opt-sign-apply');
+  await page.click('.opt-sign-apply');
+  await page.waitForSelector('.sign-apply-wrap .sign-apply');
+  await page.click('.sign-apply-wrap .dialog-buttons button:text-is("Apply")');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return !t.objects.some((o) => o.id === id); }, gst, { timeout: 10_000 });
+  check(await has(grect), 'the rectangle grouped with the stamp was burned with it');
+  check(await ink(await tabBytes(), 1, [90, 710, 170, 740]) < 0.05, 'the grouped rectangle is in the page content');
+  await key('Control+z');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.some((o) => o.id === id); }, gst, { timeout: 10_000 });
+  await ev('an.remove(tab, [arg]); an.select(tab, []);', grect); await frames();
+  // A signature and a stamp selected together: "Apply to page", plural wording.
+  const sig1 = (await sigs()).find((o) => o.page === 1);
+  await ev('an.select(tab, arg); app.setTool?.("select");', [sig1.id, gst]); await frames();
+  await page.waitForSelector('.opt-sign-apply');
+  check((await page.textContent('.opt-sign-apply')).trim() === 'Apply to page', 'mixed selection: button is not "Apply to page"');
+  await page.click('.opt-sign-apply');
+  await page.waitForSelector('.sign-apply-wrap .sign-apply');
+  check(/Apply the signature and stamp to the page\? They become/.test(await page.textContent('.sign-apply-wrap .sign-apply')), `mixed wording: ${await page.textContent('.sign-apply-wrap .sign-apply')}`);
+  await page.click('.sign-apply-wrap .dialog-buttons button:text-is("Cancel")');
+  await frames();
+  // The Sign menu's Apply signature with the same selection burns the signature only.
+  await openSign();
+  await page.click('.sign-menu .sign-apply');
+  await page.waitForSelector('.sign-apply-wrap .sign-apply');
+  check(/Apply the signature to the page\? It becomes/.test(await page.textContent('.sign-apply-wrap .sign-apply')), 'Sign menu: wording is not signature-only');
+  await page.click('.sign-apply-wrap .dialog-buttons button:text-is("Apply")');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return !t.objects.some((o) => o.id === id); }, sig1.id, { timeout: 10_000 });
+  check(await has(gst), 'the Sign menu also burned the selected stamp');
+  await key('Control+z');
+  await page.waitForFunction((id) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t.objects.some((o) => o.id === id); }, sig1.id, { timeout: 10_000 });
+  await ev('an.remove(tab, [arg]); an.select(tab, []);', gst); await frames();
+
   step = 'screenshots';
   for (const theme of ['light', 'dark']) {
     await page.evaluate((t) => window.ashStudio.setTheme(t, false), theme);

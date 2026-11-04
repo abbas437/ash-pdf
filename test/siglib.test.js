@@ -80,6 +80,9 @@ test('applyPlan: other objects below are listed as covering, and what lies below
   assert.deepEqual(p.covering.map((o) => o.id), ['rect', 'txt']);
   assert.deepEqual(p.auto.map((o) => o.id), ['wo']);
   assert.equal(objectLabel(objs[3]), 'Rectangle');
+  assert.equal(objectLabel({ type: 'apStamp' }), 'Stamp');
+  assert.equal(objectLabel({ type: 'image', stampImg: 'c1' }), 'Stamp');
+  assert.equal(objectLabel({ type: 'image', sig: 's1' }), 'Signature');
   assert.equal(objectLabel(objs[4]), 'Text box “Old date 2024-01-01 wri…”');
   assert.equal(objectLabel(objs[5]), 'Signature');
 });

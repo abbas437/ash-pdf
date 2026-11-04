@@ -103,7 +103,7 @@ async function openMenu(focusFirst = false) {
   rows.push(h('div.menu-sep', { role: 'separator' }),
     item('sign-manage', 'Manage signatures…', () => openSignatureManager()),
     item('sign-block', 'Signature block…', () => blockDialog(), { disabled: off || !list.length }),
-    item('sign-apply', 'Apply signature', () => applySignature(tab), { disabled: off || !toApply(tab).some(isSignature), title: 'Fix the selected signature into the page (Undo reverses it)' }),
+    item('sign-apply', 'Apply signature', () => applySignature(tab, isSignature), { disabled: off || !toApply(tab, isSignature).length, title: 'Fix the selected signature into the page (Undo reverses it)' }),
     h('p.sign-note', {}, NOTE));
   menuEl.replaceChildren(...rows);
   menuEl.hidden = false;
@@ -183,31 +183,34 @@ function selectionOptions(c) {
   if (sig && new Set(objs.map((o) => o.page)).size === 1) {
     c.append(h('button.btn.opt-sign-pages', { type: 'button', title: 'Copy this signature to other pages', onclick: () => placeOnPagesDialog(tab, objs) }, 'Place on pages…'));
   }
-  const { label, noun } = applyWords(sig, stamp);
-  c.append(h('button.btn.opt-sign-apply', { type: 'button', title: `Fix this ${noun} into the page (Undo reverses it)`, onclick: () => applySignature(tab) }, label));
+  const { label, noun } = applyWords(objs.filter(isSignature).length, objs.filter(isStamp).length);
+  c.append(h('button.btn.opt-sign-apply', { type: 'button', title: `Fix the selected ${noun} into the page (Undo reverses it)`, onclick: () => applySignature(tab) }, label));
 }
 
 // ---------------------------------------------------------------- apply signature
 const isSignature = (o) => o.type === 'image' && !!o.sig;
 const isStamp = (o) => o.type === 'stamp' || o.type === 'apStamp' || (o.type === 'image' && !!o.stampImg);
 const applicable = (o) => isSignature(o) || isStamp(o);
-/** Button label and the noun used in its tooltip and the confirmation, by what is selected. */
-function applyWords(sig, stamp) {
-  if (sig && stamp) return { label: 'Apply to page', noun: 'signature and stamp', title: 'Apply to page' };
-  return stamp ? { label: 'Apply stamp', noun: 'stamp', title: 'Apply stamp' } : { label: 'Apply signature', noun: 'signature', title: 'Apply signature' };
+/** Button label / dialog title, the noun for tooltip and confirmation ("2 stamps" -> "stamps") and plural, by counts. */
+function applyWords(sigN, stampN) {
+  const noun = [sigN ? (sigN > 1 ? 'signatures' : 'signature') : null, stampN ? (stampN > 1 ? 'stamps' : 'stamp') : null].filter(Boolean).join(' and ');
+  const label = sigN && stampN ? 'Apply to page' : stampN ? 'Apply stamp' : 'Apply signature';
+  return { label, title: label, noun, plural: sigN + stampN > 1 };
 }
-/** The selected placed signatures and stamps with every member of their groups (signature blocks), in z-order. */
-function toApply(tab) {
+/**
+ * The selected objects `only` accepts (signatures and stamps by default; the Sign menu passes signatures
+ * only), in z-order, with the rest of their signature blocks. Only a signature's group is followed: a
+ * stamp may be grouped (Ctrl+G) with anything, and those objects must not be burned unasked.
+ */
+function toApply(tab, only = applicable) {
   if (!tab || tab.readOnly) return [];
   const sel = new Set(annotations.getSelection(tab));
-  const sigs = (tab.objects ?? []).filter((o) => sel.has(o.id) && applicable(o));
-  const ids = new Set(sigs.map((o) => o.id)), groups = new Set(sigs.map((o) => o.group).filter(Boolean));
+  const picked = (tab.objects ?? []).filter((o) => sel.has(o.id) && only(o));
+  const ids = new Set(picked.map((o) => o.id)), groups = new Set(picked.filter(isSignature).map((o) => o.group).filter(Boolean));
   return tab.objects.filter((o) => ids.has(o.id) || (o.group && groups.has(o.group)));
 }
 async function confirmApply(tab, core, covering) {
-  const n = core.filter(applicable).length;
-  const words = applyWords(core.some(isSignature), core.some(isStamp));
-  const noun = n > 1 ? { signature: 'signatures', stamp: 'stamps' }[words.noun] ?? 'signatures and stamps' : words.noun;
+  const words = applyWords(core.filter(isSignature).length, core.filter(isStamp).length), { noun } = words, n = words.plural ? 2 : 1;
   const { detectSignatures } = await import('../../src/core/index.js');
   const signed = await detectSignatures(tab.bytes).then((r) => r.signed, () => false);
   if (!signed && !covering.length && (await window.api.settingsGet(APPLY_KEY).catch(() => undefined)) === true) return true;
@@ -228,14 +231,14 @@ async function confirmApply(tab, core, covering) {
   return true;
 }
 /** Burn the selected signature(s) / stamp(s), with what lies under them (applyPlan), into the page content as one page-operation undo step. */
-async function applySignature(tab) {
-  const core = toApply(tab);
+async function applySignature(tab, only = applicable) {
+  const core = toApply(tab, only);
   if (!core.length) { toast('Select a placed signature or stamp first'); return false; }
   const { KNOWN_TYPES } = await import('../../src/core/annotate.js');
   const plan = applyPlan(tab.objects, core, { boxOf: objectBox, canBurn: (o) => KNOWN_TYPES.has(o.type) });
   if (!(await confirmApply(tab, core, plan.covering))) return false;
   const ids = plan.burn.map((o) => o.id);
-  const ok = await runOp(tab, applyWords(core.some(isSignature), core.some(isStamp)).title, async (bytes, n) => {
+  const ok = await runOp(tab, applyWords(core.filter(isSignature).length, core.filter(isStamp).length).title, async (bytes, n) => {
     const live = tab.objects.filter((o) => ids.includes(o.id)); // as they are now, in z-order
     if (!live.length) return null;
     const { flattenObjects } = await import('../../src/core/index.js');

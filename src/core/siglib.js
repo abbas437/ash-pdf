@@ -110,7 +110,7 @@ export function applyPlan(objects, core, { boxOf, canBurn }) {
 }
 
 const TYPE_LABEL = { rect: 'Rectangle', ellipse: 'Ellipse', cloud: 'Cloud', line: 'Line', arrow: 'Arrow', polyline: 'Polyline', ink: 'Freehand drawing',
-  highlight: 'Highlight', image: 'Image', callout: 'Callout', stamp: 'Stamp', note: 'Note', text: 'Text box', underline: 'Underline',
+  highlight: 'Highlight', image: 'Image', callout: 'Callout', stamp: 'Stamp', apStamp: 'Stamp', note: 'Note', text: 'Text box', underline: 'Underline',
   strikeout: 'Strikeout', squiggly: 'Squiggly underline', textHighlight: 'Text highlight' };
 /** Short name of an object for the Apply signature confirmation list. */
 export function objectLabel(o) {

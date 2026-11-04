@@ -41,11 +41,11 @@ On the Custom tab:
 
 A placed stamp stays an annotation that anyone can move or delete. To fix it into the page like a rubber stamp on paper:
 
-1. Select the stamp with the Select tool (a text stamp, an image stamp from the Custom tab, or a stamp made in another PDF app).
+1. Select the stamp with the Select tool (a text stamp, an image stamp from the Custom tab, or a stamp made in another PDF app). Image stamps placed with an earlier version of ASH PDF Studio are plain images: place them again from the Custom tab to apply them.
 2. Click **Apply stamp** in the options bar. With signatures and stamps selected together the button reads **Apply to page**.
 3. Confirm. The stamp becomes part of the page content and can no longer be moved or edited, here or in other viewers, once the file is saved.
 
-**Undo** reverses it until you close the file. If other objects lie under the stamp, the confirmation lists them and applies them with it. It works and asks exactly like [Apply signature](#topic:signatures), including the **Ask before applying a signature or stamp to the page** setting in [Preferences](#topic:preferences).
+**Undo** reverses it until you close the file. Objects grouped with the stamp (<kbd>Ctrl</kbd>+<kbd>G</kbd>) are not applied with it; only the stamp is. If other objects lie under the stamp, the confirmation lists them and applies them with it. It works and asks exactly like [Apply signature](#topic:signatures), including the **Ask before applying a signature or stamp to the page** setting in [Preferences](#topic:preferences).
 
 ## Default stamp shape
 
