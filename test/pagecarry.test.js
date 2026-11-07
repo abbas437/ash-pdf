@@ -1,7 +1,7 @@
 // Bookmarks and form fields across merge / extract / split / delete / insert / duplicate / replace.
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, PDFName, PDFDict, PDFArray, PDFNumber, PDFHexString, PDFRef } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFDict, PDFArray, PDFNumber, PDFHexString, PDFRef, PDFString } from 'pdf-lib';
 import * as ops from '../src/core/pdfOps.js';
 
 const N = (s) => PDFName.of(s);
@@ -221,5 +221,110 @@ describe('bookmarks and form fields follow page operations', () => {
     assert.deepEqual(flat(await outline(out)), FULL);
     assert.deepEqual(await fieldNames(out), ['notes', 'r.notes']);
     assert.ok(await fills(out, 'r.notes'));
+  });
+
+  test('merge and extract keep a URI bookmark beside a page bookmark', async () => {
+    const doc = await PDFDocument.load(await fixture());
+    const ctx = doc.context;
+    const root = doc.catalog.lookup(N('Outlines'), PDFDict);
+    const rootRef = doc.catalog.get(N('Outlines'));
+    const last = root.get(N('Last'));
+    const web = ctx.register(ctx.obj({
+      Title: PDFHexString.fromText('Website'), Parent: rootRef, Prev: last,
+      A: { S: 'URI', URI: PDFString.of('https://example.com/x') },
+    }));
+    ctx.lookup(last).set(N('Next'), web);
+    root.set(N('Last'), web);
+    root.set(N('Count'), PDFNumber.of(4));
+    const src = await doc.save();
+    const uri = async (bytes) => {
+      const d = await PDFDocument.load(bytes);
+      const items = [];
+      for (let r = d.catalog.lookup(N('Outlines'), PDFDict).get(N('First')); r; r = d.context.lookup(r).get(N('Next'))) items.push(d.context.lookup(r));
+      const w = items.find((i) => i.lookup(N('Title')).decodeText() === 'Website');
+      return w && [String(w.lookup(N('A'), PDFDict).lookup(N('S'))), w.lookup(N('A'), PDFDict).lookup(N('URI')).decodeText()];
+    };
+    const want = ['/URI', 'https://example.com/x'];
+    const merged = await ops.mergePdfs([src, src]);
+    assert.deepEqual(flat(await outline(merged)).filter((x) => /Website|Intro/.test(x)), ['Intro@1', 'Website@0', 'Intro@5', 'Website@0']);
+    assert.deepEqual(await uri(merged), want);
+    const ext = await ops.extractPages(src, [0]);
+    assert.deepEqual(flat(await outline(ext)), ['Intro@1', 'Website@0']);
+    assert.deepEqual(await uri(ext), want);
+    // Deleting a page leaves it alone.
+    assert.deepEqual(await uri(await ops.deletePages(src, [0])), want);
+  });
+
+  test('a field whose /T is on its widget (no Kids) is carried, fillable and deleted with its page', async () => {
+    const doc = await PDFDocument.create();
+    const pages = [doc.addPage([300, 400]), doc.addPage([300, 400])];
+    const ctx = doc.context;
+    const widget = (page, name) => {
+      const ref = ctx.register(ctx.obj({
+        Type: 'Annot', Subtype: 'Widget', FT: 'Tx', T: PDFHexString.fromText(name),
+        Rect: [20, 300, 220, 320], F: 4, P: page.ref, DA: PDFString.of('/Helv 0 Tf 0 g'),
+      }));
+      page.node.set(N('Annots'), ctx.obj([ref]));
+      return ref;
+    };
+    const refs = [widget(pages[0], 'solo1'), widget(pages[1], 'solo2')];
+    doc.catalog.set(N('AcroForm'), ctx.obj({ Fields: refs }));
+    const src = await doc.save();
+    assert.deepEqual(await fieldNames(src), ['solo1', 'solo2']);
+    const out = await ops.extractPages(src, [1]);
+    assert.deepEqual(await fieldNames(out), ['solo2']);
+    assert.ok(await fills(out, 'solo2'));
+    const merged = await ops.mergePdfs([src, src]);
+    assert.deepEqual(await fieldNames(merged), ['solo1', 'solo1_2', 'solo2', 'solo2_2']);
+    assert.ok(await fills(merged, 'solo2_2'));
+    const del = await ops.deletePages(src, [0]);
+    assert.deepEqual(await fieldNames(del), ['solo2']);
+    assert.ok(await fills(del, 'solo2'));
+  });
+
+  test('a radio group with kids on two pages: extract keeps that kid, delete keeps the other', async () => {
+    const doc = await PDFDocument.create();
+    const pages = [doc.addPage([300, 400]), doc.addPage([300, 400])];
+    const group = doc.getForm().createRadioGroup('choice');
+    group.addOptionToPage('one', pages[0], { x: 20, y: 300, width: 20, height: 20 });
+    group.addOptionToPage('two', pages[1], { x: 20, y: 300, width: 20, height: 20 });
+    const src = await doc.save();
+    const kidsOf = async (bytes) => (await PDFDocument.load(bytes)).getForm().getRadioGroup('choice');
+    const ext = await kidsOf(await ops.extractPages(src, [1]));
+    assert.equal(ext.acroField.getWidgets().length, 1);
+    ext.select('two');
+    assert.equal(ext.getSelected(), 'two');
+    const del = await kidsOf(await ops.deletePages(src, [0]));
+    assert.equal(del.acroField.getWidgets().length, 1);
+    del.select('two');
+    assert.equal(del.getSelected(), 'two');
+  });
+
+  test('extracting all pages of a 1000-page document with 5 fields per page stays fast', async (t) => {
+    const t0 = Date.now();
+    const doc = await PDFDocument.create();
+    const ctx = doc.context;
+    const fields = [];
+    for (let i = 0; i < 1000; i++) {
+      const p = doc.addPage([300, 400]);
+      const annots = [];
+      for (let k = 0; k < 5; k++) {
+        const ref = ctx.register(ctx.obj({
+          Type: 'Annot', Subtype: 'Widget', FT: 'Tx', T: PDFHexString.fromText(`f${i}_${k}`),
+          Rect: [10, 10 + k * 25, 110, 30 + k * 25], F: 4, P: p.ref,
+        }));
+        annots.push(ref);
+        fields.push(ref);
+      }
+      p.node.set(N('Annots'), ctx.obj(annots));
+    }
+    doc.catalog.set(N('AcroForm'), ctx.obj({ Fields: fields }));
+    const src = await doc.save();
+    if (Date.now() - t0 > 8000) return t.skip('fixture too slow to build');
+    const t1 = Date.now();
+    const out = await ops.extractPages(src, Array.from({ length: 1000 }, (_, i) => i));
+    const ms = Date.now() - t1;
+    assert.equal((await PDFDocument.load(out)).getForm().getFields().length, 5000);
+    assert.ok(ms < 3000, `extract took ${ms} ms`);
   });
 });

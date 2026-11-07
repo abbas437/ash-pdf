@@ -157,7 +157,8 @@ function clonePrim(v) {
  * Carry `src`'s outline items whose destination page was copied into `dest`.
  * pageMap: Map<src page ref, dest page ref>. Items keep title, /C, /F, nesting and open state;
  * an item whose page was not copied is dropped, or kept as a container without /Dest when some of its
- * children are kept. Destinations become explicit [destPage ...] arrays. The new items go into
+ * children are kept. An item with no local page destination (URI, Launch, GoToR, JavaScript, Named
+ * action, title only) is kept with its /A deep-copied. Destinations become explicit [destPage ...] arrays. The new items go into
  * dest's top level before the first existing item that targets a page at or after `after` (a dest
  * page index), or at the end when `after` is undefined or no such item exists.
  */
@@ -167,11 +168,18 @@ export function carryOutline(dest, src, pageMap, after) {
   const sroot = get(src.catalog, 'Outlines', PDFDict);
   if (!sroot) return;
   const nd = namedDests(src);
+  let copier;
   const build = (nodes) => nodes.flatMap((n) => {
     const kids = build(n.kids);
     const r = destPage(sctx, nd, n.dict);
     const to = r && pageMap.get(r.page);
-    if (!to && !kids.length) return [];
+    // An item that points at no page of the source (URI, Launch, GoToR, JavaScript, Named action, or
+    // title only) is kept; one whose local page destination was not copied goes, unless it has kept kids.
+    const a = get(n.dict, 'A', PDFDict);
+    const sd = n.dict.lookup(N('Dest'));
+    const local = r !== null || (a && a.lookup(N('S')) === N('GoTo')) || (sd !== undefined && !(sd instanceof PDFArray));
+    const otherDest = !r && sd instanceof PDFArray;
+    if (!to && !kids.length && local && !otherDest) return [];
     const dict = dctx.obj({});
     const title = n.dict.lookup(N('Title'));
     if (title instanceof PDFString || title instanceof PDFHexString) dict.set(N('Title'), title.clone());
@@ -180,6 +188,11 @@ export function carryOutline(dest, src, pageMap, after) {
     if (rgb.length === 3 && rgb.every((x) => x instanceof PDFNumber)) dict.set(N('C'), dctx.obj(rgb.map(clonePrim)));
     const f = get(n.dict, 'F', PDFNumber);
     if (f) dict.set(N('F'), clonePrim(f));
+    if (!r) {
+      copier ??= PDFObjectCopier.for(sctx, dctx);
+      if (a && a.lookup(N('S')) !== N('GoTo')) dict.set(N('A'), copier.copy(a));
+      if (otherDest) dict.set(N('Dest'), copier.copy(sd));
+    }
     if (to) dict.set(N('Dest'), dctx.obj([to, ...r.array.asArray().slice(1).map((x) => clonePrim(sctx.lookup(x)))]));
     return [{ ref: dctx.register(dict), dict, open: n.open, kids }];
   });
@@ -232,12 +245,16 @@ function pruneField(ctx, node, drop, seen) {
   if (seen.has(node)) return true;
   seen.add(node);
   const keep = [];
+  const kept = [];
   for (let i = 0; i < kids.size(); i++) {
     const kd = kids.lookup(i);
-    if (!(kd instanceof PDFDict) || pruneField(ctx, kd, drop, seen)) keep.push(kids.get(i));
+    if (!(kd instanceof PDFDict) || pruneField(ctx, kd, drop, seen)) { keep.push(kids.get(i)); kept.push(i); }
   }
   if (keep.length === kids.size()) return true;
   if (!keep.length) return false;
+  // A radio group's /Opt export values are positional, one per kid: pdf-lib's select() reads them that way.
+  const opt = get(node, 'Opt', PDFArray);
+  if (opt && opt.size() === kids.size()) node.set(N('Opt'), ctx.obj(kept.map((i) => opt.get(i))));
   node.set(N('Kids'), ctx.obj(keep));
   return true;
 }
@@ -282,6 +299,7 @@ export function carryFields(dest, src, copiedPages) {
     }
   }
   const tops = [];
+  const topSeen = new Set();
   for (const [w, ref] of widgets) {
     let d = w;
     let r = ref;
@@ -294,7 +312,10 @@ export function carryFields(dest, src, copiedPages) {
       d = p;
       r = pr;
     }
-    if (r instanceof PDFRef && d.has(N('T')) && !tops.some((t) => t.dict === d)) tops.push({ dict: d, ref: r });
+    if (r instanceof PDFRef && d.has(N('T')) && !topSeen.has(d)) {
+      topSeen.add(d);
+      tops.push({ dict: d, ref: r });
+    }
   }
   if (!tops.length) return;
   const sAf = get(src.catalog, 'AcroForm', PDFDict);

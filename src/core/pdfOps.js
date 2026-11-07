@@ -125,8 +125,9 @@ function carryCopied(dest, src, indices, copied, { outline = true, after } = {})
 function removePages(doc, indices) {
   const all = doc.getPages();
   const gone = indices.map((i) => all[i]);
+  const goneSet = new Set(gone);
   indices.forEach((i) => doc.removePage(i));
-  dropFieldsOf(doc, gone, all.filter((p) => !gone.includes(p)));
+  dropFieldsOf(doc, gone, all.filter((p) => !goneSet.has(p)));
   retargetOutline(doc, new Map(gone.map((p) => [p.ref, null])));
 }
 
