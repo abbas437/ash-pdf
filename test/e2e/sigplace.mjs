@@ -11,11 +11,10 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { image, rgba } from './lib/images.mjs';
 import { chromium } from 'playwright-core';
 import { PDFDocument, PDFName } from 'pdf-lib';
 
-const sharp = createRequire(import.meta.url)('/opt/npm-tools/node_modules/sharp');
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.woff2': 'font/woff2' };
@@ -26,8 +25,8 @@ async function makePdf() {
   for (const s of SIZES) doc.addPage(s);
   return Buffer.from(await doc.save());
 }
-const SIG = await sharp({ create: { width: 120, height: 40, channels: 4, background: { r: 26, g: 43, b: 109, alpha: 1 } } }).png().toBuffer();
-const INI = await sharp({ create: { width: 40, height: 30, channels: 4, background: { r: 90, g: 0, b: 0, alpha: 1 } } }).png().toBuffer();
+const SIG = image(120, 40, { r: 26, g: 43, b: 109 });
+const INI = image(40, 30, { r: 90, g: 0, b: 0 });
 
 const server = createServer(async (req, res) => {
   const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));
@@ -305,7 +304,7 @@ try {
       if (k) await page.waitForTimeout(200);
       const [cx0, cy0] = await toClient(i, x0, y0), [cx1, cy1] = await toClient(i, x1, y1);
       const png = await page.screenshot({ clip: { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 } });
-      const { data, info } = await sharp(png).raw().toBuffer({ resolveWithObject: true });
+      const { data, info } = await rgba(png);
       let n = 0; for (let q = 0; q < data.length; q += info.channels) if (data[q] < 120 && data[q + 1] < 120) n++;
       f = n / (data.length / info.channels);
     }

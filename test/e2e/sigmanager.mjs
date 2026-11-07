@@ -8,20 +8,17 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { image } from './lib/images.mjs';
 import { chromium } from 'playwright-core';
 
-const sharp = createRequire(import.meta.url)('/opt/npm-tools/node_modules/sharp');
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.woff2': 'font/woff2' };
 
 // Old setting: a small dark-blue PNG. Import: white page with a dark ink bar (JPEG, so the white is not pure).
-const OLD_PNG = await sharp({ create: { width: 30, height: 10, channels: 4, background: { r: 26, g: 43, b: 109, alpha: 1 } } }).png().toBuffer();
-const SCAN = await sharp({ create: { width: 200, height: 100, channels: 3, background: { r: 250, g: 250, b: 246 } } })
-  .composite([{ input: await sharp({ create: { width: 120, height: 30, channels: 3, background: { r: 20, g: 20, b: 30 } } }).png().toBuffer(), left: 40, top: 35 }]).jpeg({ quality: 92 }).toBuffer();
-const PASTE = await sharp({ create: { width: 60, height: 24, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } } })
-  .composite([{ input: await sharp({ create: { width: 40, height: 8, channels: 4, background: { r: 120, g: 0, b: 0, alpha: 1 } } }).png().toBuffer(), left: 10, top: 8 }]).png().toBuffer();
+const OLD_PNG = image(30, 10, { r: 26, g: 43, b: 109 });
+const SCAN = image(200, 100, { r: 250, g: 250, b: 246 }, [{ left: 40, top: 35, width: 120, height: 30, color: { r: 20, g: 20, b: 30 } }], { jpeg: 92 });
+const PASTE = image(60, 24, null, [{ left: 10, top: 8, width: 40, height: 8, color: { r: 120, g: 0, b: 0 } }]);
 
 const server = createServer(async (req, res) => {
   const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));

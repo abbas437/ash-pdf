@@ -7,11 +7,10 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { image } from './lib/images.mjs';
 import { chromium } from 'playwright-core';
 import { PDFDocument, PDFName, StandardFonts, degrees } from 'pdf-lib';
 
-const sharp = createRequire(import.meta.url)('/opt/npm-tools/node_modules/sharp');
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
@@ -26,8 +25,7 @@ async function makePdf() {
   }
   return Buffer.from(await doc.save());
 }
-const solid = (w, h, c) => sharp({ create: { width: w, height: h, channels: 3, background: c } });
-const PNG = await solid(40, 20, { r: 0, g: 200, b: 0 }).png().toBuffer();
+const PNG = image(40, 20, { r: 0, g: 200, b: 0 });
 
 const server = createServer(async (req, res) => {
   const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));

@@ -8,11 +8,10 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { image } from './lib/images.mjs';
 import { chromium } from 'playwright-core';
 import { PDFDocument } from 'pdf-lib';
 
-const sharp = createRequire(import.meta.url)('/opt/npm-tools/node_modules/sharp');
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.woff2': 'font/woff2' };
@@ -29,7 +28,7 @@ async function makePdf() {
   doc.addPage([612, 792]); doc.addPage([612, 792]);
   return Buffer.from(await doc.save());
 }
-const SIG = await sharp({ create: { width: 120, height: 40, channels: 4, background: { r: 26, g: 43, b: 109, alpha: 1 } } }).png().toBuffer();
+const SIG = image(120, 40, { r: 26, g: 43, b: 109 });
 
 const server = createServer(async (req, res) => {
   const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));

@@ -9,12 +9,11 @@ import { createServer } from 'node:http';
 import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { image } from './lib/images.mjs';
 import { chromium } from 'playwright-core';
 import { flattenAnnotations } from '../../src/core/annots.js';
 import { PDFDocument, StandardFonts, degrees } from 'pdf-lib';
 
-const sharp = createRequire(import.meta.url)('/opt/npm-tools/node_modules/sharp');
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
@@ -29,12 +28,10 @@ async function makePdf() {
   }
   return Buffer.from(await doc.save());
 }
-const solid = (w, h, c) => sharp({ create: { width: w, height: h, channels: 3, background: c } });
-const PNG = await solid(2, 2, { r: 0, g: 200, b: 0 }).png().toBuffer();
-const JPEG = await solid(40, 20, { r: 0, g: 0, b: 230 }).jpeg({ quality: 95 }).toBuffer();
+const PNG = image(2, 2, { r: 0, g: 200, b: 0 });
+const JPEG = image(40, 20, { r: 0, g: 0, b: 230 }, [], { jpeg: 95 });
 // White background with a red block: after background removal the corner must be transparent.
-const STAMPPNG = await sharp({ create: { width: 60, height: 40, channels: 3, background: { r: 255, g: 255, b: 255 } } })
-  .composite([{ input: await solid(20, 20, { r: 200, g: 0, b: 0 }).png().toBuffer(), left: 20, top: 10 }]).png().toBuffer();
+const STAMPPNG = image(60, 40, { r: 255, g: 255, b: 255 }, [{ left: 20, top: 10, width: 20, height: 20, color: { r: 200, g: 0, b: 0 } }]);
 
 const server = createServer(async (req, res) => {
   const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));
