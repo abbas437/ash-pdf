@@ -269,6 +269,26 @@ Links, Widgets and other non-markup annotations are untouched. Nothing selected 
 
 ---
 
+## compareReport.js — Compare revisions report
+
+### `buildCompareReport(pages, meta) → Promise<Uint8Array>`
+The overlay PDF of a revision compare (images and regions from `renderer/ui/compare-lib.js`).
+`pages[i] = {width, height, image: {bytes, type: 'png'|'jpeg'}, regions?: [{x, y, w, h, added, removed}],
+status?: 'compared'|'added'|'removed', textChanges?: {added: [{text, box: {x, y, w, h}}], removed: [...]}}`,
+sizes and boxes in top-left points; `meta = {older: {name}, newer: {name}, date?}` (Date or ISO string,
+default now). Each page: the image full page; a legend box top-left (Helvetica, names through
+`sanitizeText`, the arrow in Symbol; "Page only in the newer/older revision" on status pages); one
+Square annotation per region, `/BS << /W 1 /S /D /D [3 2] >>`, `/C` red when removed ≥ 2 × added,
+green when added ≥ 2 × removed, else orange, `/Contents` "Change k: removed|added|added and removed"
+plus "Text: added "…"; removed "…"" for text boxes centred inside it, `/T (Compare)`, unique `/NM`,
+`/M`, an `/AP /N`; then one small Square per text change outside every region (at most 200 per page,
+the rest counted in the legend). `/Title` "Compare <older> to <newer>", `/Producer` ASH PDF Studio,
+and a flat outline "Page 3 – 5 changes" per page with changes. `readAnnotations` reads the
+rectangles back as `rect` objects with `dash: 'dashed'`. `changeKind({added, removed})` gives the
+colour rule.
+
+---
+
 ## forms.js
 
 ### `listFields(bytes) → Promise<Field[]>`
