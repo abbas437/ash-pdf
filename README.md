@@ -146,10 +146,19 @@ All methods return Promises except `onOpenFile`. A *file* object is `{ path, nam
 | `officeExportDocx({ bytes, defaultPath? })` | `{ path }` or `null` | Save As (.docx), then Microsoft Word converts `bytes` (the current PDF) through PDF Reflow (`electron/office.js`). |
 | `officeToPdf()` | `file` or `null` | Pick a .doc/.docx/.rtf/.xls/.xlsx/.ppt/.pptx, Save As (.pdf); Word/Excel/PowerPoint export it. |
 | `cancelSearch()` | `true` | Aborts every running folder walk of the advanced search (`listPdfs`). Browser shim: not provided (callers use `api.cancelSearch?.()`). |
+| `openDropped(file)` | `{ path, name }` or `null` | A `File` from a drop event. The preload asks Electron for its path (only real files on disk have one) and main grants it if it is an existing `.pdf`. |
+| `copyText(text)` / `readText()` | `true` / `string` | Clipboard text, 10 MB cap (`readText` returns `''` above it). The page itself cannot use `navigator.clipboard`. |
+| `copyImage(pngBytes, text?)` / `readImage()` | `true` / `Uint8Array` or `null` | Clipboard PNG, 50 MB cap; `copyImage` can write a text version in the same clipboard item. |
+| `openExternal(url)` | `true` | Opens an `http:`, `https:` or `mailto:` URL in the system browser or mail app; any other scheme is refused. |
+| `openFolder()` / `listPdfs(folder, { recursive? })` | `{ path }` or `null` / `{ files: [{path, name, size, mtimeMs}], truncated }` | Advanced search: the folder picker grants a folder for this session; `listPdfs` walks only granted folders (at most 20,000 PDFs, 200,000 entries, depth 32; links leaving the folder are skipped). A new walk of the same folder replaces the running one. |
+| `cacheGet(key)` / `cacheSet(key, value)` | `string` or `null` / `true` | Text index cache for advanced search in userData/search-index (100 MB total, oldest dropped first). |
+| `libraryList(kind)` / `libraryGet(kind, id)` / `libraryPut(kind, id, {meta, bytes?})` / `libraryDelete(kind, id)` | `[{id, meta}]` / `{id, meta, bytes, encrypted}` or `null` / `true` / `true` | Signature and stamp library (`kind`: `'signature'` or `'stamp'`), 500 items per kind, 5 MB per item, meta up to 64 KiB. Item bytes are encrypted with the operating system's protection (safeStorage) when it is available. |
+| `officeHtmlToPdf({ html, landscape? })` | PDF `Uint8Array` | Built-in Word/Excel/PowerPoint import: prints the HTML made by `renderer/ui/office-html.js` to an A4 PDF in a hidden window with JavaScript and network off. |
+| `officeCancel(jobId)` / `onOfficeProgress(cb)` | `boolean` / unsubscribe function | `cb({ jobId, app })` once Microsoft Office starts a conversion, so the page can offer Cancel. |
 
-Restrictions the UI must respect: new windows and navigation are blocked (external links cannot be
-opened), and every permission request is denied, including `navigator.clipboard` — use
-`document.execCommand('copy')` or the native Ctrl+C in text selections.
+Restrictions the UI must respect: new windows and navigation are blocked (web links open in the system browser
+through `openExternal`: links in a PDF after the user confirms the address, help links directly), and every permission request is denied, including
+`navigator.clipboard`; use `copyText` / `readText` / `copyImage` / `readImage` instead.
 
 ## Help
 
