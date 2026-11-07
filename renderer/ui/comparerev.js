@@ -5,8 +5,8 @@
 // (the newer page's at the chosen dpi, lowered to fit a canvas; an older page of another size is
 // scaled to fit it), compared by compare-lib.js comparePages, and their words diffed by
 // textdiff-lib.js. The pixel compare runs in a worker (compare-client.js), so the window and Cancel stay
-// responsive; Cancel terminates it mid-page. Pages in one revision only become 'added' / 'removed' pages
-// (onlyPage). The composite is PNG, or JPEG q 0.85 above JPEG_PIXELS, and goes into the report as soon as it is
+// responsive; Cancel terminates it mid-page and cancels a page being drawn (renderTask.cancel). Pages in one
+// revision only become 'added' / 'removed' pages (onlyPage). The composite is PNG, or JPEG q 0.85 above JPEG_PIXELS, and goes into the report as soon as it is
 // made (createCompareReport). Canvases and pdf.js page resources (page.cleanup) are released after every page
 // and the loop yields to the UI between pages; Cancel stops it before the report is finished, so no tab opens.
 // The per-page results stay on the new tab (tab.compare) for the Differences sidebar panel.
@@ -44,8 +44,9 @@ async function loadOptions() {
   try { return { ...DEFAULT_OPTIONS, ...((await window.api.settingsGet(OPTIONS_KEY)) ?? {}) }; } catch { return { ...DEFAULT_OPTIONS }; }
 }
 
-/** Page i of `tab` drawn on white into a W x H canvas, scaled to fit (top-left). Returns {canvas, rgba, fit}. */
-async function draw(tab, i, W, H) {
+/** Page i of `tab` drawn on white into a W x H canvas, scaled to fit (top-left). Returns {canvas, rgba, fit}.
+ *  live.task is the pdf.js render task while it draws, so Cancel can stop it (renderTask.cancel). */
+async function draw(tab, i, W, H, live) {
   const page = tab.pages[i];
   const v1 = page.getViewport({ scale: 1 });
   const fit = Math.min(W / v1.width, H / v1.height);
@@ -54,9 +55,12 @@ async function draw(tab, i, W, H) {
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
+  trace('draw');
+  live.task = page.render({ canvas: c, viewport: page.getViewport({ scale: fit }), background: '#ffffff', annotationMode: viewer.pdfjs.AnnotationMode.DISABLE });
   try {
-    await page.render({ canvas: c, viewport: page.getViewport({ scale: fit }), background: '#ffffff', annotationMode: viewer.pdfjs.AnnotationMode.DISABLE }).promise;
+    await live.task.promise;
   } finally {
+    live.task = null;
     page.cleanup(); // drop this render's operator list and decoded images (pdf.js skips it while the viewer is drawing the page)
   }
   const rgba = ctx.getImageData(0, 0, W, H).data;
@@ -89,6 +93,8 @@ export async function compareRevisions(older, newer, opts = {}) {
   const prog = progressDialog({ title: 'Compare revisions', text: 'Starting…', statusId: 'compare-progress', className: 'compare-progress' });
   const results = [];
   const t0 = performance.now();
+  const live = { task: null }; // the page being drawn
+  prog.cancelled.then(() => live.task?.cancel()); // Cancel stops a draw at once (it rejects; Cancel wins below)
   try {
     const { createCompareReport } = await import('../../src/core/index.js');
     const report = await createCompareReport({ older: { name: older.name }, newer: { name: newer.name }, date: new Date() });
@@ -110,8 +116,8 @@ export async function compareRevisions(older, newer, opts = {}) {
         let composite;
         if (p.older !== null && p.newer !== null) {
           const drawBoth = async () => {
-            const b = await draw(newer, p.newer, W, H);
-            const a = await draw(older, p.older, W, H);
+            const b = await draw(newer, p.newer, W, H, live);
+            const a = await draw(older, p.older, W, H, live);
             release(a.canvas); release(b.canvas);
             return { a, b };
           };
@@ -138,7 +144,7 @@ export async function compareRevisions(older, newer, opts = {}) {
             res.text = { added: d.added, removed: d.removed };
           }
         } else {
-          const one = await draw(ref, ri, W, H);
+          const one = await draw(ref, ri, W, H, live);
           release(one.canvas);
           composite = onlyPage(one.rgba, W, H, p.newer !== null ? 'newer' : 'older');
           res.status = p.newer !== null ? 'added' : 'removed';

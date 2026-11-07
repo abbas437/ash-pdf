@@ -256,6 +256,22 @@ try {
   });
   expect('tesseract in Electron', JSON.stringify(ocr), !ocr.error && /OCR\s*4711/.test(ocr.text));
 
+  step = 'Compare revisions: the compare worker starts under the app CSP and app:// (no main-thread fallback)';
+  const rev1 = await PDFDocument.create();
+  rev1.addPage([612, 792]).drawText('Electron page 1 Rev.01', { x: 72, y: 700, size: 28, font: await rev1.embedFont(StandardFonts.Helvetica) });
+  const cmpRun = await win.evaluate(async (bytes) => {
+    const a = window.ashStudio, home = a.state.activeId;
+    const older = a.state.tabs.find((t) => t.name === 'sample.pdf');
+    const newer = await a.openBytes({ name: 'cmp-rev01.pdf', bytes: new Uint8Array(bytes) });
+    const { compareWorker } = await import('./ui/compare-client.js');
+    const tab = await a.compareRevisions.compareRevisions(older, newer, { indices: [0] });
+    const out = { ranOn: compareWorker.ranOn, pages: tab?.compare.pages.map((p) => [p.status, p.regions.length]) };
+    for (const t of [tab, newer].filter(Boolean)) { a.markDirty(t, false); await a.closeTab(t); }
+    a.activate(home);
+    return out;
+  }, [...await rev1.save()]);
+  expect('compare in Electron', JSON.stringify(cmpRun), cmpRun.ranOn === 'worker' && cmpRun.pages?.length === 1 && cmpRun.pages[0][0] === 'compared' && cmpRun.pages[0][1] > 0);
+
   step = 'print with unsaved text markup and note objects';
   // Stub the system print in the main process: record what the print container holds while the
   // renderer waits on api.print(), and print the same view to PDF (proves it renders printable pages).

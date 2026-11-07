@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Tools > Compare revisions (ui/comparerev.js) in Chromium with the browser shim: Rev.00 (3 pages) vs
-// Rev.01 (4 pages: page 2 changed, page 3 shifted 10 pt, page 4 new). Prints "COMPAREREV OK".
+// Rev.01 (4 pages: page 2 changed, page 3 shifted 10 pt, page 4 new), the main-thread fallback against the worker,
+// and Cancel during the pixel compare and during a draw of an A1 sheet. Prints "COMPAREREV OK".
 // COMPARE_NO_ALIGN=1 unchecks "Align shifted pages" (the page 3 check must then fail).
 // COMPAREREV_SHOTS=<dir> writes screenshots of the Differences panel in the light and dark themes there.
 // Run `node scripts/vendor.js` first. Chromium path: $CHROMIUM_PATH or the sandbox default.
@@ -9,7 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, pushGraphicsState, popGraphicsState, moveTo, lineTo, stroke, setLineWidth } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
@@ -34,6 +35,31 @@ async function rev(n, { dn, extraLine = false, shift = 0 }) {
     for (let k = 0; k < 6; k++) p.drawLine({ start: { x: 60, y: 700 - k * 80 + dy }, end: { x: 520, y: 700 - k * 80 + dy }, thickness: 1.5 });
     p.drawText(`PUMP P-10${i} ${i === 2 ? dn : 'DN100'}`, { x: 70, y: 760 + dy, size: 18, font });
     if (i === 2 && extraLine) p.drawLine({ start: { x: 100, y: 200 }, end: { x: 400, y: 300 }, thickness: 2 });
+  }
+  return Buffer.from(await doc.save());
+}
+// An A1 sheet (2384 x 1684 pt) of 20k short lines and 300 labels; `changed` moves 4 lines, edits 5 labels and adds two
+// shapes. At 200 dpi each page takes about a second to draw and the pixel compare about two.
+async function a1Sheet(changed) {
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const p = doc.addPage([2384, 1684]);
+  const ops = [pushGraphicsState(), setLineWidth(0.5)];
+  for (let k = 0; k < 20000; k++) {
+    const x = 40 + rnd() * 2300, y = 40 + rnd() * 1600, l = 5 + rnd() * 120, h = rnd() < 0.5;
+    let x2 = h ? x + l : x;
+    const y2 = h ? y : y + l;
+    if (changed && k % 5000 === 17) x2 += 40;
+    ops.push(moveTo(x, y), lineTo(Math.min(x2, 2370), Math.min(y2, 1670)), stroke());
+  }
+  ops.push(popGraphicsState());
+  for (let i = 0; i < ops.length; i += 5000) p.pushOperators(...ops.slice(i, i + 5000));
+  for (let k = 0; k < 300; k++) p.drawText(`DUCT D-${k} ${changed && k % 60 === 3 ? '600' : '500'}x400`, { x: 60 + (k % 15) * 150, y: 60 + Math.floor(k / 15) * 78, size: 7, font });
+  if (changed) {
+    p.drawLine({ start: { x: 1000, y: 800 }, end: { x: 1400, y: 900 }, thickness: 2 });
+    p.drawRectangle({ x: 300, y: 1200, width: 200, height: 120, borderWidth: 1.5 });
   }
   return Buffer.from(await doc.save());
 }
@@ -207,6 +233,54 @@ try {
   const back = await page.evaluate(() => window.__cmp);
   const after = await page.evaluate(() => window.ashStudio.state.tabs.length);
   check(back === null && after === before, `cancel: ${back}, tabs ${before} -> ${after}`);
+  step = 'open an A1 pair';
+  await openFile('A1 Rev.00.pdf', await a1Sheet(false));
+  await openFile('A1 Rev.01.pdf', await a1Sheet(true));
+  // Starts an A1 compare at 200 dpi; records when the progress box goes (window.__progressGone) and when the run
+  // ends (window.__cmp resolves to { r, t }), both in performance.now() time.
+  const startA1 = () => page.evaluate(() => {
+    window.__compareTrace = [];
+    window.__progressGone = null;
+    const [a, b] = ['A1 Rev.00.pdf', 'A1 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    window.__cmp = window.ashStudio.compareRevisions.compareRevisions(a, b, { dpi: 200 }).then((r) => ({ r, t: performance.now() }));
+    new MutationObserver((_, obs) => {
+      if (!document.querySelector('.compare-progress')) { window.__progressGone = performance.now(); obs.disconnect(); }
+    }).observe(document.body, { childList: true, subtree: true });
+    return window.ashStudio.state.tabs.length;
+  });
+  const endA1 = () => page.evaluate(async () => {
+    const { r, t } = await window.__cmp;
+    const at = (s) => window.__compareTrace.find((x) => x.stage === s)?.t ?? null;
+    return { r, done: t, gone: window.__progressGone, draw: at('draw'), compare: at('compare'), compared: at('compared'), tabs: window.ashStudio.state.tabs.length };
+  });
+  step = 'Cancel mid-page (A1, 200 dpi) closes the progress box within 1 s and opens no tab';
+  const tabsA1 = await startA1();
+  await page.waitForFunction(() => window.__compareTrace.some((x) => x.stage === 'compare'), null, { timeout: 60_000 });
+  await page.click('.compare-progress .dialog-buttons button');
+  const mid = await endA1();
+  check(mid.r === null && mid.tabs === tabsA1 && mid.compared === null && mid.gone !== null && mid.gone - mid.compare < 1000,
+    `mid-page cancel: ${JSON.stringify(mid)} (progress closed ${Math.round(mid.gone - mid.compare)} ms after 'compare')`);
+  step = 'Cancel while a page is drawn stops the draw (renderTask.cancel)';
+  const tabsDraw = await startA1();
+  await page.waitForFunction(() => window.__compareTrace.some((x) => x.stage === 'draw'), null, { timeout: 60_000 });
+  await page.click('.compare-progress .dialog-buttons button');
+  const drawn = await endA1();
+  check(drawn.r === null && drawn.tabs === tabsDraw && drawn.compare === null && drawn.gone !== null && drawn.done - drawn.gone < 400,
+    `draw cancel: ${JSON.stringify(drawn)} (run ended ${Math.round(drawn.done - drawn.gone)} ms after the progress closed)`);
+  step = 'the main-thread fallback gives the same pages as the worker';
+  const equiv = await page.evaluate(async () => {
+    const { compareWorker } = await import('./ui/compare-client.js');
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    const pick = (t) => JSON.stringify(t.compare.pages.map((p) => ({ status: p.status, regions: p.regions, stats: p.stats, shift: p.shift, text: p.text })));
+    const w = pick(await window.ashStudio.compareRevisions.compareRevisions(a, b, {}));
+    const wOn = compareWorker.ranOn;
+    compareWorker.forceMainThread = true;
+    try {
+      return { w, wOn, m: pick(await window.ashStudio.compareRevisions.compareRevisions(a, b, {})), mOn: compareWorker.ranOn };
+    } finally { compareWorker.forceMainThread = false; }
+  });
+  check(equiv.wOn === 'worker' && equiv.mOn === 'main', `paths: ${equiv.wOn} / ${equiv.mOn}`);
+  check(equiv.w === equiv.m && JSON.parse(equiv.w)[1].regions.length > 0, `worker ${equiv.w}\nmain   ${equiv.m}`);
   check(problems.length === 0, problems.join('\n'));
   console.log('COMPAREREV OK');
 } catch (err) {

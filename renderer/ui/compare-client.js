@@ -59,7 +59,9 @@ async function compare(a, b, width, height, opts = {}) {
       await start();
       if (worker && !broken) {
         const { msg, transfer } = compareRequest(++seq, a, b, width, height, opts);
-        return await post(msg, transfer, callTimeout(a.byteLength + b.byteLength));
+        const cmp = await post(msg, transfer, callTimeout(a.byteLength + b.byteLength));
+        compareWorker.ranOn = 'worker';
+        return cmp;
       }
     } catch (err) {
       // The worker's own error (e.g. a RangeError for a bad size), a stop(), or a loss after the pixels were moved:
@@ -67,6 +69,7 @@ async function compare(a, b, width, height, opts = {}) {
       if (!err?.lost || a.byteLength === 0) throw err;
     }
   }
+  compareWorker.ranOn = 'main';
   return comparePages(a, b, width, height, opts);
 }
 
@@ -79,6 +82,8 @@ export const compareWorker = {
   timeoutFloorMs: 60_000,
   /** For tests: run every compare on the main thread, as after a fallback. */
   forceMainThread: false,
+  /** For tests: where the last compare ran, 'worker' or 'main' (null before the first). */
+  ranOn: null,
   /** For tests: true while a worker is running (false before the first compare, after stop() and after a fallback). */
   get inWorker() { return !!worker && !broken; },
 };
