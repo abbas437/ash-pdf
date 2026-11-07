@@ -2,8 +2,9 @@
 // Runs every end-to-end test in test/e2e one after another and reports the failures at the end.
 //   node scripts/e2e-all.mjs            browser tests (Chromium through playwright-core; CHROMIUM_PATH / CHROME_PATH)
 //   node scripts/e2e-all.mjs --electron the Electron tests (electron*.mjs; on Linux run under xvfb-run, as a non-root user)
-// Each test is a standalone script that exits non-zero on failure. Used by the e2e job in .github/workflows/build.yml.
-import { readdirSync } from 'node:fs';
+// Each test is a standalone script that exits non-zero on failure. A test whose first lines hold
+// `// e2e-requires: VAR ...` is skipped (and listed) when one of those environment variables is not set. Used by the e2e job in .github/workflows/build.yml.
+import { readdirSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -16,7 +17,11 @@ const files = readdirSync(dir).filter((f) => f.endsWith('.mjs') && f.startsWith(
 
 const failed = [];
 const t0 = Date.now();
+const skipped = [];
 for (const f of files) {
+  const needs = /^\/\/ e2e-requires:(.*)$/m.exec(readFileSync(join(dir, f), 'utf8').split('\n').slice(0, 15).join('\n'))?.[1].trim().split(/\s+/) ?? [];
+  const missing = needs.filter((v) => !process.env[v]);
+  if (missing.length) { console.log(`skip ${f} (needs ${missing.join(', ')})`); skipped.push(f); continue; }
   const t = Date.now();
   const r = spawnSync(process.execPath, [join(dir, f)], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const secs = ((Date.now() - t) / 1000).toFixed(1);
@@ -26,6 +31,6 @@ for (const f of files) {
   console.log(`${(r.stdout ?? '').slice(-3000)}${(r.stderr ?? '').slice(-3000)}`.replace(/^/gm, '     '));
   failed.push(f);
 }
-console.log(`\n${files.length - failed.length}/${files.length} e2e tests passed in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
+console.log(`\n${files.length - skipped.length - failed.length}/${files.length - skipped.length} e2e tests passed (${skipped.length} skipped) in ${((Date.now() - t0) / 1000).toFixed(0)}s`);
 if (failed.length) { console.log(`failed: ${failed.join(', ')}`); process.exit(1); }
-if (!files.length) { console.log('no e2e tests found'); process.exit(1); }
+if (files.length === skipped.length) { console.log('no e2e tests found'); process.exit(1); }
