@@ -150,10 +150,12 @@ describe('signedSaveMode (saveTab)', () => {
     assert.equal(signedSaveMode(tab({ requiresFullSave: true })), 'ask');
     assert.equal(signedSaveMode(tab({ requiresFullSave: true, signedPath: null })), 'plain');
   });
-  test('certified, page operation: ask; Save As, unsigned, other path: plain', () => {
+  test('certified, page operation: ask (Save As: plain); unsigned, other path: plain', () => {
     assert.equal(signedSaveMode(tab({ certified: true })), 'ask');
     assert.equal(signedSaveMode(tab({ bytes: new Uint8Array(2) })), 'ask');
-    assert.equal(signedSaveMode(tab(), true), 'plain');
+    assert.equal(signedSaveMode(tab(), true), 'update', 'Save As of an annotation-only change: the copy is an update too');
+    assert.equal(signedSaveMode(tab({ bytes: new Uint8Array(2) }), true), 'plain', 'Save As after a page operation: full copy, no ask');
+    assert.equal(signedSaveMode(tab({ certified: true }), true), 'plain');
     assert.equal(signedSaveMode(tab({ signedPath: null })), 'plain');
     assert.equal(signedSaveMode(tab({ signedPath: '/b.pdf' })), 'plain');
   });

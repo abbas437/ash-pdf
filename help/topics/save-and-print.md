@@ -19,8 +19,8 @@ To keep the original, use **Save as…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>
 
 Saving over a digitally signed file can break its signature.
 
-- If you only added annotations, the app appends them as an update and shows **Saved as an update; the signature is kept**.
-- If a full rewrite is needed (after a page operation, or for a document certified against changes), a dialog asks first. Choose **Save as a copy…** to keep the signed original, **Overwrite original** to accept the loss of the signature, or **Cancel**.
+- If you only added annotations, the app appends them as an update and shows **Saved as an update; the signature is kept**. **Save as…** does the same for the new copy, so the copy is still validly signed.
+- If a full rewrite is needed (after a page operation, or for a document certified against changes), a dialog asks first. Choose **Save as a copy…** to keep the signed original (the copy is written in full, so its signature is not valid), **Overwrite original** to accept the loss of the signature, or **Cancel**. **Save as…** after such a change writes the copy in full without asking.
 
 ## Closing with unsaved changes
 

@@ -240,7 +240,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     tab.signedPath = null;
     return null;
   };
-  if (!asNew && tab.path) {
+  if (tab.path) {
     await tab.signatureCheck;
     const mode = signedSaveMode(tab, asNew);
     if (mode === 'update') signedUpdate = true;
@@ -260,9 +260,9 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     const full = bytes; // what transient hooks commit to tab.bytes in hook.saved
     if (signedUpdate) {
       const { appendIncrementalUpdate } = await import('../src/core/index.js');
-      const update = signedSaveMode(tab) === 'update' ? await appendIncrementalUpdate(tab.fileBytes, bytes) : null;
-      if (!update) { signedUpdate = false; const r = await askSigned(); if (r !== null) return r; }
-      else if (update === tab.fileBytes) { // nothing changed: nothing to write
+      const update = signedSaveMode(tab, asNew) === 'update' ? await appendIncrementalUpdate(tab.fileBytes, bytes) : null;
+      if (!update) { signedUpdate = false; if (!asNew) { const r = await askSigned(); if (r !== null) return r; } }
+      else if (update === tab.fileBytes && !asNew) { // nothing changed: nothing to write
         if (tab.rev === rev) markDirty(tab, false);
         renderTabs();
         return true;
@@ -283,6 +283,7 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     for (const hook of state.hooks.beforeSave) hook.saved?.(tab, tab.rev === rev);
     if (signedUpdate && tab.bytes === full) tab.bytes = bytes; // the next update appends to the file as written
     tab.fileBytes = bytes;
+    if (signedUpdate) tab.signedPath = tab.path; // a copy written as an update is signed too
     if (tab.rev === rev) markDirty(tab, false);
     // tab.requiresFullSave (set by Apply redactions, ui/redact.js): any incremental save path must
     // write in full while it is set. A full save wrote the whole file, so the redaction is final: drop

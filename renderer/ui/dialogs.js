@@ -122,7 +122,7 @@ export function confirmSignedOverwrite(name, { certified = false } = {}) {
       certified
         ? h('p', {}, `"${name}" is certified by its author against changes, including comments and markups. Saving your changes over it rewrites the file, which breaks the certification and removes the earlier signed revisions.`)
         : h('p', {}, `"${name}" carries a digital signature. Saving your changes over it rewrites the file, which invalidates the signature and removes the earlier signed revisions.`),
-      h('p', {}, 'Save the edited document as a separate copy to keep the signed original intact.')),
+      h('p', {}, 'Save the edited document as a separate copy to keep the signed original intact. The copy is written in full, so its signature is not valid.')),
     buttons: [
       { label: 'Cancel', value: 'cancel', cancel: true },
       { label: 'Overwrite original', value: 'overwrite', danger: true },
