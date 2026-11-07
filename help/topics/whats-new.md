@@ -10,9 +10,21 @@ keywords: whats new, release notes, changes, version, updates, 0.2.15, 0.2.14, 0
 
 The most recent additions, newest first. Versions up to 0.2.10 are tagged in the project history. Changes after that are grouped by release as far as the history shows.
 
-## Version 0.2.15
+## Version 0.2.22
 
 - **Compare revisions.** **Tools ▸ Compare revisions…** compares two revisions page by page and opens a new PDF with removed ink in red, added ink in green and each change boxed, plus a **Differences** list you can copy or export to CSV. See [Compare revisions](#topic:compare-revisions).
+- **Scroll and zoom together in split view.** Two documents side by side move to the same page and position and keep the same zoom, even when their page sizes differ. See [Split view](#topic:split-view).
+
+## Versions 0.2.16 to 0.2.21
+
+- **Page tools keep bookmarks and form fields** when you merge, extract, split, insert, duplicate or delete pages.
+- **Signed documents:** Save As of a signed file keeps its signature when you only added comments.
+- **A warning before overwriting a file someone else changed** since you opened it.
+- **File ▸ New PDF** and **Apply stamp** (fix a stamp into the page, as Apply signature does).
+- **Reduce file size** no longer saves a very large scan as a blank page.
+
+## Version 0.2.15
+
 - **Text box frame.** Give a text box a border, a fill colour and an inner margin, as in Word. See [Text boxes](#topic:text-boxes).
 - **Pictures inside text boxes.** Paste a picture or use **Insert picture** in the right-click menu. Click a picture to select it, and use the **Picture size** menu to resize it. Damaged or recompressed picture data no longer causes problems, and photos taken with a rotated camera open upright.
 - **Group and Ungroup.** Combine several objects and resize them as one. Ctrl+G groups the selection. See [Select, group and clipboard](#topic:select-group-clipboard).
