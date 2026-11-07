@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 const root = resolve(fileURLToPath(import.meta.url), '..', '..');
 const dir = join(root, 'test', 'e2e');
 const electron = process.argv.includes('--electron');
+// A hung test can ignore SIGTERM (a Playwright close waiting on a browser), so the time limit uses SIGKILL.
 const timeoutMs = Number(process.env.E2E_TIMEOUT_MS) > 0 ? Number(process.env.E2E_TIMEOUT_MS) : 300_000;
 const files = readdirSync(dir).filter((f) => f.endsWith('.mjs') && f.startsWith('electron') === electron).sort();
 
@@ -23,7 +24,7 @@ for (const f of files) {
   const missing = needs.filter((v) => !process.env[v]);
   if (missing.length) { console.log(`skip ${f} (needs ${missing.join(', ')})`); skipped.push(f); continue; }
   const t = Date.now();
-  const r = spawnSync(process.execPath, [join(dir, f)], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(process.execPath, [join(dir, f)], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs, killSignal: 'SIGKILL', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const secs = ((Date.now() - t) / 1000).toFixed(1);
   if (r.status === 0) { console.log(`ok   ${f} (${secs}s)`); continue; }
   const why = r.error ? r.error.message : r.signal ? `signal ${r.signal}` : `exit ${r.status}`;
