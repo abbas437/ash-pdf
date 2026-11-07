@@ -195,16 +195,19 @@ function writeOutline(doc, items) {
 }
 
 /**
- * Build the compare overlay PDF.
- * pages[i] = {width, height (points), image: {bytes, type: 'png'|'jpeg'}, regions?: [{x, y, w, h, added,
+ * The compare overlay PDF, built a page at a time so a large set is never held whole:
+ *   const report = await createCompareReport(meta);
+ *   await report.addPage(page);   // per page, in order: the image is embedded now
+ *   const bytes = await report.finish();   // bookmarks, then the saved PDF
+ * page = {width, height (points), image: {bytes, type: 'png'|'jpeg'}, regions?: [{x, y, w, h, added,
  *   removed}] (top-left points; added/removed = changed pixel counts), status?: 'compared'|'added'|'removed'|'error' (error: no image needed; `error` = short reason, the page is blank with the legend and a note),
  *   textChanges?: {added: [{text, box: {x, y, w, h}}], removed: [...]} (boxes in the same frame as regions),
  *   newerPage?, olderPage? (1-based source page numbers: legend line "Page 5 of <newer>" and bookmark names)}
  * meta = {older: {name}, newer: {name}, date?: Date | ISO string (default now)}
+ * addPage embeds the image at once (a PNG is decoded and re-compressed there), so the report keeps only the
+ * embedded stream and the caller need not keep page.image.bytes.
  */
-export async function buildCompareReport(pages, meta = {}) {
-  if (!Array.isArray(pages) || pages.length === 0) throw new TypeError('buildCompareReport expects a non-empty pages array');
-  pages.forEach(checkPage);
+export async function createCompareReport(meta = {}) {
   const olderName = oneLine(meta.older?.name) || 'older revision';
   const newerName = oneLine(meta.newer?.name) || 'newer revision';
   const date = toDate(meta.date);
@@ -217,18 +220,23 @@ export async function buildCompareReport(pages, meta = {}) {
   const fonts = { helv: await doc.embedFont(StandardFonts.Helvetica), sym: await doc.embedFont(StandardFonts.Symbol) };
   const legendNames = { older: sanitizeText(olderName), newer: sanitizeText(newerName), when: showDate(date) };
   const outline = [];
-  for (let i = 0; i < pages.length; i++) {
-    const p = pages[i];
+  let i = 0, done = false;
+
+  async function addPage(p) {
+    if (done) throw new Error('createCompareReport: addPage after finish');
+    checkPage(p, i);
     const pw = p.width, ph = p.height;
     const page = doc.addPage([pw, ph]);
+    const at = i++;
     if (p.status === 'error') {
       // A page that could not be compared: blank, with the legend and the reason only.
       const reason = clip(oneLine(sanitizeText(p.error)) || 'unknown error', ERROR_LEN);
-      drawLegend(page, fonts, { ...legendNames, notes: [`${sourceLabel(p, i)} could not be compared: ${reason}`] });
-      outline.push([`${sourceLabel(p, i)} – not compared`, page.ref]);
-      continue;
+      drawLegend(page, fonts, { ...legendNames, notes: [`${sourceLabel(p, at)} could not be compared: ${reason}`] });
+      outline.push([`${sourceLabel(p, at)} – not compared`, page.ref]);
+      return;
     }
     const img = p.image.type === 'png' ? await doc.embedPng(p.image.bytes) : await doc.embedJpg(p.image.bytes);
+    await img.embed(); // now, not at save: pdf-lib then drops its decoded copy of the image
     page.drawImage(img, { x: 0, y: 0, width: pw, height: ph });
 
     const regions = (p.regions ?? []).filter(isBox).map((r) => ({ ...boxOf(r), added: +r.added || 0, removed: +r.removed || 0 }));
@@ -246,11 +254,11 @@ export async function buildCompareReport(pages, meta = {}) {
       if (add.length || rem.length) {
         lines.push(`Text: ${[add.length ? `added ${quote(add)}` : '', rem.length ? `removed ${quote(rem)}` : ''].filter(Boolean).join('; ')}`);
       }
-      annots.push(squareAnnot(doc, page, r, pw, ph, MARK_COLORS[kind], lines.join('\n'), `compare-${stamp}-${i + 1}-${n}`, date));
+      annots.push(squareAnnot(doc, page, r, pw, ph, MARK_COLORS[kind], lines.join('\n'), `compare-${stamp}-${at + 1}-${n}`, date));
     }
     const loose = texts.filter((t) => !t.placed);
     for (const t of loose.slice(0, MAX_TEXT_MARKS)) {
-      annots.push(squareAnnot(doc, page, t.box, pw, ph, MARK_COLORS[t.side], `Change ${++n}: text ${t.side}\nText: "${clip(t.text, 200)}"`, `compare-${stamp}-${i + 1}-${n}`, date));
+      annots.push(squareAnnot(doc, page, t.box, pw, ph, MARK_COLORS[t.side], `Change ${++n}: text ${t.side}\nText: "${clip(t.text, 200)}"`, `compare-${stamp}-${at + 1}-${n}`, date));
     }
     if (annots.length) page.node.set(N('Annots'), doc.context.obj(annots));
 
@@ -267,8 +275,25 @@ export async function buildCompareReport(pages, meta = {}) {
 
     const what = p.status === 'added' ? 'only in the newer revision' : p.status === 'removed' ? 'only in the older revision' : null;
     const count = annots.length + Math.max(0, over);
-    if (what || count) outline.push([`${sourceLabel(p, i)} – ${what ?? `${count} change${count === 1 ? '' : 's'}`}`, page.ref]);
+    if (what || count) outline.push([`${sourceLabel(p, at)} – ${what ?? `${count} change${count === 1 ? '' : 's'}`}`, page.ref]);
   }
-  writeOutline(doc, outline);
-  return doc.save();
+
+  async function finish() {
+    if (done) throw new Error('createCompareReport: finish called twice');
+    if (i === 0) throw new TypeError('createCompareReport: no pages added');
+    done = true;
+    writeOutline(doc, outline);
+    return doc.save();
+  }
+
+  return { addPage, finish, get pageCount() { return i; } };
+}
+
+/** The whole report at once: createCompareReport + addPage for each of `pages` + finish. */
+export async function buildCompareReport(pages, meta = {}) {
+  if (!Array.isArray(pages) || pages.length === 0) throw new TypeError('buildCompareReport expects a non-empty pages array');
+  pages.forEach(checkPage);
+  const report = await createCompareReport(meta);
+  for (const p of pages) await report.addPage(p);
+  return report.finish();
 }

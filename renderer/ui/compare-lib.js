@@ -326,3 +326,22 @@ export function onlyPage(rgba, width, height, side, opts = {}) {
 export function regionsToPoints(regions, scale) {
   return regions.map((r) => ({ ...r, x: r.x / scale, y: r.y / scale, w: r.w / scale, h: r.h / scale }));
 }
+
+// ---------------------------------------------------------------- worker messages
+// renderer/ui/compare-worker.js runs comparePages off the UI thread (client: compare-client.js). The pixel
+// buffers move between the threads (transfer list), they are not copied.
+
+const buffersOf = (...arrays) => [...new Set(arrays.map((x) => x?.buffer).filter((x) => x instanceof ArrayBuffer))];
+
+/** The request to compare a and b in the worker: {msg, transfer}. a and b are unusable once posted. */
+export function compareRequest(id, a, b, width, height, opts = {}) {
+  return { msg: { id, method: 'compare', a, b, width, height, opts }, transfer: buffersOf(a, b) };
+}
+
+/** The worker's reply to request `id`: comparePages' result (composite transferred), or {error: {name, message}}. */
+export function compareReply(id, result) {
+  return { msg: { id, result }, transfer: buffersOf(result?.composite) };
+}
+export function compareErrorReply(id, err) {
+  return { msg: { id, error: { name: String(err?.name ?? 'Error'), message: String(err?.message ?? err) } }, transfer: [] };
+}

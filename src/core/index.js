@@ -8,4 +8,4 @@ export { detectSignatures, mayBeSigned } from './signatures.js';
 export { appendIncrementalUpdate, docMdpPermission } from './incremental.js';
 export { writeAnnotations, readAnnotations, flattenAnnotations } from './annots.js';
 export { applyStyleToRange, insertText, insertImage, deleteRange, normalizeRuns, runsOf, styleAt, boxStyle, isImageRun, STYLE_KEYS, OBJ_CHAR } from './richtext.js';
-export { buildCompareReport, changeKind } from './compareReport.js';
+export { buildCompareReport, createCompareReport, changeKind } from './compareReport.js';

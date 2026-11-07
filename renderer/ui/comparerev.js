@@ -4,9 +4,11 @@
 // Per page pair: both pages are drawn by pdf.js on white with annotations off at the same pixel size
 // (the newer page's at the chosen dpi, lowered to fit a canvas; an older page of another size is
 // scaled to fit it), compared by compare-lib.js comparePages, and their words diffed by
-// textdiff-lib.js. Pages in one revision only become 'added' / 'removed' pages (onlyPage). The
-// composite is PNG, or JPEG q 0.85 above JPEG_PIXELS. Canvases are released after every page and the
-// loop yields to the UI between pages; Cancel stops it before the report is built, so no tab opens.
+// textdiff-lib.js. The pixel compare runs in a worker (compare-client.js), so the window and Cancel stay
+// responsive; Cancel terminates it mid-page. Pages in one revision only become 'added' / 'removed' pages
+// (onlyPage). The composite is PNG, or JPEG q 0.85 above JPEG_PIXELS, and goes into the report as soon as it is
+// made (createCompareReport). Canvases and pdf.js page resources (page.cleanup) are released after every page
+// and the loop yields to the UI between pages; Cancel stops it before the report is finished, so no tab opens.
 // The per-page results stay on the new tab (tab.compare) for the Differences sidebar panel.
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
@@ -15,7 +17,8 @@ import { showDialog, showError, toast, progressDialog, CANCELLED } from './dialo
 import { registerSidebarTab, showSidebarTab, refreshSidebarTab } from './sidebar.js';
 import { viewer } from './viewer.js';
 import { splitView } from './splitview.js';
-import { comparePages, onlyPage, regionsToPoints } from './compare-lib.js';
+import { onlyPage, regionsToPoints } from './compare-lib.js';
+import { compareWorker } from './compare-client.js';
 import { pageWords, diffWords } from './textdiff-lib.js';
 import { DPI_PRESETS, DEFAULT_OPTIONS, guessOrder, renderScale, pagePairs, hasChanges, pageSummary, regionKind, diffCsv, diffText } from './comparerev-lib.js';
 import { parseRanges } from '../../src/core/pdfOps.js';
@@ -33,6 +36,8 @@ const errorReason = (err) => {
   return t.length > 100 ? `${t.slice(0, 99)}…` : t;
 };
 const release = (c) => { c.width = 0; c.height = 0; };
+/** e2e hook (test/e2e/comparerev.mjs): stage timestamps of a run, when the test sets window.__compareTrace = []. */
+const trace = (stage) => window.__compareTrace?.push({ stage, t: performance.now() });
 const baseName = (n) => String(n ?? '').replace(/\.pdf$/i, '');
 
 async function loadOptions() {
@@ -49,7 +54,11 @@ async function draw(tab, i, W, H) {
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, W, H);
-  await page.render({ canvas: c, viewport: page.getViewport({ scale: fit }), background: '#ffffff', annotationMode: viewer.pdfjs.AnnotationMode.DISABLE }).promise;
+  try {
+    await page.render({ canvas: c, viewport: page.getViewport({ scale: fit }), background: '#ffffff', annotationMode: viewer.pdfjs.AnnotationMode.DISABLE }).promise;
+  } finally {
+    page.cleanup(); // drop this render's operator list and decoded images (pdf.js skips it while the viewer is drawing the page)
+  }
   const rgba = ctx.getImageData(0, 0, W, H).data;
   return { canvas: c, rgba, fit, v1 };
 }
@@ -78,9 +87,11 @@ export async function compareRevisions(older, newer, opts = {}) {
   const o = { ...DEFAULT_OPTIONS, ...opts };
   const pairs = pagePairs(older.numPages, newer.numPages, o.indices);
   const prog = progressDialog({ title: 'Compare revisions', text: 'Starting…', statusId: 'compare-progress', className: 'compare-progress' });
-  const out = [], results = [];
+  const results = [];
   const t0 = performance.now();
   try {
+    const { createCompareReport } = await import('../../src/core/index.js');
+    const report = await createCompareReport({ older: { name: older.name }, newer: { name: newer.name }, date: new Date() });
     for (const [k, p] of pairs.entries()) {
       if (prog.isCancelled()) return null;
       prog.set(`Comparing page ${k + 1} of ${pairs.length}…`);
@@ -89,6 +100,7 @@ export async function compareRevisions(older, newer, opts = {}) {
       // index: the output page in the compare document; olderPage / newerPage: the 1-based source pages (null: none).
       const res = { index: k, older: p.older, newer: p.newer, olderPage: p.older === null ? null : p.older + 1, newerPage: p.newer === null ? null : p.newer + 1, regions: [], text: { added: [], removed: [] }, stats: null, shift: { dx: 0, dy: 0 }, scaled: false, capped: false };
       let size = { width: 595.28, height: 841.89 }; // used for a failed page whose own size is unknown
+      let page; // this page of the report
       try {
         const v = ref.pages[ri].getViewport({ scale: 1 });
         size = { width: v.width, height: v.height };
@@ -97,11 +109,24 @@ export async function compareRevisions(older, newer, opts = {}) {
         const W = Math.max(1, Math.round(v.width * scale)), H = Math.max(1, Math.round(v.height * scale));
         let composite;
         if (p.older !== null && p.newer !== null) {
-          const b = await draw(newer, p.newer, W, H);
-          const a = await draw(older, p.older, W, H);
-          release(a.canvas); release(b.canvas);
+          const drawBoth = async () => {
+            const b = await draw(newer, p.newer, W, H);
+            const a = await draw(older, p.older, W, H);
+            release(a.canvas); release(b.canvas);
+            return { a, b };
+          };
+          let { a, b } = await drawBoth();
           res.scaled = Math.abs(a.v1.width - v.width) > 0.5 || Math.abs(a.v1.height - v.height) > 0.5;
-          const cmp = comparePages(a.rgba, b.rgba, W, H, { align: o.align });
+          if (prog.isCancelled()) return null;
+          trace('compare');
+          const run = (x, y) => Promise.race([compareWorker.compare(x.rgba, y.rgba, W, H, { align: o.align }), prog.cancelled]);
+          let cmp = await run(a, b).catch(async (err) => {
+            if (!err?.lost || prog.isCancelled()) throw err;
+            ({ a, b } = await drawBoth()); // the worker was lost holding the pixels: draw again, compare on the main thread
+            return run(a, b);
+          });
+          if (cmp === CANCELLED) { compareWorker.stop(); return null; } // terminate the worker mid-page
+          trace('compared');
           composite = cmp.composite;
           Object.assign(res, { regions: regionsToPoints(cmp.regions, scale), stats: cmp.stats, capped: cmp.capped,
             shift: { dx: cmp.shift.dx / scale, dy: cmp.shift.dy / scale } });
@@ -120,18 +145,19 @@ export async function compareRevisions(older, newer, opts = {}) {
         }
         if (prog.isCancelled()) return null;
         const image = await encode(composite, W, H);
-        out.push({ width: v.width, height: v.height, image, regions: res.regions, status: res.status, textChanges: res.text, olderPage: res.olderPage, newerPage: res.newerPage });
+        page = { width: v.width, height: v.height, image, regions: res.regions, status: res.status, textChanges: res.text, olderPage: res.olderPage, newerPage: res.newerPage };
       } catch (err) {
         if (err === CANCELLED || prog.isCancelled()) return null; // Cancel wins over errors
         // Skip this page, keep going: the report gets a blank page with the reason.
         const reason = errorReason(err);
         console.warn(`[compare] page ${res.newerPage ?? res.olderPage} not compared: ${err?.message ?? err}`);
         Object.assign(res, { status: 'error', error: reason, regions: [], text: { added: [], removed: [] }, stats: null, shift: { dx: 0, dy: 0 }, scaled: false, capped: false });
-        out.push({ ...size, status: 'error', error: reason, olderPage: res.olderPage, newerPage: res.newerPage });
+        page = { ...size, status: 'error', error: reason, olderPage: res.olderPage, newerPage: res.newerPage };
       }
       results.push(res);
+      await report.addPage(page); // embedded now: the encoded image is not kept here
     }
-    if (prog.isCancelled() || !out.length) return null;
+    if (prog.isCancelled() || !results.length) return null;
     const failed = results.filter((r) => r.status === 'error');
     if (failed.length === results.length) {
       const nums = failed.map((r) => r.newerPage ?? r.olderPage);
@@ -139,8 +165,7 @@ export async function compareRevisions(older, newer, opts = {}) {
       return null;
     }
     prog.set('Building the compare document…');
-    const { buildCompareReport } = await import('../../src/core/index.js');
-    const bytes = await buildCompareReport(out, { older: { name: older.name }, newer: { name: newer.name }, date: new Date() });
+    const bytes = await report.finish();
     if (prog.isCancelled()) return null;
     const ms = Math.round(performance.now() - t0);
     console.info(`[compare] ${pairs.length} page(s) in ${ms} ms, ${bytes.length} bytes`);
@@ -158,6 +183,7 @@ export async function compareRevisions(older, newer, opts = {}) {
     if (err !== CANCELLED) showError('Could not compare the revisions', err);
     return null;
   } finally {
+    compareWorker.stop(); // the worker lives for one run
     prog.close();
   }
 }

@@ -206,3 +206,22 @@ test('timing: A1 at 150 dpi compares in well under the budget', () => {
   assert.ok(r.regions.length >= 2);
   assert.ok(ms < 6000, `${ms} ms`); // loose: the target is ~1.5 s on a dev machine
 });
+
+test('worker messages: the request moves both pixel buffers, the reply moves the composite, errors are plain data', async () => {
+  const { compareRequest, compareReply, compareErrorReply } = await import('../renderer/ui/compare-lib.js');
+  const a = page(4, 3), b = page(4, 3);
+  const { msg, transfer } = compareRequest(7, a, b, 4, 3, { align: false });
+  assert.deepEqual({ ...msg, a: undefined, b: undefined }, { id: 7, method: 'compare', a: undefined, b: undefined, width: 4, height: 3, opts: { align: false } });
+  assert.ok(msg.a === a && msg.b === b);
+  assert.deepEqual(transfer, [a.buffer, b.buffer]);
+  assert.deepEqual(compareRequest(1, a, a, 4, 3).transfer, [a.buffer], 'one buffer listed once (a duplicate is a DataCloneError)');
+  const r = comparePages(a, b, 4, 3);
+  const rep = compareReply(7, r);
+  assert.equal(rep.msg.result, r);
+  assert.deepEqual(rep.transfer, [r.composite.buffer]);
+  assert.deepEqual(compareReply(2, true), { msg: { id: 2, result: true }, transfer: [] });
+  assert.deepEqual(compareErrorReply(3, new RangeError('bad size')), { msg: { id: 3, error: { name: 'RangeError', message: 'bad size' } }, transfer: [] });
+  // structured-clone round trip (what postMessage does) keeps the result
+  const back = structuredClone(rep.msg, { transfer: rep.transfer });
+  assert.deepEqual(back.result.stats, r.stats);
+});
