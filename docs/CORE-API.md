@@ -71,9 +71,12 @@ CRLF/CR → LF, TAB → one space, and **every character outside WinAnsi becomes
   (it is not redaction).
 * `flattenObjects` burns overlay objects into page content (not editable afterwards);
   `writeAnnotations` (annots.js) saves them as real PDF annotations instead.
-* `mergePdfs`, `splitPdf`, `extractPages` and `insertPagesFrom` copy pages only: bookmarks,
-  document-level JavaScript, and AcroForm field linkage of the copied pages are not carried
-  over (widgets stay visible but are no longer form fields).
+* `mergePdfs`, `splitPdf`, `extractPages`, `insertPagesFrom`, `replacePages` and `interleavePdfs`
+  carry the copied pages' form fields (registered in /AcroForm /Fields; a top-level name already
+  in the target gets a `_2` suffix) and the bookmarks to copied pages (src/core/pagecarry.js;
+  `insertPagesFrom(..., {outline: false})` skips bookmarks, used by Duplicate). Deleting pages
+  removes their bookmarks and fields; `replacePages` points bookmarks at the replacement pages.
+  Document-level JavaScript and XFA are not carried over.
 * No Unicode/embedded fonts (see above). No encryption/decryption, no signing, no OCR.
 
 ---

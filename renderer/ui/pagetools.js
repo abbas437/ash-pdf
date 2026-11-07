@@ -205,7 +205,7 @@ export function insertBlank(tab, at) {
 export function duplicate(tab, sel) {
   const at = sel[sel.length - 1] + 1;
   return runOp(tab, 'Duplicate pages', async (bytes, n, c) => ({
-    bytes: await c.insertPagesFrom(bytes, bytes, sel, at), map: shiftMap(n, at, sel.length), select: range(sel.length, at),
+    bytes: await c.insertPagesFrom(bytes, bytes, sel, at, { outline: false }), map: shiftMap(n, at, sel.length), select: range(sel.length, at),
   }));
 }
 
