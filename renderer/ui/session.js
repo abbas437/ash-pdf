@@ -15,7 +15,7 @@ export function initSession({ state, bus, viewer, activate, welcomeCard, openFil
   const electron = !!api.isElectron;
 
   // Opens described files ({name, path, bytes, page?, active?, split?}) as tabs: the page, the active
-  // tab and the split view ({dir, ratio, files: [pathA, pathB], focus}) come from a restored session.
+  // tab and the split view ({dir, ratio, files: [pathA, pathB], focus, sync}) come from a restored session.
   // The split reopens only if both its files opened.
   async function openFiles(files) {
     let toActivate = null;
@@ -31,7 +31,7 @@ export function initSession({ state, bus, viewer, activate, welcomeCard, openFil
     }
     if (toActivate) activate(toActivate.id);
     const ids = split?.files.map((p) => opened.get(p)?.id);
-    if (ids?.every(Boolean)) splitView.open(ids, split.dir, { ratio: split.ratio, focus: split.focus });
+    if (ids?.every(Boolean)) splitView.open(ids, split.dir, { ratio: split.ratio, focus: split.focus, sync: split.sync });
   }
 
   let timer = 0;
@@ -41,7 +41,7 @@ export function initSession({ state, bus, viewer, activate, welcomeCard, openFil
     const active = state.tabs.find((t) => t.id === state.activeId)?.path ?? null;
     const sv = splitView.state;
     const splitFiles = sv?.ids.map((id) => state.tabs.find((t) => t.id === id)?.path);
-    const split = splitFiles?.every(Boolean) ? { dir: sv.dir, ratio: sv.ratio, files: splitFiles, focus: sv.focus } : null;
+    const split = splitFiles?.every(Boolean) ? { dir: sv.dir, ratio: sv.ratio, files: splitFiles, focus: sv.focus, sync: sv.sync } : null;
     api.sessionUpdate(split ? { files, active, split } : { files, active }).catch(() => {});
   }
   if (electron) {

@@ -54,3 +54,10 @@ test('split paths are stored in the spelling of the kept file', () => {
   const r = cleanWindowState(base({ dir: 'v', ratio: 0.4, files: ['/docs/./a.pdf', '/docs/x/../b.pdf'], focus: 0 }), all);
   assert.deepEqual(r.split.files, [A, B]);
 });
+
+test('the split keeps a boolean "scroll and zoom together" and drops anything else', () => {
+  const split = { dir: 'v', ratio: 0.5, files: [A, B], focus: 0 };
+  assert.equal(cleanWindowState(base({ ...split, sync: true }), all).split.sync, true);
+  assert.equal(cleanWindowState(base({ ...split, sync: false }), all).split.sync, false);
+  assert.equal('sync' in cleanWindowState(base({ ...split, sync: 'yes' }), all).split, false);
+});
