@@ -6,11 +6,11 @@
 // Run `node scripts/vendor.js` first. Prints "OCR E2E OK".
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { extname, resolve, sep } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
-import { createCanvas } from '@napi-rs/canvas';
+import { createCanvas, GlobalFonts } from '@napi-rs/canvas';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json',
@@ -19,11 +19,19 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
 // The image: 2400 x 600 px, drawn at (36, 500) pt and 540 pt wide (0.225 pt per px).
 const LINE = 'ASH OCR test 2026 drawing number HV-101', IMG = { x: 36, y: 500, w: 540, px: 2400, py: 600 };
 const K = IMG.w / IMG.px, LEFT = 40, BASE = 330;
-async function makePdf() {
+// The words are drawn in Arimo from node_modules, not in a system font: '84px sans-serif' is whatever the machine
+// has (IPAPGothic on the GitHub runner, whose narrow space made "number HV-101" one text item 72 pt left of HV-101).
+const FONT = 'ocr-e2e-arimo';
+if (!GlobalFonts.registerFromPath(join(root, 'node_modules', '@expo-google-fonts', 'arimo', '400Regular', 'Arimo_400Regular.ttf'), FONT)) throw new Error('cannot load the Arimo fixture font');
+function scanCanvas() { // the image: LINE in black on white
   const c = createCanvas(IMG.px, IMG.py), ctx = c.getContext('2d');
   ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, IMG.px, IMG.py);
-  ctx.fillStyle = '#000000'; ctx.font = '84px sans-serif'; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = '#000000'; ctx.font = `84px "${FONT}"`; ctx.textBaseline = 'alphabetic';
   ctx.fillText(LINE, LEFT, BASE);
+  return { c, ctx };
+}
+async function makePdf() {
+  const { c, ctx } = scanCanvas();
   const hvPx = LEFT + ctx.measureText(LINE.slice(0, LINE.indexOf('HV-101'))).width;
   const doc = await PDFDocument.create();
   const png = await doc.embedPng(new Uint8Array(c.toBuffer('image/png')));
@@ -112,9 +120,7 @@ try {
 
   step = 'scanned-document banner';
   const fullPage = async (withText) => { // one page the size of the image, which covers it entirely
-    const c = createCanvas(IMG.px, IMG.py), ctx = c.getContext('2d');
-    ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, IMG.px, IMG.py);
-    ctx.fillStyle = '#000000'; ctx.font = '84px sans-serif'; ctx.fillText(LINE, LEFT, BASE);
+    const { c } = scanCanvas();
     const doc = await PDFDocument.create();
     const png = await doc.embedPng(new Uint8Array(c.toBuffer('image/png')));
     const p = doc.addPage([IMG.w, IMG.py * K]);
@@ -148,7 +154,7 @@ try {
   await page.locator('.menu-item[data-id="images-to-pdf"]').click();
   const chooser = page.waitForEvent('filechooser');
   await page.click('#pt-img-add');
-  await (await chooser).setFiles([{ name: 'scan.png', mimeType: 'image/png', buffer: Buffer.from(await (async () => { const c = createCanvas(IMG.px, IMG.py), ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, IMG.px, IMG.py); ctx.fillStyle = '#000'; ctx.font = '84px sans-serif'; ctx.fillText(LINE, LEFT, BASE); return c.toBuffer('image/png'); })()) }]);
+  await (await chooser).setFiles([{ name: 'scan.png', mimeType: 'image/png', buffer: Buffer.from(scanCanvas().c.toBuffer('image/png')) }]);
   await page.waitForFunction(() => document.querySelectorAll('.pt-filelist li:not(.pt-empty)').length === 1);
   check(await page.isChecked('#pt-img-ocr'), '"Make searchable" not on by default');
   await page.click('.dialog button[data-value="ok"]');
