@@ -1,0 +1,123 @@
+#!/usr/bin/env node
+// Tools > Compare revisions (ui/comparerev.js) in Chromium with the browser shim: Rev.00 (3 pages) vs
+// Rev.01 (4 pages: page 2 changed, page 3 shifted 10 pt, page 4 new). Prints "COMPAREREV OK".
+// COMPARE_NO_ALIGN=1 unchecks "Align shifted pages" (the page 3 check must then fail).
+// Run `node scripts/vendor.js` first. Chromium path: $CHROMIUM_PATH or the sandbox default.
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { extname, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright-core';
+import { PDFDocument, StandardFonts } from 'pdf-lib';
+
+const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
+
+const server = createServer(async (req, res) => {
+  const file = resolve(root, '.' + decodeURIComponent(new URL(req.url, 'http://x').pathname));
+  if (!file.startsWith(root + sep)) { res.writeHead(403).end(); return; }
+  try {
+    res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' }).end(await readFile(file));
+  } catch { res.writeHead(404).end(); }
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const base = `http://127.0.0.1:${server.address().port}`;
+
+
+async function rev(n, { dn, extraLine = false, shift = 0 }) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 1; i <= n; i++) {
+    const p = doc.addPage([595.28, 841.89]);
+    const dy = i === 3 ? -shift : 0;
+    for (let k = 0; k < 6; k++) p.drawLine({ start: { x: 60, y: 700 - k * 80 + dy }, end: { x: 520, y: 700 - k * 80 + dy }, thickness: 1.5 });
+    p.drawText(`PUMP P-10${i} ${i === 2 ? dn : 'DN100'}`, { x: 70, y: 760 + dy, size: 18, font });
+    if (i === 2 && extraLine) p.drawLine({ start: { x: 100, y: 200 }, end: { x: 400, y: 300 }, thickness: 2 });
+  }
+  return Buffer.from(await doc.save());
+}
+const check = (cond, msg) => { if (!cond) throw new Error(msg); };
+const problems = [];
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+let step = 'start';
+try {
+  const r0 = await rev(3, { dn: 'DN100' });
+  const r1 = await (async () => { const b = await rev(3, { dn: 'DN150', extraLine: true, shift: 10 }); const d = await PDFDocument.load(b); const f = await d.embedFont(StandardFonts.Helvetica); d.addPage([595.28, 841.89]).drawText('NEW SHEET', { x: 70, y: 760, size: 18, font: f }); return Buffer.from(await d.save()); })();
+  const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+  page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error') problems.push(`console.error: ${m.text()}`); });
+  await page.goto(`${base}/renderer/index.html`, { waitUntil: 'load' });
+  await page.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 10_000 });
+  const openFile = async (name, buffer) => {
+    const chooser = page.waitForEvent('filechooser');
+    await page.click('#btn-open');
+    await (await chooser).setFiles({ name, mimeType: 'application/pdf', buffer });
+    await page.waitForFunction((n) => window.ashStudio.state.tabs.some((t) => t.name === n && t.view), name);
+  };
+  step = 'open Rev.01 then Rev.00';
+  await openFile('PS-001 Rev.01.pdf', r1);
+  await openFile('PS-001 Rev.00.pdf', r0);
+  step = 'Tools > Compare revisions… guesses Rev.00 as the older';
+  await page.click('.menu-btn:text-is("Tools")');
+  await page.click('.menu [data-id="compare-revisions"]');
+  await page.waitForSelector('.compare-dialog');
+  const names = await page.evaluate(() => ['#cmp-older', '#cmp-newer'].map((s) => document.querySelector(s).selectedOptions[0].textContent));
+  check(names[0] === 'PS-001 Rev.00.pdf' && names[1] === 'PS-001 Rev.01.pdf', `guess: ${names}`);
+  if (process.env.COMPARE_NO_ALIGN) await page.uncheck('#cmp-align');
+  await page.click('.compare-dialog button.primary');
+  step = 'compare tab with 4 pages';
+  await page.waitForFunction(() => window.ashStudio.state.tabs.some((t) => t.compare && t.view), null, { timeout: 30_000 });
+  const res = await page.evaluate(() => {
+    const t = window.ashStudio.state.tabs.find((x) => x.compare);
+    return { name: t.name, n: t.numPages, active: window.ashStudio.state.activeId === t.id, pages: t.compare.pages.map((p) => ({ s: p.status, r: p.regions.length, add: p.text.added.map((w) => w.text), rem: p.text.removed.map((w) => w.text) })) };
+  });
+  check(res.n === 4 && res.active && res.name === 'Compare – PS-001 Rev.00 vs PS-001 Rev.01.pdf', `tab: ${JSON.stringify(res)}`);
+  check(res.pages[1].r > 0 && res.pages[1].add.includes('DN150') && res.pages[1].rem.includes('DN100'), `page 2: ${JSON.stringify(res.pages[1])}`);
+  check(res.pages[2].r === 0, `page 3 aligned, no areas: ${JSON.stringify(res.pages[2])}`);
+  check(res.pages[3].s === 'added', `page 4 added: ${JSON.stringify(res.pages[3])}`);
+  step = 'annotations in the compare PDF';
+  const ann = await page.evaluate(async () => {
+    const t = window.ashStudio.state.tabs.find((x) => x.compare);
+    const out = [];
+    for (let i = 0; i < t.numPages; i++) out.push((t.objects ?? []).filter((o) => o.page === i && o.author === 'Compare').map((o) => `${o.type} ${JSON.stringify(o)}`));
+    const txt = (await t.pages[3].getTextContent()).items.map((x) => x.str).join(' ');
+    return { out, txt };
+  });
+  check(ann.out[1].some((c) => /added/.test(c)), `page 2 square: ${JSON.stringify(ann.out[1])}`);
+  check(ann.out[2].length === 0, `page 3 none: ${JSON.stringify(ann.out[2])}`);
+  check(/Page only in the newer revision/.test(ann.txt), `page 4 note: ${ann.txt}`);
+  step = 'Differences panel lists + DN150 and − DN100; click scrolls to page 2';
+  await page.waitForSelector('.cmp-list');
+  const items = await page.$$eval('.cmp-item', (els) => els.map((e) => e.textContent));
+  check(items.includes('+ DN150') && items.includes('− DN100') && items.some((s) => s.startsWith('Page 2 — ')), `items: ${items}`);
+  await page.evaluate(() => { const t = window.ashStudio.state.tabs.find((x) => x.compare); window.ashStudio.viewer.scrollToPage(t, 3); });
+  await page.click('.cmp-item:text-is("+ DN150")');
+  await page.waitForFunction(() => window.ashStudio.state.tabs.find((x) => x.compare).currentPage === 1, null, { timeout: 5000 });
+  await page.waitForSelector('svg.cmp-flash');
+  step = 'Side by side opens a split with sync on';
+  await page.click('.cmp-sbs');
+  await page.waitForFunction(() => document.querySelector('.viewer-host.split'));
+  const sync = await page.evaluate(async () => (await import('./ui/splitview.js')).splitView.state);
+  check(sync?.sync === true, `split: ${JSON.stringify(sync)}`);
+  await page.evaluate(async () => (await import('./ui/splitview.js')).splitView.unsplit());
+  step = 'Cancel midway on a larger set leaves no new tab';
+  const before = await page.evaluate(() => window.ashStudio.state.tabs.length);
+  await page.evaluate(() => {
+    const [a, b] = window.ashStudio.state.tabs.filter((t) => !t.compare);
+    window.__cmp = window.ashStudio.compareRevisions.compareRevisions(a, b, { indices: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2], dpi: 200 });
+  });
+  await page.waitForFunction(() => /page [2-9] of 12/.test(document.querySelector('#compare-progress')?.textContent ?? ''), null, { timeout: 20_000 });
+  await page.click('.compare-progress button');
+  const back = await page.evaluate(() => window.__cmp);
+  const after = await page.evaluate(() => window.ashStudio.state.tabs.length);
+  check(back === null && after === before, `cancel: ${back}, tabs ${before} -> ${after}`);
+  check(problems.length === 0, problems.join('\n'));
+  console.log('COMPAREREV OK');
+} catch (err) {
+  console.error(`FAILED at "${step}": ${err.message}`);
+  if (problems.length) console.error(problems.join('\n'));
+  process.exitCode = 1;
+} finally {
+  await browser.close();
+  server.close();
+}
