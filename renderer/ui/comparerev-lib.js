@@ -4,6 +4,7 @@
 //   guessOrder(a, b)             -> [older, newer] of two {name} (revision in the name, else as given)
 //   renderScale(wPt, hPt, dpi)   -> px per point at dpi, lowered so the canvas fits (CANVAS_LIMITS)
 //   pagePairs(nOld, nNew, idx?)  -> [{index, older, newer}] page pairs by index (null: no such page)
+//   pageLabel(p)                 -> "Page 5", "Page 5 (older 4)" or "Older page 4" (source page numbers)
 //   pageSummary(p)               -> "Page 3 — 4 areas, text: +2 / −1"
 //   diffRows(pages)              -> [[page, kind, item, text]] for Copy list / Export CSV
 //   diffCsv(pages), diffText(pages)
@@ -56,9 +57,23 @@ const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
 /** A page has changes when it has areas, text changes, or is in one revision only. */
 export const hasChanges = (p) => p.status !== 'compared' || p.regions.length > 0 || p.text.added.length > 0 || p.text.removed.length > 0;
 
-/** "Page 3 — 4 areas, text: +2 / −1" (page = output page number, 1-based). */
+/**
+ * The source page of a result: its newer page number, with the older one when they differ; "Older page n"
+ * for a page in the older revision only. Without olderPage / newerPage (a reopened compare PDF), the
+ * output page number (index + 1).
+ */
+export function pageLabel(p) {
+  const { newerPage: n = null, olderPage: o = null } = p;
+  if (n === null && o === null) return `Page ${p.index + 1}`;
+  if (n === null) return `Older page ${o}`;
+  return o === null || o === n ? `Page ${n}` : `Page ${n} (older ${o})`;
+}
+
+const num = (v) => v ?? '';
+
+/** "Page 3 — 4 areas, text: +2 / −1" (see pageLabel for the page). */
 export function pageSummary(p) {
-  const head = `Page ${p.index + 1} — `;
+  const head = `${pageLabel(p)} — `;
   if (p.status === 'added') return `${head}only in the newer revision`;
   if (p.status === 'removed') return `${head}only in the older revision`;
   const parts = [plural(p.regions.length, 'area')];
@@ -69,22 +84,27 @@ export function pageSummary(p) {
 const KIND = (r) => (r.removed > 0 && r.removed >= 2 * (r.added || 0) ? 'removed' : r.added > 0 && r.added >= 2 * (r.removed || 0) ? 'added' : 'added and removed');
 export const regionKind = KIND;
 
-/** Rows [page, kind, item, text] of every changed page: one per area and one per text phrase. */
+/**
+ * Rows [newer page, older page, kind, item, text] of every changed page: one per area and one per text
+ * phrase. Page cells are the source page numbers ('' when the page is not in that revision); without them
+ * (a reopened compare PDF) both are the output page number.
+ */
 export function diffRows(pages) {
   const rows = [];
   for (const p of pages.filter(hasChanges)) {
-    const pg = p.index + 1;
-    if (p.status !== 'compared') rows.push([pg, 'page', p.status === 'added' ? 'Page only in the newer revision' : 'Page only in the older revision', '']);
-    p.regions.forEach((r, k) => rows.push([pg, 'area', `Change ${k + 1}: ${KIND(r)}`, '']));
-    for (const t of p.text.added) rows.push([pg, 'text added', `+ ${t.text}`, t.text]);
-    for (const t of p.text.removed) rows.push([pg, 'text removed', `− ${t.text}`, t.text]);
+    const known = p.newerPage != null || p.olderPage != null;
+    const pg = known ? [num(p.newerPage), num(p.olderPage)] : [p.index + 1, p.index + 1];
+    if (p.status !== 'compared') rows.push([...pg, 'page', p.status === 'added' ? 'Page only in the newer revision' : 'Page only in the older revision', '']);
+    p.regions.forEach((r, k) => rows.push([...pg, 'area', `Change ${k + 1}: ${KIND(r)}`, '']));
+    for (const t of p.text.added) rows.push([...pg, 'text added', `+ ${t.text}`, t.text]);
+    for (const t of p.text.removed) rows.push([...pg, 'text removed', `− ${t.text}`, t.text]);
   }
   return rows;
 }
 
 /** UTF-8 CSV (with BOM, formula guard) of diffRows. */
 export function diffCsv(pages) {
-  const rows = [['Page', 'Kind', 'Item', 'Text'], ...diffRows(pages)];
+  const rows = [['Newer page', 'Older page', 'Kind', 'Item', 'Text'], ...diffRows(pages)];
   return '﻿' + rows.map((r) => r.map(csvCell).join(',')).join('\r\n') + '\r\n';
 }
 

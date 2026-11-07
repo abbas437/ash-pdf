@@ -114,6 +114,19 @@ test('added/removed status pages carry their note', async () => {
   assert.ok(!(await tj(2)).includes('Page only'));
 });
 
+test('source page numbers: bookmarks are named by them and the legend says "Page 5 of <newer>"', async () => {
+  const r = [{ x: 10, y: 300, w: 10, h: 10, added: 3, removed: 0 }];
+  const bytes = await buildCompareReport([page({ regions: r, newerPage: 5, olderPage: 5 }), page({ regions: r, newerPage: 6, olderPage: 4 }), page({ status: 'removed', olderPage: 7, newerPage: null })], META);
+  const doc = await PDFDocument.load(bytes);
+  const items = [];
+  for (let ref = doc.catalog.lookup(N('Outlines')).get(N('First')); ref; ref = doc.context.lookup(ref).get(N('Next'))) items.push(doc.context.lookup(ref));
+  assert.deepEqual(items.map((d) => text(d.lookup(N('Title')))), ['Page 5 – 1 change', 'Page 6 (older 4) – 1 change', 'Older page 7 – only in the older revision']);
+  const tj = async (i) => [...(await pageContent(bytes, i)).matchAll(/<([0-9A-Fa-f]+)> Tj/g)].map((m) => Buffer.from(m[1], 'hex').toString('latin1')).join('|');
+  assert.ok((await tj(0)).includes('Page 5 of HVAC-SD-001 Rev.01.pdf'), await tj(0));
+  assert.ok((await tj(1)).includes('Page 6 of HVAC-SD-001 Rev.01.pdf, page 4 of HVAC-SD-001 Rev.00.pdf'), await tj(1));
+  assert.ok((await tj(2)).includes('Page 7 of HVAC-SD-001 Rev.00.pdf'), await tj(2));
+});
+
 test('bookmarks: one per page with changes', async () => {
   const r = (n) => Array.from({ length: n }, (_, k) => ({ x: 10 + 20 * k, y: 300, w: 10, h: 10, added: 3, removed: 0 }));
   const bytes = await buildCompareReport([page({ regions: r(1) }), page(), page({ regions: r(5) }), page({ status: 'added' })], META);

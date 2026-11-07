@@ -115,7 +115,7 @@ try {
   const chunks = [];
   for await (const c of await download.createReadStream()) chunks.push(c);
   const csv = Buffer.concat(chunks).toString('utf8');
-  check(csv.startsWith('\uFEFFPage,Kind,Item,Text\r\n') && csv.includes("\r\n2,text added,'+ DN150,DN150\r\n") && csv.includes('\r\n2,text removed,− DN100,DN100\r\n') && csv.includes('\r\n4,page,Page only in the newer revision,\r\n'), `csv: ${JSON.stringify(csv)}`);
+  check(csv.startsWith('\uFEFFNewer page,Older page,Kind,Item,Text\r\n') && csv.includes("\r\n2,2,text added,'+ DN150,DN150\r\n") && csv.includes('\r\n2,2,text removed,− DN100,DN100\r\n') && csv.includes('\r\n4,,page,Page only in the newer revision,\r\n'), `csv: ${JSON.stringify(csv)}`);
   if (process.env.COMPAREREV_SHOTS) {
     for (const theme of ['light', 'dark']) {
       await page.evaluate((th) => { document.documentElement.dataset.theme = th; }, theme);
@@ -134,10 +134,34 @@ try {
   check(heads[0]?.startsWith('Page 2 — ') && reopened.length - heads.length === marks && reopened.filter((s) => /^Change [0-9]+: added$/.test(s)).length >= 1, `reopened: ${JSON.stringify(reopened)} (${marks} marks)`);
   await page.click('.cmp-copy');
   await page.waitForFunction(() => /^Page 2 — /.test(window.__ashShim.clipboardText()) && !window.__ashShim.clipboardText().includes('DN150'));
+  step = 'pages "2-3": the panel, CSV, bookmarks and Side by side use the source page numbers';
+  await page.evaluate(async () => {
+    const { parseRanges } = await import('/src/core/pdfOps.js');
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    for (const t of [a, b]) window.ashStudio.viewer.scrollToPage(t, 0);
+    await window.ashStudio.compareRevisions.compareRevisions(a, b, { indices: parseRanges('2-3', 4) });
+  });
+  const ranged = await page.evaluate(async () => {
+    const t = window.ashStudio.state.tabs.at(-1), lib = await import('./ui/comparerev-lib.js');
+    const outline = await t.pdfDoc.getOutline();
+    return { n: t.numPages, active: window.ashStudio.state.activeId === t.id, csv: lib.diffCsv(t.compare.pages), pages: t.compare.pages.map((p) => [p.newerPage, p.olderPage]),
+      marks: (outline ?? []).map((o) => o.title), legend: (await t.pages[0].getTextContent()).items.map((x) => x.str).join(' ') };
+  });
+  check(ranged.n === 2 && ranged.active && JSON.stringify(ranged.pages) === '[[2,2],[3,3]]', `range tab: ${JSON.stringify(ranged)}`);
+  check(ranged.csv.includes("\r\n2,2,text added,'+ DN150,DN150\r\n") && !/\r\n1,/.test(ranged.csv), `range csv: ${JSON.stringify(ranged.csv)}`);
+  check(ranged.marks[0]?.startsWith('Page 2 – ') && /Page 2 of PS-001 Rev\.01\.pdf/.test(ranged.legend), `range bookmarks / legend: ${JSON.stringify(ranged)}`);
+  await page.waitForFunction(() => [...document.querySelectorAll('.cmp-item')].some((e) => e.textContent.startsWith('Page 2 — ')));
+  const rangedItems = await page.$$eval('.cmp-page-head', (els) => els.map((e) => e.textContent));
+  check(rangedItems.every((s) => /^Page [23] — /.test(s)) && rangedItems.length >= 1, `range panel: ${JSON.stringify(rangedItems)}`);
+  await page.click('.cmp-sbs');
+  await page.waitForFunction(() => document.querySelector('.viewer-host.split'));
+  await page.waitForFunction(() => ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].every((n) => window.ashStudio.state.tabs.find((t) => t.name === n).currentPage === 1), null, { timeout: 5000 })
+    .catch(async () => { throw new Error(`Side by side pages: ${await page.evaluate(() => JSON.stringify(window.ashStudio.state.tabs.map((t) => [t.name, t.currentPage])))}`); });
+  await page.evaluate(async () => (await import('./ui/splitview.js')).splitView.unsplit());
   step = 'Cancel midway on a larger set leaves no new tab';
   const before = await page.evaluate(() => window.ashStudio.state.tabs.length);
   await page.evaluate(() => {
-    const [a, b] = window.ashStudio.state.tabs.filter((t) => !t.compare && t.name.startsWith('PS-001'));
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
     window.__cmp = window.ashStudio.compareRevisions.compareRevisions(a, b, { indices: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2], dpi: 200 });
   });
   await page.waitForFunction(() => /page [2-9] of 12/.test(document.querySelector('#compare-progress')?.textContent ?? ''), null, { timeout: 20_000 });

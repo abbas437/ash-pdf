@@ -32,16 +32,16 @@ On each page of the result:
 - ink that was **removed** (only in the older revision) is **red**;
 - ink that was **added** (only in the newer revision) is **green**.
 
-Each changed area has a **dashed rectangle** round it with a short note, such as "Change 1: added" or "Change 2: added and removed", plus the words that changed inside it. Point at a rectangle, or open it, to read its note. A legend in the corner names the two revisions and the date of the compare, and the **Bookmarks** list each page with changes.
+Each changed area has a **dashed rectangle** round it with a short note, such as "Change 1: added" or "Change 2: added and removed", plus the words that changed inside it. Point at a rectangle, or open it, to read its note. A legend in the corner names the two revisions, the date of the compare and the page compared (for example, "Page 5 of Rev.01"), and the **Bookmarks** list each page with changes by that page number.
 
 ## The Differences panel
 
-The **Differences** panel opens in the sidebar with the result. It lists each page with changes, then its areas (**Change 1**, **Change 2**, …) and its text changes (**+** added, **−** removed).
+The **Differences** panel opens in the sidebar with the result. It lists each page with changes by its page number in the revisions (with **Pages** set to `5-7`, the first is **Page 5**; if the older revision's page number differs, it is shown too, as in **Page 5 (older 4)**), then its areas (**Change 1**, **Change 2**, …) and its text changes (**+** added, **−** removed).
 
 - Click an item to go to it. The change is outlined for a moment.
-- **Side by side** shows the older and the newer revision in a split view with **Scroll and zoom together** on, at that page. Both revisions must still be open. See [Split view](#topic:split-view).
+- **Side by side** shows the older and the newer revision in a split view with **Scroll and zoom together** on, each at that page. Both revisions must still be open. See [Split view](#topic:split-view).
 - **Copy list** copies the list as plain text, for pasting into an email or a comment sheet.
-- **Export CSV** saves the list as a spreadsheet file (Page, Kind, Item, Text) that opens in Excel.
+- **Export CSV** saves the list as a spreadsheet file (Newer page, Older page, Kind, Item, Text) that opens in Excel.
 
 ## Save, print or send the result
 

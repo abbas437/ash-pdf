@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { revisionKey, guessOrder, renderScale, pagePairs, pageSummary, diffRows, diffCsv, diffText } from '../renderer/ui/comparerev-lib.js';
+import { revisionKey, guessOrder, renderScale, pagePairs, pageLabel, pageSummary, diffRows, diffCsv, diffText } from '../renderer/ui/comparerev-lib.js';
 
 test('revisionKey reads Rev.xx, R1 and letter revisions', () => {
   assert.deepEqual(revisionKey('HVAC-SD-001 Rev.00.pdf'), [0, 0]);
@@ -48,9 +48,23 @@ test('pageSummary and diffText list the changed pages only', () => {
 });
 
 test('diffRows and diffCsv: BOM, header, formula guard', () => {
-  assert.deepEqual(diffRows(pages).map((r) => r[2]), ['Change 1: added', 'Change 2: added and removed', '+ DN150', '− DN100', 'Page only in the newer revision']);
+  assert.deepEqual(diffRows(pages).map((r) => r[3]), ['Change 1: added', 'Change 2: added and removed', '+ DN150', '− DN100', 'Page only in the newer revision']);
   const csv = diffCsv([{ index: 0, status: 'compared', regions: [], text: { added: [{ text: '=SUM(A1)' }], removed: [] } }]);
-  assert.ok(csv.startsWith('﻿Page,Kind,Item,Text\r\n'));
+  assert.ok(csv.startsWith('﻿Newer page,Older page,Kind,Item,Text\r\n'));
   assert.ok(csv.includes(",'=SUM(A1)\r\n"), csv);
   assert.ok(csv.includes(",'+ =SUM(A1),"), 'item cell starting with + is guarded too');
+});
+
+test('a page range: labels, Copy list and CSV use the source page numbers, not the output position', () => {
+  const ranged = [
+    { index: 0, olderPage: 5, newerPage: 5, status: 'compared', regions: [{ added: 4, removed: 0 }], text: { added: [{ text: 'DN150' }], removed: [] } },
+    { index: 1, olderPage: 4, newerPage: 6, status: 'compared', regions: [{ added: 4, removed: 0 }], text: { added: [], removed: [] } },
+    { index: 2, olderPage: 7, newerPage: null, status: 'removed', regions: [], text: { added: [], removed: [] } },
+  ];
+  assert.deepEqual(ranged.map(pageLabel), ['Page 5', 'Page 6 (older 4)', 'Older page 7']);
+  assert.equal(pageLabel({ index: 2 }), 'Page 3', 'no source pages (reopened compare PDF): the output page');
+  assert.equal(pageSummary(ranged[0]), 'Page 5 — 1 area, text: +1 / −0');
+  assert.match(diffText(ranged), /^Page 5 — .*\n[\s\S]*\nPage 6 \(older 4\) — 1 area\n[\s\S]*\nOlder page 7 — only in the older revision$/);
+  const csv = diffCsv(ranged).split('\r\n');
+  assert.deepEqual(csv.slice(1, 5), ['5,5,area,Change 1: added,', "5,5,text added,'+ DN150,DN150", '6,4,area,Change 1: added,', ',7,page,Page only in the older revision,']);
 });

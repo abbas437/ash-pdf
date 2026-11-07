@@ -84,7 +84,8 @@ export async function compareRevisions(older, newer, opts = {}) {
       const v = ref.pages[ri].getViewport({ scale: 1 });
       const scale = renderScale(v.width, v.height, o.dpi);
       const W = Math.max(1, Math.round(v.width * scale)), H = Math.max(1, Math.round(v.height * scale));
-      const res = { index: k, older: p.older, newer: p.newer, regions: [], text: { added: [], removed: [] }, stats: null, shift: { dx: 0, dy: 0 }, scaled: false, capped: false };
+      // index: the output page in the compare document; olderPage / newerPage: the 1-based source pages (null: none).
+      const res = { index: k, older: p.older, newer: p.newer, olderPage: p.older === null ? null : p.older + 1, newerPage: p.newer === null ? null : p.newer + 1, regions: [], text: { added: [], removed: [] }, stats: null, shift: { dx: 0, dy: 0 }, scaled: false, capped: false };
       let composite;
       if (p.older !== null && p.newer !== null) {
         const b = await draw(newer, p.newer, W, H);
@@ -110,7 +111,7 @@ export async function compareRevisions(older, newer, opts = {}) {
       }
       if (prog.isCancelled()) return null;
       const image = await encode(composite, W, H);
-      out.push({ width: v.width, height: v.height, image, regions: res.regions, status: res.status, textChanges: res.text });
+      out.push({ width: v.width, height: v.height, image, regions: res.regions, status: res.status, textChanges: res.text, olderPage: res.olderPage, newerPage: res.newerPage });
       results.push(res);
     }
     if (prog.isCancelled() || !out.length) return null;
@@ -236,12 +237,15 @@ function flash(tab, i, b) {
   });
 }
 
-function sideBySide(tab, i) {
+/** The older and newer revisions side by side, each pane at its own source page of result p. */
+function sideBySide(tab, p) {
   const c = tab.compare;
   const a = state.tabs.find((t) => t.id === c?.older.id), b = state.tabs.find((t) => t.id === c?.newer.id);
   if (!a || !b) { toast('Open both revisions to show them side by side'); return; }
   splitView.open([a.id, b.id], 'v', { sync: true, focus: 1 });
-  viewer.scrollToPage(b, Math.min(i, b.numPages - 1));
+  const at = (t, n) => viewer.scrollToPage(t, Math.max(0, Math.min((n ?? 1) - 1, t.numPages - 1)));
+  at(a, p.olderPage ?? p.newerPage);
+  at(b, p.newerPage ?? p.olderPage);
 }
 
 async function copyList(pages) {
@@ -270,7 +274,7 @@ function render(container, tab) {
         item(pageSummary(p), () => flash(tab, p.index, null), '.cmp-page-head'),
         p.scaled ? h('p.cmp-note', {}, 'Pages differ in size: the older page was scaled to fit.') : null,
         p.capped ? h('p.cmp-note', {}, 'Many changes: shown as one area.') : null,
-        h('button.btn.cmp-sbs', { type: 'button', onclick: () => sideBySide(tab, p.index) }, 'Side by side')));
+        h('button.btn.cmp-sbs', { type: 'button', onclick: () => sideBySide(tab, p) }, 'Side by side')));
       p.regions.forEach((r, k) => list.append(item(`Change ${k + 1}: ${regionKind(r)}`, () => flash(tab, p.index, r))));
       for (const t of p.text.added) list.append(item(`+ ${t.text}`, () => flash(tab, p.index, t.box), '.cmp-add'));
       for (const t of p.text.removed) list.append(item(`− ${t.text}`, () => flash(tab, p.index, t.box), '.cmp-rem'));

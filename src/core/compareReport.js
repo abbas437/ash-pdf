@@ -8,7 +8,8 @@
 //   4. one small Square per added/removed text phrase outside every region (at most MAX_TEXT_MARKS
 //      per page; the rest are counted in the legend).
 // Plus /Title "Compare <older> to <newer>", /Producer ASH PDF Studio, and a flat outline with one
-// bookmark per page that has changes.
+// bookmark per page that has changes, named by its source page ("Page 5 – 2 changes", "Page 5 (older 4)
+// – …", "Older page 4 – …") when the page carries newerPage / olderPage, else by its output page.
 //
 // Fonts: like the rest of the core, no font file is embedded. The legend uses Helvetica (WinAnsi);
 // file names go through sanitizeText, so a character it cannot encode (Arabic, CJK...) is drawn as
@@ -162,6 +163,16 @@ function drawLegend(page, fonts, { older, newer, when, notes }) {
   }
 }
 
+const pageNo = (v) => (Number.isInteger(v) && v > 0 ? v : null);
+
+/** "Page 5", "Page 5 (older 4)" or "Older page 4" from the source pages; "Page <i + 1>" without them. */
+function sourceLabel(p, i) {
+  const n = pageNo(p.newerPage), o = pageNo(p.olderPage);
+  if (n === null && o === null) return `Page ${i + 1}`;
+  if (n === null) return `Older page ${o}`;
+  return o === null || o === n ? `Page ${n}` : `Page ${n} (older ${o})`;
+}
+
 /** Flat /Outlines: one item per [title, page ref], each going to the whole page. */
 function writeOutline(doc, items) {
   if (!items.length) return;
@@ -186,7 +197,8 @@ function writeOutline(doc, items) {
  * Build the compare overlay PDF.
  * pages[i] = {width, height (points), image: {bytes, type: 'png'|'jpeg'}, regions?: [{x, y, w, h, added,
  *   removed}] (top-left points; added/removed = changed pixel counts), status?: 'compared'|'added'|'removed',
- *   textChanges?: {added: [{text, box: {x, y, w, h}}], removed: [...]} (boxes in the same frame as regions)}
+ *   textChanges?: {added: [{text, box: {x, y, w, h}}], removed: [...]} (boxes in the same frame as regions),
+ *   newerPage?, olderPage? (1-based source page numbers: legend line "Page 5 of <newer>" and bookmark names)}
  * meta = {older: {name}, newer: {name}, date?: Date | ISO string (default now)}
  */
 export async function buildCompareReport(pages, meta = {}) {
@@ -235,6 +247,10 @@ export async function buildCompareReport(pages, meta = {}) {
     if (annots.length) page.node.set(N('Annots'), doc.context.obj(annots));
 
     const notes = [];
+    const np = pageNo(p.newerPage), op = pageNo(p.olderPage);
+    if (np !== null || op !== null) {
+      notes.push([np !== null ? `Page ${np} of ${legendNames.newer}` : '', op !== null && op !== np ? `page ${op} of ${legendNames.older}` : ''].filter(Boolean).join(', ').replace(/^p/, 'P'));
+    }
     if (p.status === 'added') notes.push('Page only in the newer revision');
     else if (p.status === 'removed') notes.push('Page only in the older revision');
     const over = loose.length - MAX_TEXT_MARKS;
@@ -243,7 +259,7 @@ export async function buildCompareReport(pages, meta = {}) {
 
     const what = p.status === 'added' ? 'only in the newer revision' : p.status === 'removed' ? 'only in the older revision' : null;
     const count = annots.length + Math.max(0, over);
-    if (what || count) outline.push([`Page ${i + 1} – ${what ?? `${count} change${count === 1 ? '' : 's'}`}`, page.ref]);
+    if (what || count) outline.push([`${sourceLabel(p, i)} – ${what ?? `${count} change${count === 1 ? '' : 's'}`}`, page.ref]);
   }
   writeOutline(doc, outline);
   return doc.save();
