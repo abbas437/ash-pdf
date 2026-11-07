@@ -119,16 +119,16 @@ const pdf = await pdfjs.getDocument({
 ### `window.api`
 
 Provided by `electron/preload.js` in the app and by `renderer/shim.js` in a plain browser (tests).
-All methods return Promises except `onOpenFile`. A *file* object is `{ path, name, bytes: Uint8Array }`.
+All methods return Promises except `onOpenFile`. A *file* object is `{ path, name, bytes: Uint8Array, stamp? }`.
 
 | Member | Result | Notes |
 | --- | --- | --- |
 | `isElectron` | `true` / `false` | `false` when the browser shim is active. |
 | `version()` | `string` | App version. |
 | `openFiles({ filters?, multiple? })` | `file[]` (empty if cancelled) | `filters`: `[{ name, extensions: ['pdf'] }]`; default PDF only. |
-| `readFile(path)` | `Uint8Array` | Only paths already returned by `openFiles`, `saveFile`, launch or open-file events. |
-| `saveFile({ defaultPath?, filters?, bytes })` | `{ path }` or `null` if cancelled | Shows Save As, writes atomically (temp file + rename). Browser: downloads. |
-| `writeFile(path, bytes)` | `{ path }` | Save in place; same path rule as `readFile`. |
+| `readFile(path, { withStamp? })` | `Uint8Array`, or `{ bytes, stamp }` with `withStamp` | Only paths already returned by `openFiles`, `saveFile`, launch or open-file events. `stamp` (`{ mtimeNs, size }`, `null` in the browser) is what the file held; `openFiles` files, launch/open-file events and `saveFile` / `writeFile` results carry it too. |
+| `saveFile({ defaultPath?, filters?, bytes })` | `{ path, stamp }` or `null` if cancelled | Shows Save As, writes atomically (temp file + rename). Browser: downloads. |
+| `writeFile(path, bytes, { expect?, force? })` | `{ path, stamp }`, or `{ ok: false, changedOnDisk: true, path }` | Save in place; same path rule as `readFile`. With `expect` (the stamp the tab last read or wrote) a file changed on disk since is not written unless `force`; no `expect`: no check. |
 | `imageExportBegin({ baseName, pageCount, pages, format })` / `imageExportWrite(jobId, index, bytes)` / `imageExportEnd(jobId)` | `{ jobId, folder, count }` or `null` / `{ name }` / `boolean` | Multi-page image export (`src/core/imgexport.js`): begin rejects any other key, shows the folder picker in main and asks once before replacing existing files; files are `<base>-p001.png`, max 2000 per job, each a PNG/JPEG `Uint8Array` up to 50 MB; end (or cancel) closes the job. Browser: downloads. |
 | `getLaunchFiles()` | `file[]` | PDFs given on the command line / "Open with". Call once at start-up. |
 | `onOpenFile(cb)` | unsubscribe function | `cb(file)` for PDFs opened later (double-click while running): tabs in the last-focused window, or a new window when setting `open.target` is `'window'` (default `'tab'`). |

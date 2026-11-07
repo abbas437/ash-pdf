@@ -21,6 +21,7 @@ import { registerOfficeIpc } from './office.js'; // office conversions
 import { ImageExportJobs, planImageExport } from '../src/core/imgexport.js'; // multi-page image export rules
 import { cleanWindowState, isPathString, isPlainObject, pathKey } from './sessionState.js'; // last-session validation
 import { dialogDefaultPath } from './dialogPaths.js'; // where file dialogs start
+import { stampOf, cleanExpect, changedSince } from './fileStamp.js'; // what a tab's file held when it read or wrote it
 
 const APP_NAME = 'ASH PDF Studio';
 const APP_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..'); // app.asar root when packaged
@@ -117,16 +118,10 @@ const fileDialog = {
 const grantedPaths = new Set();
 const grant = (p) => grantedPaths.add(pathKey(p));
 const isGranted = (p) => typeof p === 'string' && p.length > 0 && p.length < 4096 && isAbsolute(p) && grantedPaths.has(pathKey(p));
-// What each file held when the app last read or wrote it (mtime + size): an in-place save over a file
-// that changed on disk since then is refused with { ok: false, changedOnDisk: true } unless forced.
-const fileStamps = new Map(); // pathKey -> 'mtimeNs:size'
-const stampOf = (info) => `${info.mtimeNs}:${info.size}`;
-const recordStamp = async (p) => { try { fileStamps.set(pathKey(p), stampOf(await stat(p, { bigint: true }))); } catch { fileStamps.delete(pathKey(p)); } };
-async function changedOnDisk(p) {
-  const was = fileStamps.get(pathKey(p));
-  if (!was) return false;
-  try { return stampOf(await stat(p, { bigint: true })) !== was; } catch { return false; } // gone: nothing to overwrite
-}
+// The stamp of what a read or write saw (fileStamp.js) goes back to the renderer, which keeps it on the tab
+// whose document it is; an in-place save sends it as `expect`, so a read made for another purpose (search,
+// Insert pages) cannot hide a change on disk from that tab.
+const stampNow = async (p) => { try { return stampOf(await stat(p, { bigint: true })); } catch { return null; } };
 
 // Reads through one FileHandle, so the checks and the read see the same file. O_NONBLOCK: opening a
 // FIFO must not park a threadpool thread. `check(fh, info)` (folder grants) runs after the open.
@@ -140,14 +135,14 @@ async function readGranted(p, check = null) {
     const buf = Buffer.alloc(Number(info.size));
     let off = 0;
     for (let n; off < buf.length && (n = (await fh.read(buf, off, buf.length - off, off)).bytesRead) > 0;) off += n;
-    fileStamps.set(pathKey(p), stampOf(info));
-    return new Uint8Array(buf.buffer, buf.byteOffset, off);
+    return { bytes: new Uint8Array(buf.buffer, buf.byteOffset, off), stamp: stampOf(info) };
   } finally {
     await fh.close();
   }
 }
 async function describeFile(p) {
-  return { path: p, name: basename(p), bytes: await readGranted(p) };
+  const { bytes, stamp } = await readGranted(p);
+  return { path: p, name: basename(p), bytes, stamp };
 }
 
 // Write to a temp file in the target folder, then rename over the target, so a failed
@@ -631,11 +626,17 @@ function registerIpc() {
     return { path: p, name: basename(p) };
   });
 
-  handle('file:read', async (p) => {
-    if (isGranted(p)) return readGranted(p);
-    const root = await grantedRoot(p);
-    if (!root) throw new Error('file:read: path was not opened in this session');
-    return readFolderPdf(p, root);
+  // opts.withStamp: { bytes, stamp } instead of the bytes (a tab loading its document keeps the stamp).
+  handle('file:read', async (p, opts) => {
+    const withStamp = isPlainObject(opts) && opts.withStamp === true;
+    let r;
+    if (isGranted(p)) r = await readGranted(p);
+    else {
+      const root = await grantedRoot(p);
+      if (!root) throw new Error('file:read: path was not opened in this session');
+      r = await readFolderPdf(p, root);
+    }
+    return withStamp ? r : r.bytes;
   });
 
   handle('dialog:save', async (opts) => {
@@ -651,8 +652,7 @@ function registerIpc() {
     if (canceled || !filePath) return null;
     await atomicWrite(filePath, bytes);
     grant(filePath);
-    await recordStamp(filePath);
-    return { path: filePath };
+    return { path: filePath, stamp: await stampNow(filePath) };
   });
 
   // Multi-page image export (src/core/imgexport.js): begin validates the request, then the user picks the
@@ -682,14 +682,16 @@ function registerIpc() {
   });
   handle('imgexport:end', (jobId) => imageJobs.close(senderKey(), jobId));
 
-  // opts.force: write even when the file changed on disk since the app last read or wrote it.
+  // opts.expect: the stamp of what the tab last read or wrote; a file on disk that differs from it is not
+  // written ({ ok: false, changedOnDisk: true }) unless opts.force. No expect: no check.
   handle('file:write', async (p, bytes, opts) => {
     if (!isGranted(p)) throw new Error('file:write: path was not opened or saved in this session');
     const data = toBytes(bytes);
-    if (!(isPlainObject(opts) && opts.force === true) && await changedOnDisk(p)) return { ok: false, changedOnDisk: true, path: p };
+    if (opts !== undefined && opts !== null && !isPlainObject(opts)) throw new TypeError('file:write options must be an object');
+    const expect = cleanExpect(opts?.expect);
+    if (opts?.force !== true && changedSince(expect, await stampNow(p))) return { ok: false, changedOnDisk: true, path: p };
     await atomicWrite(p, data);
-    await recordStamp(p);
-    return { path: p };
+    return { path: p, stamp: await stampNow(p) };
   });
 
   handle('app:launchFiles', async () => {

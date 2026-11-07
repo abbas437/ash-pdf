@@ -197,7 +197,7 @@ async function onResultClick(e) {
   let tab = (r.tabId && state.tabs.find((t) => t.id === r.tabId)) || (r.path && state.tabs.find((t) => t.path === r.path));
   try {
     if (tab) app.activate(tab.id);
-    else if (r.path) tab = await app.openBytes({ name: r.name, path: r.path, bytes: await api.readFile(r.path) });
+    else if (r.path) tab = await app.openBytes({ name: r.name, path: r.path, ...(await api.readFile(r.path, { withStamp: true })) });
   } catch (err) { showError('Could not open the file', err); return; }
   if (!tab) { toast('That document is no longer open'); return; }
   const scrollTop = els.list.scrollTop;

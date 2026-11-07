@@ -697,7 +697,7 @@ try {
     await win.click('#btn-save');
     await win.waitForSelector('.dialog.changed-dialog', { timeout: 10000 });
     const text = await win.textContent('.dialog.changed-dialog');
-    expect('prompt wording', text, /changed by someone else since you opened it/.test(text) && /Overwrite/.test(text) && /Save as a copy/.test(text));
+    expect('prompt wording', text, /changed by someone else since you opened or last saved it/.test(text) && /Overwrite/.test(text) && /Save as a copy/.test(text));
     await win.click('.dialog.changed-dialog .dialog-buttons button:text-is("Cancel")');
     await win.waitForSelector('.dialog.changed-dialog', { state: 'detached', timeout: 5000 });
     expect('Cancel leaves the other version on disk', 'changed', (await readFile(dropFile)).equals(otherBytes));
@@ -711,6 +711,23 @@ try {
     await win.click('#btn-save');
     await saved();
     expect('after the forced write the next save does not prompt', String(await changedDialog()), (await changedDialog()) === 0);
+
+    step = 'A read that is not the tab\'s own (Advanced search, Insert pages) does not hide a change on disk';
+    const third = await PDFDocument.create();
+    third.addPage([300, 300]);
+    const thirdBytes = Buffer.from(await third.save());
+    await writeFile(dropFile, thirdBytes);
+    const later2 = new Date(Date.now() + 120_000);
+    await utimes(dropFile, later2, later2);
+    const reread = await win.evaluate((p) => window.api.readFile(p).then((b) => b.length), dropFile);
+    expect('the other read saw the new version', `${reread} bytes`, reread === thirdBytes.length);
+    await annotate(200);
+    await win.click('#btn-save');
+    await win.waitForSelector('.dialog.changed-dialog', { timeout: 10000 });
+    await win.click('.dialog.changed-dialog .dialog-buttons button:text-is("Cancel")');
+    await win.waitForSelector('.dialog.changed-dialog', { state: 'detached', timeout: 5000 });
+    expect('Cancel leaves the version read elsewhere on disk', 'changed', (await readFile(dropFile)).equals(thirdBytes));
+    await win.evaluate(() => { const a = window.ashStudio; a.markDirty(a.state.tabs.find((x) => x.id === a.state.activeId), false); }); // closes without the unsaved-changes prompt
   }
 
   step = 'no renderer errors';

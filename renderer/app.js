@@ -141,11 +141,15 @@ document.addEventListener('mousedown', (e) => { if (!menubar.contains(e.target))
 // ---------------------------------------------------------------- documents
 const hasDoc = () => !!activeTab();
 
-/** Open {name, path?, bytes} in a new tab. Returns the tab or null. */
-export async function openBytes({ name, path = null, bytes }) {
+/** Open {name, path?, bytes, stamp?} in a new tab. Returns the tab or null. */
+export async function openBytes({ name, path = null, bytes, stamp = null }) {
   const tab = Object.assign(createTab({ name, path, bytes }), prefsForNewTab());
+  // What the file at tab.path held when this tab read it (main, electron/fileStamp.js); an in-place save
+  // sends it as writeFile's expect, so a change on disk since this tab's own open or save is caught.
+  tab.fileStamp = stamp;
   // Background check of the file as opened; saveTab asks before overwriting a signed original at this path.
   tab.signedPath = null;
+  tab.signatureDetected = false; // a signature was found (signedPath is also set when the check failed)
   tab.fileBytes = bytes; // what the file at tab.path holds: the prefix of an incremental update
   tab.certified = false; // certified (DocMDP) against annotation changes: no incremental update
   // The pdf-lib checks run in the core worker, skipped only when a raw scan proves there can be no
@@ -158,6 +162,7 @@ export async function openBytes({ name, path = null, bytes }) {
     if (!doc || !(await import('../src/core/signatures.js')).mayBeSigned(bytes)) return;
     if (!(await coreWorker.detectSignatures(bytes)).signed) return;
     tab.signedPath = path;
+    tab.signatureDetected = true;
     const p = await coreWorker.docMdpPermission(bytes);
     tab.certified = p != null && p < 3;
   }).catch((err) => {
@@ -181,8 +186,8 @@ export async function openBytes({ name, path = null, bytes }) {
 
 async function openFileObject(file) {
   try {
-    const bytes = file.bytes instanceof Uint8Array ? file.bytes : await api.readFile(file.path);
-    return await openBytes({ name: file.name ?? String(file.path).split(/[\\/]/).pop(), path: file.path ?? null, bytes });
+    const { bytes, stamp } = file.bytes instanceof Uint8Array ? file : await api.readFile(file.path, { withStamp: true });
+    return await openBytes({ name: file.name ?? String(file.path).split(/[\\/]/).pop(), path: file.path ?? null, bytes, stamp: stamp ?? null });
   } catch (err) {
     showError('Could not open the file', err);
     return null;
@@ -232,12 +237,13 @@ export async function saveTab(tab = activeTab(), asNew = false) {
   // A full save rewrites the file, which breaks a digital signature on the original: ask first.
   // Annotation-only changes on a signed original are appended as an incremental update instead
   // (the signed bytes stay a prefix), so that ask waits until the bytes to write are known.
-  let signedUpdate = false;
+  let signedUpdate = false, identical = false;
+  let overwriteSigned = false; // the signed original may be rewritten: its warning goes once that write succeeds
   const askSigned = async () => {
     const choice = await confirmSignedOverwrite(tab.name, { certified: tab.certified });
     if (choice === 'copy') return saveTab(tab, true);
     if (choice !== 'overwrite') return false;
-    tab.signedPath = null;
+    overwriteSigned = true;
     return null;
   };
   if (tab.path) {
@@ -266,18 +272,19 @@ export async function saveTab(tab = activeTab(), asNew = false) {
         if (tab.rev === rev) markDirty(tab, false);
         renderTabs();
         return true;
-      } else bytes = update;
+      } else { identical = update === tab.fileBytes; bytes = update; }
     }
     let res;
     if (!asNew && tab.path && !String(tab.path).startsWith('dropped:')) {
-      try { res = await api.writeFile(tab.path, bytes); } catch (err) {
+      const expect = tab.fileStamp ?? undefined; // what this tab last read or wrote
+      try { res = await api.writeFile(tab.path, bytes, { expect }); } catch (err) {
         // A path from a read-only folder grant (Advanced search) is not writable in place: fall back to Save As.
         if (!/was not opened or saved in this session/.test(err?.message ?? '')) throw err;
         res = await api.saveFile({ defaultPath: tab.path, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
       }
       if (res?.changedOnDisk) { // someone else wrote the file since it was opened or saved here (main)
         const choice = await confirmChangedOnDisk(tab.name);
-        if (choice === 'overwrite') res = await api.writeFile(tab.path, bytes, { force: true });
+        if (choice === 'overwrite') res = await api.writeFile(tab.path, bytes, { expect, force: true });
         else if (choice === 'copy') res = await api.saveFile({ defaultPath: tab.name, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
         else return false;
       }
@@ -289,7 +296,9 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     for (const hook of state.hooks.beforeSave) hook.saved?.(tab, tab.rev === rev);
     if (signedUpdate && tab.bytes === full) tab.bytes = bytes; // the next update appends to the file as written
     tab.fileBytes = bytes;
+    tab.fileStamp = res.stamp ?? null;
     if (signedUpdate) tab.signedPath = tab.path; // a copy written as an update is signed too
+    else if (overwriteSigned) { tab.signedPath = null; tab.signatureDetected = false; }
     if (tab.rev === rev) markDirty(tab, false);
     // tab.requiresFullSave (set by Apply redactions, ui/redact.js): any incremental save path must
     // write in full while it is set. A full save wrote the whole file, so the redaction is final: drop
@@ -297,7 +306,9 @@ export async function saveTab(tab = activeTab(), asNew = false) {
     // landed during the save does not bring the redacted content back, so this does not wait on tab.rev.
     if (!signedUpdate && tab.requiresFullSave) { clearBytesHistory(tab); tab.requiresFullSave = false; bus.emit('history:changed', { tab }); }
     renderTabs();
-    toast(signedUpdate ? 'Saved as an update; the signature is kept' : `Saved ${tab.name}`);
+    // "kept" only for a signature actually found (signedPath is also set when the check failed).
+    toast(signedUpdate && identical ? 'Saved an identical copy'
+      : signedUpdate && tab.signatureDetected ? 'Saved as an update; the signature is kept' : `Saved ${tab.name}`);
     bus.emit('file:saved', { tab });
     return true;
   } catch (err) {

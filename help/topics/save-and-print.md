@@ -15,7 +15,9 @@ keywords: save, save as, changed on disk, overwrite, print, signed, signature, u
 
 To keep the original, use **Save as…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>) and choose a new name. [Show me](#showme:btn:saveas) A document that has no file yet always asks for a name. If the original sits in a folder the app may not write to, Save falls back to Save As.
 
-If the file was changed by someone else since you opened or last saved it (another program, or a colleague on a shared folder), Save asks first: **Overwrite** replaces their version with yours, **Save as a copy…** keeps both, and **Cancel** writes nothing.
+If the file was changed by someone else since you opened or last saved it in this tab (another program, a colleague on a shared folder, or the same file saved from another tab or window), Save asks first: **Overwrite** replaces their version with yours, **Save as a copy…** keeps both, and **Cancel** writes nothing. Reading the file for Advanced search or to insert its pages does not count as opening it, so the question still comes.
+
+The check compares the file's modification time and size, so a file on a FAT-formatted USB stick may show this question after a daylight-saving time change even though nobody changed it.
 
 ## Signed documents
 

@@ -136,7 +136,7 @@ export function confirmSignedOverwrite(name, { certified = false } = {}) {
 export function confirmChangedOnDisk(name) {
   return showDialog({
     title: 'File changed on disk',
-    body: `This file was changed by someone else since you opened it. Overwrite "${name}" with your version, or save your version as a copy?`,
+    body: `This file was changed by someone else since you opened or last saved it. Overwrite "${name}" with your version, or save your version as a copy?`,
     buttons: [
       { label: 'Cancel', value: 'cancel', cancel: true },
       { label: 'Overwrite', value: 'overwrite', danger: true },

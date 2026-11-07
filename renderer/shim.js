@@ -119,9 +119,10 @@ if (!window.api) {
       }
     },
     openFiles: (opts) => pickFiles(opts),
-    async readFile(path) {
+    async readFile(path, opts) {
       if (!files.has(path)) throw new Error('readFile: path was not opened in this session');
-      return files.get(path).slice();
+      const bytes = files.get(path).slice();
+      return opts?.withStamp === true ? { bytes, stamp: null } : bytes; // no file on disk: no stamp
     },
     async saveFile({ defaultPath, bytes } = {}) {
       if (!(bytes instanceof Uint8Array)) throw new TypeError('saveFile: bytes must be a Uint8Array');
@@ -132,7 +133,7 @@ if (!window.api) {
       writable.add(path);
       return { path };
     },
-    async writeFile(path, bytes) {
+    async writeFile(path, bytes, _opts) { // opts { expect, force }: nothing else writes these files, so no check
       if (!writable.has(path)) throw new Error('file:write: path was not opened or saved in this session');
       if (!(bytes instanceof Uint8Array)) throw new TypeError('writeFile: bytes must be a Uint8Array');
       files.set(path, bytes.slice());
