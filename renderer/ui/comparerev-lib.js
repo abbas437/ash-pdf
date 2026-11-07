@@ -88,13 +88,13 @@ export const regionKind = KIND;
 /**
  * Rows [newer page, older page, kind, item, text] of every changed page: one per area and one per text
  * phrase. Page cells are the source page numbers ('' when the page is not in that revision); without them
- * (a reopened compare PDF) both are the output page number.
+ * (a compare PDF not made by this app) the newer cell is the output page number and the older one is blank.
  */
 export function diffRows(pages) {
   const rows = [];
   for (const p of pages.filter(hasChanges)) {
     const known = p.newerPage != null || p.olderPage != null;
-    const pg = known ? [num(p.newerPage), num(p.olderPage)] : [p.index + 1, p.index + 1];
+    const pg = known ? [num(p.newerPage), num(p.olderPage)] : [p.index + 1, ''];
     if (p.status === 'error') rows.push([...pg, 'page', pageSummary(p), '']);
     else if (p.status !== 'compared') rows.push([...pg, 'page', p.status === 'added' ? 'Page only in the newer revision' : 'Page only in the older revision', '']);
     p.regions.forEach((r, k) => rows.push([...pg, 'area', `Change ${k + 1}: ${KIND(r)}`, '']));

@@ -20,7 +20,7 @@ import { splitView } from './splitview.js';
 import { onlyPage, regionsToPoints } from './compare-lib.js';
 import { compareWorker } from './compare-client.js';
 import { pageWords, diffWords } from './textdiff-lib.js';
-import { DPI_PRESETS, DEFAULT_OPTIONS, guessOrder, renderScale, pagePairs, hasChanges, pageSummary, regionKind, diffCsv, diffText } from './comparerev-lib.js';
+import { DPI_PRESETS, DEFAULT_OPTIONS, guessOrder, renderScale, pagePairs, hasChanges, pageLabel, pageSummary, regionKind, diffCsv, diffText } from './comparerev-lib.js';
 import { parseRanges } from '../../src/core/pdfOps.js';
 
 const OPTIONS_KEY = 'compare.options';
@@ -161,12 +161,22 @@ export async function compareRevisions(older, newer, opts = {}) {
         page = { ...size, status: 'error', error: reason, olderPage: res.olderPage, newerPage: res.newerPage };
       }
       results.push(res);
-      await report.addPage(page); // embedded now: the encoded image is not kept here
+      try {
+        if (window.__compareFailEmbed === res.index + 1) throw new Error('Test failure: page embed failed'); // e2e hook
+        await report.addPage(page); // embedded now: the encoded image is not kept here
+      } catch (err) {
+        // The report is left unchanged by a failed addPage: add this page again as a blank error page.
+        const reason = errorReason(err);
+        console.warn(`[compare] page ${res.newerPage ?? res.olderPage} not added to the report: ${err?.message ?? err}`);
+        Object.assign(res, { status: 'error', error: reason, regions: [], text: { added: [], removed: [] }, stats: null, shift: { dx: 0, dy: 0 }, scaled: false, capped: false });
+        await report.addPage({ width: page.width, height: page.height, status: 'error', error: reason, olderPage: res.olderPage, newerPage: res.newerPage });
+      }
     }
     if (prog.isCancelled() || !results.length) return null;
     const failed = results.filter((r) => r.status === 'error');
     if (failed.length === results.length) {
       const nums = failed.map((r) => r.newerPage ?? r.olderPage);
+      prog.close(); // not behind the error dialog
       await showError('Could not compare the revisions', new Error(`No page could be compared (page${nums.length === 1 ? '' : 's'} ${nums.join(', ')}). ${failed[0].error}`));
       return null;
     }
@@ -339,10 +349,31 @@ async function exportCsv(tab, pages) {
   } catch (err) { showError('Export differences', err); }
 }
 
+/**
+ * Source page numbers of a reopened compare PDF, read from its pages' /ASHCompare keys (compareReport.js).
+ * Cached on the tab per bytes; the panel is redrawn when they arrive. A page without them keeps no source numbers.
+ */
+function loadSources(tab) {
+  if (tab.cmpSources?.bytes === tab.bytes) return tab.cmpSources.list;
+  const mine = { bytes: tab.bytes, list: null };
+  tab.cmpSources = mine;
+  import('../../src/core/index.js').then(({ readCompareSources }) => readCompareSources(tab.bytes))
+    .then((list) => { mine.list = list; }, () => { mine.list = []; })
+    .then(() => { if (tab.cmpSources === mine && mine.list.some(Boolean)) refreshSidebarTab(TAB); });
+  return null;
+}
+
 function render(container, tab) {
   if (!tab) { container.replaceChildren(h('p.sb-empty', {}, 'No document open')); return; }
   const live = tab.compare?.pages;
   const saved = !live && fromAnnotations(tab);
+  if (saved) {
+    const src = loadSources(tab);
+    for (const p of saved) { // unknown (no key): both stay unset, the Older column stays blank
+      const s = src?.[p.index];
+      if (s) Object.assign(p, { newerPage: s.newerPage, olderPage: s.olderPage });
+    }
+  }
   if (!live && !saved) { container.replaceChildren(h('p.sb-empty', {}, 'Not a compare document. Use Tools › Compare revisions… to make one.')); return; }
   const list = h('div.cmp-list', { role: 'list', 'aria-label': 'Differences' });
   const item = (label, onclick, cls = '') => h(`button.cmp-item${cls}`, { type: 'button', role: 'listitem', onclick }, label);
@@ -362,7 +393,7 @@ function render(container, tab) {
   } else {
     list.append(h('p.cmp-note', {}, 'Saved compare document: the list is read from its compare marks. Run the compare again for the text list and Side by side.'));
     for (const p of saved) {
-      list.append(h('div.cmp-page', {}, item(`Page ${p.index + 1} — ${p.notes.length} mark${p.notes.length === 1 ? '' : 's'}`, () => flash(tab, p.index, null), '.cmp-page-head')));
+      list.append(h('div.cmp-page', {}, item(`${pageLabel(p)} — ${p.notes.length} mark${p.notes.length === 1 ? '' : 's'}`, () => flash(tab, p.index, null), '.cmp-page-head')));
       for (const n of p.notes) list.append(item(n.text || 'Change', () => { viewer.scrollToPage(tab, p.index); app.annotations?.select(tab, [n.id]); }));
     }
   }

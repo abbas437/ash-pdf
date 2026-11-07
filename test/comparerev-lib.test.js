@@ -63,6 +63,7 @@ test('a page range: labels, Copy list and CSV use the source page numbers, not t
   ];
   assert.deepEqual(ranged.map(pageLabel), ['Page 5', 'Page 6 (older 4)', 'Older page 7']);
   assert.equal(pageLabel({ index: 2 }), 'Page 3', 'no source pages (reopened compare PDF): the output page');
+  assert.deepEqual(diffRows([{ index: 2, status: 'removed', regions: [], text: { added: [], removed: [] } }]).map((r) => r.slice(0, 2)), [[3, '']], 'no source pages: the Older column stays blank, not invented');
   assert.equal(pageSummary(ranged[0]), 'Page 5 — 1 area, text: +1 / −0');
   assert.match(diffText(ranged), /^Page 5 — .*\n[\s\S]*\nPage 6 \(older 4\) — 1 area\n[\s\S]*\nOlder page 7 — only in the older revision$/);
   const csv = diffCsv(ranged).split('\r\n');

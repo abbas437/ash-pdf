@@ -37,7 +37,12 @@ function post(msg, transfer, ms) {
 }
 function start() {
   starting ??= (async () => {
-    worker = new Worker(WORKER_URL, { type: 'module', name: 'compare' });
+    try {
+      worker = new Worker(WORKER_URL, { type: 'module', name: 'compare' });
+    } catch (err) {
+      lose(err); // the constructor threw (blocked, unsupported): counts as lost, the main thread takes over
+      throw err;
+    }
     worker.onmessage = ({ data }) => {
       const p = pending.get(data.id);
       if (!p) return;

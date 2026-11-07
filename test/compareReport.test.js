@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { PDFDocument, PDFName, PDFArray, PDFDict, PDFRawStream, PDFHexString, PDFString, PDFNumber, decodePDFRawStream } from 'pdf-lib';
-import { buildCompareReport, changeKind, LEGEND_COLORS, MARK_COLORS, MAX_TEXT_MARKS } from '../src/core/compareReport.js';
+import { buildCompareReport, createCompareReport, readCompareSources, changeKind, LEGEND_COLORS, MARK_COLORS, MAX_TEXT_MARKS } from '../src/core/compareReport.js';
 import { readAnnotations } from '../src/core/annots.js';
 import { COLORS } from '../renderer/ui/compare-lib.js';
 import { makeImage, pageContent, renderPage, pdfjsDoc, isColor } from './helpers.js';
@@ -217,4 +217,29 @@ test("an 'error' page needs no image: blank page of the given size, legend and n
   assert.deepEqual(outline.map((o) => o.title), ['Page 2 – not compared']);
   await assert.rejects(buildCompareReport([page({ status: 'bogus' })], META), RangeError);
   await assert.rejects(buildCompareReport([{ width: 10, height: 10, status: 'compared' }], META), TypeError);
+});
+
+test('addPage with a corrupt image throws and leaves the document unchanged; the next addPage works', async () => {
+  const report = await createCompareReport(META);
+  await report.addPage(page({ newerPage: 1, olderPage: 1 }));
+  for (const type of ['png', 'jpeg']) {
+    await assert.rejects(report.addPage(page({ image: { bytes: new Uint8Array([1, 2, 3, 4]), type }, newerPage: 2, olderPage: 2 })));
+    assert.equal(report.pageCount, 1, `${type}: no stray page`);
+  }
+  await report.addPage(page({ newerPage: 3, olderPage: 3, regions: [{ x: 10, y: 300, w: 10, h: 10, added: 3, removed: 0 }] }));
+  assert.equal(report.pageCount, 2);
+  const bytes = await report.finish();
+  assert.equal((await PDFDocument.load(bytes)).getPageCount(), 2);
+  const { list } = await annotsOf(bytes, 1);
+  assert.equal(list.length, 1, 'the annotation sits on the page it was made for');
+  assert.deepEqual(await readCompareSources(bytes), [{ newerPage: 1, olderPage: 1 }, { newerPage: 3, olderPage: 3 }]);
+});
+
+test('source pages are kept in a private /ASHCompare key and read back; unknown ones stay null', async () => {
+  const bytes = await buildCompareReport([page({ newerPage: 5, olderPage: 4 }), page({ status: 'added', newerPage: 6, olderPage: null }),
+    page({ status: 'removed', olderPage: 7, newerPage: null }), { width: 200, height: 300, status: 'error', error: 'x', newerPage: 8, olderPage: 8 }, page()], META);
+  assert.deepEqual(await readCompareSources(bytes), [{ newerPage: 5, olderPage: 4 }, { newerPage: 6, olderPage: null }, { newerPage: null, olderPage: 7 }, { newerPage: 8, olderPage: 8 }, null]);
+  const doc = await PDFDocument.load(bytes);
+  assert.equal(doc.getPage(0).node.lookup(N('ASHCompare')).get(N('Older')).asNumber(), 4);
+  assert.deepEqual(await readCompareSources((await PDFDocument.create().then(async (d) => { d.addPage(); return d.save(); }))), [null]);
 });

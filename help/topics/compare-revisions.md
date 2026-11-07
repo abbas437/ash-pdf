@@ -22,7 +22,7 @@ keywords: compare, revision, rev.00, rev.01, differences, changes, overlay, diff
    - **List text changes**: also lists the words that were added and removed.
 5. Click **Compare**. A progress box shows the page being compared; click **Cancel** to stop. Nothing is opened when you cancel.
 
-The app stays usable while a compare runs, even on a large sheet at 200 dpi: the pages are compared in the background, so the window keeps responding. **Cancel** stops the compare at once, also in the middle of a page.
+The app stays usable while a compare runs, even on a large sheet at 200 dpi: the pages are compared in the background, so the window keeps responding. **Cancel** stops the compare at once, also in the middle of a page. If the background compare is not available, Cancel takes effect after the current page.
 
 The comparison is of the **ink** on the page: a line or word that only changed colour is not counted as a change.
 

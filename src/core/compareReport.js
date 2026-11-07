@@ -9,14 +9,15 @@
 //      per page; the rest are counted in the legend).
 // Plus /Title "Compare <older> to <newer>", /Producer ASH PDF Studio, and a flat outline with one
 // bookmark per page that has changes, named by its source page ("Page 5 – 2 changes", "Page 5 (older 4)
-// – …", "Older page 4 – …") when the page carries newerPage / olderPage, else by its output page.
+// – …", "Older page 4 – …") when the page carries newerPage / olderPage, else by its output page. Each page also carries the numbers in a private key, /ASHCompare << /Newer 5 /Older 4 >>
+// in its page dictionary, which readCompareSources() reads back for a reopened file.
 //
 // Fonts: like the rest of the core, no font file is embedded. The legend uses Helvetica (WinAnsi);
 // file names go through sanitizeText, so a character it cannot encode (Arabic, CJK...) is drawn as
 // "?". The arrow is the Symbol font's "→". /Title and /Contents are Unicode strings and keep the
 // names as they are.
-import { PDFName, PDFHexString, PDFString, StandardFonts, rgb } from 'pdf-lib';
-import { createPdf } from './internal.js';
+import { PDFName, PDFHexString, PDFString, PDFDict, PDFNumber, StandardFonts, rgb } from 'pdf-lib';
+import { createPdf, loadPdf } from './internal.js';
 import { sanitizeText } from './annotate.js';
 
 /** Swatch colours of the legend: the same RGB as COLORS in renderer/ui/compare-lib.js. */
@@ -174,6 +175,33 @@ function sourceLabel(p, i) {
   return o === null || o === n ? `Page ${n}` : `Page ${n} (older ${o})`;
 }
 
+const SOURCES_KEY = 'ASHCompare';
+
+/** The source page numbers in a private key of the page dictionary: /ASHCompare << /Newer 5 /Older 4 >>. */
+function writeSources(page, p) {
+  const n = pageNo(p.newerPage), o = pageNo(p.olderPage);
+  if (n === null && o === null) return;
+  const d = {};
+  if (n !== null) d.Newer = n;
+  if (o !== null) d.Older = o;
+  page.node.set(N(SOURCES_KEY), page.doc.context.obj(d));
+}
+
+/**
+ * The source page numbers of a compare PDF written by createCompareReport, read back from the page dictionaries:
+ * one {newerPage, olderPage} per page (null where the revision has no such page), or null for a page without the key.
+ */
+export async function readCompareSources(bytes) {
+  const doc = await loadPdf(bytes, { allowEncrypted: true });
+  const num = (d, k) => { const v = d.lookupMaybe(N(k), PDFNumber)?.asNumber(); return pageNo(v); };
+  return doc.getPages().map((pg) => {
+    const d = pg.node.lookupMaybe(N(SOURCES_KEY), PDFDict);
+    if (!d) return null;
+    const newerPage = num(d, 'Newer'), olderPage = num(d, 'Older');
+    return newerPage === null && olderPage === null ? null : { newerPage, olderPage };
+  });
+}
+
 /** Flat /Outlines: one item per [title, page ref], each going to the whole page. */
 function writeOutline(doc, items) {
   if (!items.length) return;
@@ -226,8 +254,16 @@ export async function createCompareReport(meta = {}) {
     if (done) throw new Error('createCompareReport: addPage after finish');
     checkPage(p, i);
     const pw = p.width, ph = p.height;
+    // Embed first: a failed embed (corrupt image) throws before the document changes, so no stray page is left and
+    // the later pages keep their output index.
+    let img = null;
+    if (p.status !== 'error') {
+      img = p.image.type === 'png' ? await doc.embedPng(p.image.bytes) : await doc.embedJpg(p.image.bytes);
+      await img.embed(); // now, not at save: pdf-lib then drops its decoded copy of the image
+    }
     const page = doc.addPage([pw, ph]);
     const at = i++;
+    writeSources(page, p);
     if (p.status === 'error') {
       // A page that could not be compared: blank, with the legend and the reason only.
       const reason = clip(oneLine(sanitizeText(p.error)) || 'unknown error', ERROR_LEN);
@@ -235,8 +271,6 @@ export async function createCompareReport(meta = {}) {
       outline.push([`${sourceLabel(p, at)} – not compared`, page.ref]);
       return;
     }
-    const img = p.image.type === 'png' ? await doc.embedPng(p.image.bytes) : await doc.embedJpg(p.image.bytes);
-    await img.embed(); // now, not at save: pdf-lib then drops its decoded copy of the image
     page.drawImage(img, { x: 0, y: 0, width: pw, height: ph });
 
     const regions = (p.regions ?? []).filter(isBox).map((r) => ({ ...boxOf(r), added: +r.added || 0, removed: +r.removed || 0 }));

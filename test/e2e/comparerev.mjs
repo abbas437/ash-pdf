@@ -222,6 +222,43 @@ try {
   check(/Page 2 could not be compared: /.test(failed.note) && failed.marks.includes('Page 2 – not compared'), `failed report: ${JSON.stringify(failed)}`);
   check(/Page 2 – not compared \(/.test(failed.text) && /,page,Page 2 – not compared \(/.test(failed.csv), `failed list: ${failed.text}`);
   await page.waitForFunction(() => [...document.querySelectorAll('.cmp-page-head')].some((e) => /^Page 2 – not compared \(.+\)$/.test(e.textContent)), null, { timeout: 5000 });
+  step = 'a failed embed (window.__compareFailEmbed = 2): the run completes, page 2 is "not compared", page 3 stays at output page 3';
+  await page.evaluate(() => { window.__compareFailEmbed = 2; });
+  await page.evaluate(() => {
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    return window.ashStudio.compareRevisions.compareRevisions(a, b, {});
+  });
+  await page.evaluate(() => { window.__compareFailEmbed = undefined; });
+  const embed = await page.evaluate(async () => {
+    const t = window.ashStudio.state.tabs.at(-1);
+    const outline = await t.pdfDoc.getOutline();
+    const txt = async (i) => (await t.pages[i].getTextContent()).items.map((x) => x.str).join(' ');
+    return { n: t.numPages, active: window.ashStudio.state.activeId === t.id, status: t.compare.pages.map((p) => p.status), index: t.compare.pages.map((p) => p.index),
+      marks: (outline ?? []).map((o) => o.title), p2: await txt(1), p3: await txt(2), dlg: !!document.querySelector('.dialog.error') };
+  });
+  check(embed.n === 4 && embed.active && !embed.dlg && embed.status.join() === 'compared,error,compared,added' && embed.index.join() === '0,1,2,3', `embed failure run: ${JSON.stringify(embed)}`);
+  check(/Page 2 could not be compared: .*embed/.test(embed.p2) && /Page 3 of PS-001 Rev\.01\.pdf/.test(embed.p3) && embed.marks.includes('Page 2 – not compared'), `embed failure report: ${JSON.stringify(embed)}`);
+  step = 'a reopened range compare PDF (pages 2-3): the panel and CSV use the source page numbers, Older blank where unknown';
+  const rangedBytes = await page.evaluate(async () => {
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    const { parseRanges } = await import('/src/core/pdfOps.js');
+    return [...(await window.ashStudio.compareRevisions.compareRevisions(a, b, { indices: parseRanges('2-3', 4) })).bytes];
+  });
+  await openFile('Compare range.pdf', Buffer.from(rangedBytes));
+  await page.waitForFunction(() => window.ashStudio.state.tabs.find((t) => t.name === 'Compare range.pdf')?.id === window.ashStudio.state.activeId);
+  await page.waitForFunction(() => [...document.querySelectorAll('.cmp-page-head')].some((e) => e.textContent.startsWith('Page 2 — ')), null, { timeout: 5000 })
+    .catch(async () => { throw new Error(`reopened range heads: ${JSON.stringify(await page.$$eval('.cmp-page-head', (els) => els.map((e) => e.textContent)))}`); });
+  const dlRange = page.waitForEvent('download');
+  await page.click('.cmp-csv');
+  const rangeChunks = [];
+  for await (const c of await (await dlRange).createReadStream()) rangeChunks.push(c);
+  const rangeCsv = Buffer.concat(rangeChunks).toString('utf8');
+  check(rangeCsv.includes("\r\n2,2,text added,'+ DN150,DN150\r\n") && !/\r\n1,/.test(rangeCsv), `reopened range csv: ${JSON.stringify(rangeCsv)}`);
+  const unknown = await page.evaluate(async () => {
+    const { diffRows } = await import('./ui/comparerev-lib.js');
+    return diffRows([{ index: 0, status: 'removed', regions: [], text: { added: [], removed: [] } }]);
+  });
+  check(unknown[0][0] === 1 && unknown[0][1] === '', `unknown sources: ${JSON.stringify(unknown)}`);
   step = 'Cancel midway on a larger set leaves no new tab';
   const before = await page.evaluate(() => window.ashStudio.state.tabs.length);
   await page.evaluate(() => {
@@ -273,14 +310,44 @@ try {
     const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
     const pick = (t) => JSON.stringify(t.compare.pages.map((p) => ({ status: p.status, regions: p.regions, stats: p.stats, shift: p.shift, text: p.text })));
     const w = pick(await window.ashStudio.compareRevisions.compareRevisions(a, b, {}));
-    const wOn = compareWorker.ranOn;
+    const wOn = compareWorker.ranOn, heldAfter = compareWorker.inWorker;
     compareWorker.forceMainThread = true;
     try {
-      return { w, wOn, m: pick(await window.ashStudio.compareRevisions.compareRevisions(a, b, {})), mOn: compareWorker.ranOn };
+      return { w, wOn, heldAfter, m: pick(await window.ashStudio.compareRevisions.compareRevisions(a, b, {})), mOn: compareWorker.ranOn };
     } finally { compareWorker.forceMainThread = false; }
   });
   check(equiv.wOn === 'worker' && equiv.mOn === 'main', `paths: ${equiv.wOn} / ${equiv.mOn}`);
+  check(equiv.heldAfter === false, 'the worker is terminated after a run: compareWorker still holds one');
   check(equiv.w === equiv.m && JSON.parse(equiv.w)[1].regions.length > 0, `worker ${equiv.w}\nmain   ${equiv.m}`);
+  step = 'every page failing: one error dialog, no progress box, no tab';
+  const allFailed = await page.evaluate(async () => {
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    window.__compareFailPage = 2;
+    const nTabs = window.ashStudio.state.tabs.length;
+    const pr = window.ashStudio.compareRevisions.compareRevisions(a, b, { indices: [1] });
+    await new Promise((r) => setTimeout(r, 1500));
+    const out = { dialogs: [...document.querySelectorAll('.dialog')].map((d) => d.className + ': ' + d.textContent.slice(0, 120)), progress: !!document.querySelector('.compare-progress') };
+    document.querySelector('.dialog.error .dialog-buttons button')?.click();
+    out.ret = await pr; out.tabsAdded = window.ashStudio.state.tabs.length - nTabs;
+    window.__compareFailPage = undefined;
+    return out;
+  });
+  check(allFailed.dialogs.length === 1 && /error/.test(allFailed.dialogs[0]) && /No page could be compared/.test(allFailed.dialogs[0]) && !allFailed.progress && allFailed.ret === null && allFailed.tabsAdded === 0, `all failed: ${JSON.stringify(allFailed)}`);
+  step = 'a worker lost after a compare was posted: the page is drawn again and the result equals a worker run';
+  const lost = await page.evaluate(async () => {
+    const { compareWorker } = await import('./ui/compare-client.js');
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    const pick = (t) => JSON.stringify(t.compare.pages.map((p) => ({ status: p.status, regions: p.regions, stats: p.stats, text: p.text })));
+    const ref = pick(await window.ashStudio.compareRevisions.compareRevisions(a, b, { dpi: 50 }));
+    const Orig = window.Worker, floor = compareWorker.timeoutFloorMs;
+    window.Worker = class extends Orig { postMessage(m, t) { super.postMessage(m, t); if (m?.method === 'compare') super.terminate(); } }; // test hook: the worker dies holding the pixels
+    compareWorker.timeoutFloorMs = 1000;
+    try {
+      const run = await window.ashStudio.compareRevisions.compareRevisions(a, b, { dpi: 50 });
+      return { same: pick(run) === ref, ranOn: compareWorker.ranOn, held: compareWorker.inWorker, statuses: run.compare.pages.map((p) => p.status) };
+    } finally { window.Worker = Orig; compareWorker.timeoutFloorMs = floor; }
+  });
+  check(lost.same && lost.ranOn === 'main' && lost.held === false && lost.statuses.join() === 'compared,compared,compared,added', `lost worker: ${JSON.stringify(lost)}`);
   check(problems.length === 0, problems.join('\n'));
   console.log('COMPAREREV OK');
 } catch (err) {
