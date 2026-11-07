@@ -9,6 +9,7 @@ import {
   coreError,
   PRODUCER,
 } from './internal.js';
+import { carryOutline, retargetOutline, carryFields, dropFieldsOf, copiedPageMap } from './pagecarry.js';
 
 /** Portrait [width, height] in points. */
 export const PAGE_SIZES = Object.freeze({
@@ -106,16 +107,35 @@ export async function mergePdfs(list) {
   const out = await createPdf();
   for (const bytes of list) {
     const src = await loadPdf(bytes);
-    const pages = await out.copyPages(src, src.getPageIndices());
+    const idx = src.getPageIndices();
+    const pages = await out.copyPages(src, idx);
     pages.forEach((p) => out.addPage(p));
+    carryCopied(out, src, idx, pages);
   }
   return out.save();
+}
+
+/** After `copied` (dest pages) were copied from src `indices` and placed: carry their fields and bookmarks. */
+function carryCopied(dest, src, indices, copied, { outline = true, after } = {}) {
+  carryFields(dest, src, copied);
+  if (outline) carryOutline(dest, src, copiedPageMap(src, indices, copied), after);
+}
+
+/** Remove pages `indices` (descending) from `doc`, with their bookmarks and form fields. */
+function removePages(doc, indices) {
+  const all = doc.getPages();
+  const gone = indices.map((i) => all[i]);
+  const goneSet = new Set(gone);
+  indices.forEach((i) => doc.removePage(i));
+  dropFieldsOf(doc, gone, all.filter((p) => !goneSet.has(p)));
+  retargetOutline(doc, new Map(gone.map((p) => [p.ref, null])));
 }
 
 async function copyToNew(src, indices) {
   const out = await createPdf();
   const pages = await out.copyPages(src, indices);
   pages.forEach((p) => out.addPage(p));
+  carryCopied(out, src, indices, pages);
   return out.save();
 }
 
@@ -145,7 +165,7 @@ export async function deletePages(bytes, indices) {
   assertPageIndices(indices, n);
   const unique = [...new Set(indices)].sort((a, b) => b - a);
   if (unique.length >= n) throw coreError('DELETE_ALL_PAGES', 'Cannot delete every page of a PDF; at least one page must remain.');
-  unique.forEach((i) => doc.removePage(i));
+  removePages(doc, unique);
   return saveEdited(doc);
 }
 
@@ -239,6 +259,7 @@ export async function interleavePdfs(aBytes, bBytes, { reverseB = false } = {}) 
   if (reverseB) idx = idx.reverse();
   const copied = await a.copyPages(b, idx);
   copied.forEach((p, k) => (k < nA ? a.insertPage(2 * k + 1, p) : a.addPage(p)));
+  carryCopied(a, b, idx, copied);
   return saveEdited(a);
 }
 
@@ -256,7 +277,8 @@ export async function insertBlankPage(bytes, atIndex, { width, height } = {}) {
   return saveEdited(doc);
 }
 
-export async function insertPagesFrom(destBytes, srcBytes, srcIndices, atIndex) {
+/** outline: false leaves the source's bookmarks behind (Duplicate pages: the originals keep theirs). */
+export async function insertPagesFrom(destBytes, srcBytes, srcIndices, atIndex, { outline = true } = {}) {
   const dest = await loadPdf(destBytes);
   const src = await loadPdf(srcBytes);
   const n = dest.getPageCount();
@@ -264,6 +286,7 @@ export async function insertPagesFrom(destBytes, srcBytes, srcIndices, atIndex) 
   if (!Number.isInteger(atIndex) || atIndex < 0 || atIndex > n) throw new RangeError(`atIndex must be 0..${n}`);
   const copied = await dest.copyPages(src, srcIndices);
   copied.forEach((p, k) => dest.insertPage(atIndex + k, p));
+  carryCopied(dest, src, srcIndices, copied, { outline, after: atIndex + copied.length });
   return saveEdited(dest);
 }
 
@@ -278,8 +301,13 @@ export async function replacePages(destBytes, srcBytes, srcIndices, atIndex) {
     throw new RangeError(`Replacing ${srcIndices.length} page(s) must start at 1-${n - srcIndices.length + 1}`);
   }
   const copied = await dest.copyPages(src, srcIndices);
+  const old = srcIndices.map((_, k) => dest.getPage(atIndex + k));
   for (let k = srcIndices.length - 1; k >= 0; k--) dest.removePage(atIndex + k);
   copied.forEach((p, k) => dest.insertPage(atIndex + k, p));
+  // The replaced pages' fields go, the new pages' come; bookmarks to a replaced page follow its replacement.
+  dropFieldsOf(dest, old, dest.getPages());
+  carryFields(dest, src, copied);
+  retargetOutline(dest, new Map(old.map((p, k) => [p.ref, copied[k].ref])));
   return saveEdited(dest);
 }
 
