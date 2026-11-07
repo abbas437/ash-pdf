@@ -96,3 +96,31 @@ export function clearBytesHistory(tab) {
   tab.bytesUndo = [];
   tab.bytesRedo = [];
 }
+
+// ---------------------------------------------------------------- memory budget
+/** Snapshot budget per document: 3 × the current file size, at least 256 MB. */
+export const snapshotBudget = (fileSize) => Math.max(3 * fileSize, 256 * 1024 * 1024);
+const sizeOf = (e) => e?.bytes?.byteLength ?? 0;
+
+/**
+ * Keep the page-history snapshots (tab.bytesUndo + tab.bytesRedo) within `budget` bytes: drop the
+ * oldest undo entries first, then the redo entries furthest from now, never `keep` (the entry just
+ * pushed). Annotation entries that only a dropped page entry could reach go with it: undo entries
+ * older than a dropped undo entry (dropOlderThan), redo entries newer than a dropped redo entry.
+ * Returns the number of entries dropped.
+ */
+export function enforceBudget(tab, budget, keep = null) {
+  const undo = tab.bytesUndo ?? [], redo = tab.bytesRedo ?? [];
+  let total = [...undo, ...redo].reduce((s, e) => s + sizeOf(e), 0), dropped = 0;
+  for (const stack of [undo, redo]) {
+    for (let i = 0; total > budget && i < stack.length;) {
+      if (stack[i] === keep) { i++; continue; }
+      const [gone] = stack.splice(i, 1);
+      total -= sizeOf(gone);
+      dropped++;
+      if (stack === undo) dropOlderThan(tab, gone);
+      else if (tab.redo) tab.redo.splice(0, tab.redo.length, ...tab.redo.filter((e) => seqOf(e) < seqOf(gone)));
+    }
+  }
+  return dropped;
+}

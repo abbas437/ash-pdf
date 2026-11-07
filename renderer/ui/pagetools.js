@@ -1,6 +1,7 @@
 // Page tools: thumbnail context menu, drag-and-drop reordering, page/document dialogs
 // (merge, split, crop, properties, images to PDF, insert pages, replace pages) and the per-tab
-// page-operation undo stack (tab.bytesUndo / tab.bytesRedo, 20 entries each). An entry also keeps
+// page-operation undo stack (tab.bytesUndo / tab.bytesRedo, 20 entries each, and together within the
+// snapshot budget of pagehistory-lib: 3 × the file size, at least 256 MB). An entry also keeps
 // the annotation objects its change dropped (deleted/replaced pages), so Undo and Redo bring them back.
 //
 // Every change to the document follows the page protocol other modules rely on:
@@ -13,7 +14,7 @@ import { h } from './dom.js';
 import { showDialog, showError, toast, dialogOpen, progressDialog } from './dialogs.js';
 import { thumbs } from './sidebar.js';
 import { annotations, getAuthor, setAuthor, DEFAULT_AUTHOR, dropFlattened, unsavedMirrors, restorePageObjects, dropPageObjects, setHistoryRouter, objectBox } from './annotations.js';
-import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan } from './pagehistory-lib.js';
+import { invertMap, droppedBy, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan, enforceBudget, snapshotBudget } from './pagehistory-lib.js';
 import { unitFactor, rectToMargins, marginsToRect, pickPages, cropBoxFor, sizesDiffer, inkBox, inkMargins, overlayBoxes } from './crop-lib.js';
 import { startCropDraw } from './crop-draw.js';
 import { IMAGE_EXTS, DOC_EXTS, fileKind } from './image-import-lib.js';
@@ -66,6 +67,8 @@ function commit(tab, bytes, map, select, restore = null, remove = null) {
 
 /** Push; returns the entry the cap dropped, if any. */
 function pushCapped(stack, entry) { stack.push(entry); return stack.length > UNDO_CAP ? stack.shift() : null; }
+/** Drop the oldest snapshots over the byte budget (both stacks); `keep` is the entry just pushed. */
+function trimToBudget(tab, keep) { enforceBudget(tab, snapshotBudget(tab.bytes?.byteLength ?? 0), keep); }
 /** Count `job` in `queued` until it settles. */
 function track(job) { queued++; job.finally(() => { queued--; }).catch(() => {}); return job; }
 
@@ -92,6 +95,7 @@ export function runOp(tab, label, fn) {
       dropOlderThan(tab, pushCapped(tab.bytesUndo, entry));
       const taken = commit(tab, res.bytes, res.map, res.select, null, res.remove);
       if (res.remove) entry.objs = { restore: taken, remove: [] };
+      trimToBudget(tab, entry);
       offerUndo(tab, res.note);
       return true;
     } catch (err) {
@@ -122,6 +126,7 @@ function step(tab, from, to) {
       const { objs } = entry;
       const taken = commit(tab, entry.bytes, map, null, objs ? [...entry.dropped, ...objs.restore] : entry.dropped, objs?.remove);
       if (objs) back.objs = swapObjs(objs, taken);
+      trimToBudget(tab, back);
       toast(from === 'bytesUndo' ? 'Page change undone' : 'Page change redone');
       return true;
     } catch (err) {
