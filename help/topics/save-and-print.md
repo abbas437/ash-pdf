@@ -3,7 +3,7 @@ id: save-and-print
 title: Save and print
 section: Getting started
 order: 70
-keywords: save, save as, print, signed, signature, unsaved changes, read-only, encrypted, copies, page range
+keywords: save, save as, changed on disk, overwrite, print, signed, signature, unsaved changes, read-only, encrypted, copies, page range
 ---
 
 # Save and print
@@ -14,6 +14,8 @@ keywords: save, save as, print, signed, signature, unsaved changes, read-only, e
 2. The file is written in place and a message confirms **Saved** with the file name.
 
 To keep the original, use **Save as…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>) and choose a new name. [Show me](#showme:btn:saveas) A document that has no file yet always asks for a name. If the original sits in a folder the app may not write to, Save falls back to Save As.
+
+If the file was changed by someone else since you opened or last saved it (another program, or a colleague on a shared folder), Save asks first: **Overwrite** replaces their version with yours, **Save as a copy…** keeps both, and **Cancel** writes nothing.
 
 ## Signed documents
 

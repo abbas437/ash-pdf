@@ -678,6 +678,39 @@ try {
     const tabPath = await win.evaluate(() => { const a = window.ashStudio.state; return a.tabs.find((x) => x.id === a.activeId).path; });
     expect('the dropped tab has the file path', String(tabPath), /dropped-one\.pdf$/.test(String(tabPath)));
     await win.evaluate(() => document.getElementById('e2e-drop-input').remove());
+
+    step = 'Save over a file changed on disk since it was opened: Cancel keeps it, Overwrite writes';
+    const annotate = (y) => win.evaluate((y) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); a.annotations.add(t, { type: 'rect', page: 0, x: 20, y, w: 40, h: 30, stroke: '#ff0000' }); }, y);
+    const saved = () => win.waitForFunction(() => { const a = window.ashStudio.state; return !a.tabs.find((x) => x.id === a.activeId).dirty; }, null, { timeout: 15000 });
+    const changedDialog = () => win.$$eval('.dialog.changed-dialog', (d) => d.length);
+    await annotate(20);
+    await win.click('#btn-save');
+    await saved();
+    expect('unchanged file: saved without a prompt', String(await changedDialog()), (await changedDialog()) === 0);
+    const other = await PDFDocument.create();
+    other.addPage([200, 200]); other.addPage([200, 200]);
+    const otherBytes = Buffer.from(await other.save());
+    await writeFile(dropFile, otherBytes);
+    const later = new Date(Date.now() + 60_000);
+    await utimes(dropFile, later, later);
+    await annotate(80);
+    await win.click('#btn-save');
+    await win.waitForSelector('.dialog.changed-dialog', { timeout: 10000 });
+    const text = await win.textContent('.dialog.changed-dialog');
+    expect('prompt wording', text, /changed by someone else since you opened it/.test(text) && /Overwrite/.test(text) && /Save as a copy/.test(text));
+    await win.click('.dialog.changed-dialog .dialog-buttons button:text-is("Cancel")');
+    await win.waitForSelector('.dialog.changed-dialog', { state: 'detached', timeout: 5000 });
+    expect('Cancel leaves the other version on disk', 'changed', (await readFile(dropFile)).equals(otherBytes));
+    await win.click('#btn-save');
+    await win.waitForSelector('.dialog.changed-dialog', { timeout: 10000 });
+    await win.click('.dialog.changed-dialog .dialog-buttons button:text-is("Overwrite")');
+    await saved();
+    const written = await readFile(dropFile);
+    expect('Overwrite writes this version', `${written.length} bytes`, !written.equals(otherBytes) && written.subarray(0, 5).toString() === '%PDF-');
+    await annotate(140);
+    await win.click('#btn-save');
+    await saved();
+    expect('after the forced write the next save does not prompt', String(await changedDialog()), (await changedDialog()) === 0);
   }
 
   step = 'no renderer errors';

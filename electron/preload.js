@@ -18,7 +18,8 @@ contextBridge.exposeInMainWorld('api', {
   // renderer cannot name an arbitrary path; main grants it like a file chosen in the Open dialog. null if none.
   openDropped: (file) => { let p = ''; try { p = webUtils.getPathForFile(file); } catch { /* not a file on disk */ } return p ? ipcRenderer.invoke('file:dropped', p) : Promise.resolve(null); },
   saveFile: (opts) => ipcRenderer.invoke('dialog:save', opts ?? {}),
-  writeFile: (path, bytes) => ipcRenderer.invoke('file:write', path, bytes),
+  // opts { force: true }: overwrite even if the file changed on disk (else { ok: false, changedOnDisk: true }).
+  writeFile: (path, bytes, opts) => ipcRenderer.invoke('file:write', path, bytes, opts),
   // multi-page image export (src/core/imgexport.js)
   imageExportBegin: (req) => ipcRenderer.invoke('imgexport:begin', req),
   imageExportWrite: (jobId, index, bytes) => ipcRenderer.invoke('imgexport:write', jobId, index, bytes),

@@ -4,7 +4,7 @@ import { bus } from './bus.js';
 import { state, createTab, activeTab, markDirty } from './state.js';
 import { h, $, isTyping, formatBytes } from './ui/dom.js';
 import { icon } from './ui/icons.js';
-import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, toast, dialogOpen } from './ui/dialogs.js';
+import { showDialog, showError, confirmDiscard, confirmSignedOverwrite, confirmChangedOnDisk, toast, dialogOpen } from './ui/dialogs.js';
 import { signedSaveMode } from './ui/save-lib.js';
 import { clearBytesHistory } from './ui/pagehistory-lib.js';
 import { viewer } from './ui/viewer.js';
@@ -274,6 +274,12 @@ export async function saveTab(tab = activeTab(), asNew = false) {
         // A path from a read-only folder grant (Advanced search) is not writable in place: fall back to Save As.
         if (!/was not opened or saved in this session/.test(err?.message ?? '')) throw err;
         res = await api.saveFile({ defaultPath: tab.path, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
+      }
+      if (res?.changedOnDisk) { // someone else wrote the file since it was opened or saved here (main)
+        const choice = await confirmChangedOnDisk(tab.name);
+        if (choice === 'overwrite') res = await api.writeFile(tab.path, bytes, { force: true });
+        else if (choice === 'copy') res = await api.saveFile({ defaultPath: tab.name, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
+        else return false;
       }
     } else res = await api.saveFile({ defaultPath: tab.name, filters: [{ name: 'PDF', extensions: ['pdf'] }], bytes });
     if (!res) return false;

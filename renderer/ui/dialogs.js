@@ -132,6 +132,20 @@ export function confirmSignedOverwrite(name, { certified = false } = {}) {
   });
 }
 
+/** In-place save over a file that changed on disk since it was opened or saved: 'overwrite' | 'copy' | 'cancel'. */
+export function confirmChangedOnDisk(name) {
+  return showDialog({
+    title: 'File changed on disk',
+    body: `This file was changed by someone else since you opened it. Overwrite "${name}" with your version, or save your version as a copy?`,
+    buttons: [
+      { label: 'Cancel', value: 'cancel', cancel: true },
+      { label: 'Overwrite', value: 'overwrite', danger: true },
+      { label: 'Save as a copy…', value: 'copy', primary: true },
+    ],
+    className: 'changed-dialog',
+  });
+}
+
 /**
  * External link (URI action): shows the full address and lets the user open it (api.openExternal;
  * main opens only http:, https: and mailto:, anything else is refused with a toast) or copy it.
