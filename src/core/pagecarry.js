@@ -153,14 +153,50 @@ function clonePrim(v) {
   return PDFNull;
 }
 
+/** Action types a carried outline item keeps: none of them refers to a page or annotation of the source. */
+const CARRIED = new Set(['URI', 'GoToR', 'Launch', 'Named', 'JavaScript'].map(N));
+
+/** Copy of `v` into `dctx` without its indirect references (left out of dicts, null in arrays); undefined for a ref. */
+function directCopy(dctx, v) {
+  if (v instanceof PDFString || v instanceof PDFHexString) return v.clone();
+  if (v instanceof PDFNumber) return PDFNumber.of(v.asNumber());
+  if (v instanceof PDFName || v instanceof PDFBool || v === PDFNull) return v;
+  if (v instanceof PDFArray) return dctx.obj(v.asArray().map((x) => directCopy(dctx, x) ?? PDFNull));
+  if (v instanceof PDFDict) {
+    const d = dctx.obj({});
+    for (const [k, x] of v.entries()) {
+      const c = directCopy(dctx, x);
+      if (c !== undefined) d.set(k, c);
+    }
+    return d;
+  }
+  return undefined;
+}
+
+/**
+ * The one action dict `a` for dest: its direct values, plus its /JS script and /F file specification
+ * in full (streams and dicts). /Next is left out: a chained action may name pages of the source.
+ */
+function copyAction(copier, dctx, a) {
+  const out = dctx.obj({});
+  for (const [k, v] of a.entries()) {
+    if (k === N('Next')) continue;
+    const c = k === N('JS') || k === N('F') ? copier.copy(v) : directCopy(dctx, v);
+    if (c !== undefined) out.set(k, c);
+  }
+  return out;
+}
+
 /**
  * Carry `src`'s outline items whose destination page was copied into `dest`.
  * pageMap: Map<src page ref, dest page ref>. Items keep title, /C, /F, nesting and open state;
  * an item whose page was not copied is dropped, or kept as a container without /Dest when some of its
- * children are kept. An item with no local page destination (URI, Launch, GoToR, JavaScript, Named
- * action, title only) is kept with its /A deep-copied. Destinations become explicit [destPage ...] arrays. The new items go into
- * dest's top level before the first existing item that targets a page at or after `after` (a dest
- * page index), or at the end when `after` is undefined or no such item exists.
+ * children are kept. An item whose action points at no page (URI, GoToR, Launch, Named, JavaScript) is
+ * kept with a copy of that one action (see copyAction); a title-only item (no destination, no such
+ * action) is kept only if it had no children in the source, else only while some child is kept.
+ * Destinations become explicit [destPage ...] arrays. The new items go into dest's top level before
+ * the first existing item that targets a page at or after `after` (a dest page index), or at the end
+ * when `after` is undefined or no such item exists.
  */
 export function carryOutline(dest, src, pageMap, after) {
   const sctx = src.context;
@@ -173,13 +209,15 @@ export function carryOutline(dest, src, pageMap, after) {
     const kids = build(n.kids);
     const r = destPage(sctx, nd, n.dict);
     const to = r && pageMap.get(r.page);
-    // An item that points at no page of the source (URI, Launch, GoToR, JavaScript, Named action, or
-    // title only) is kept; one whose local page destination was not copied goes, unless it has kept kids.
     const a = get(n.dict, 'A', PDFDict);
     const sd = n.dict.lookup(N('Dest'));
     const local = r !== null || (a && a.lookup(N('S')) === N('GoTo')) || (sd !== undefined && !(sd instanceof PDFArray));
     const otherDest = !r && sd instanceof PDFArray;
-    if (!to && !kids.length && local && !otherDest) return [];
+    const carried = !local && a !== undefined && CARRIED.has(a.lookup(N('S')));
+    // Kept: an item on a copied page, one with kept kids (as a container), one with a carried action
+    // or a destination array not naming a page, and a title-only item that had no kids in the source.
+    // Other actions (Hide, SubmitForm, Rendition...) name widgets or pages: such an item is title-only.
+    if (!to && !kids.length && !carried && !otherDest && (local || n.kids.length)) return [];
     const dict = dctx.obj({});
     const title = n.dict.lookup(N('Title'));
     if (title instanceof PDFString || title instanceof PDFHexString) dict.set(N('Title'), title.clone());
@@ -188,11 +226,8 @@ export function carryOutline(dest, src, pageMap, after) {
     if (rgb.length === 3 && rgb.every((x) => x instanceof PDFNumber)) dict.set(N('C'), dctx.obj(rgb.map(clonePrim)));
     const f = get(n.dict, 'F', PDFNumber);
     if (f) dict.set(N('F'), clonePrim(f));
-    if (!r) {
-      copier ??= PDFObjectCopier.for(sctx, dctx);
-      if (a && a.lookup(N('S')) !== N('GoTo')) dict.set(N('A'), copier.copy(a));
-      if (otherDest) dict.set(N('Dest'), copier.copy(sd));
-    }
+    if (carried) dict.set(N('A'), copyAction(copier ??= PDFObjectCopier.for(sctx, dctx), dctx, a));
+    if (otherDest) dict.set(N('Dest'), dctx.obj(sd.asArray().map((x) => clonePrim(sctx.lookup(x)))));
     if (to) dict.set(N('Dest'), dctx.obj([to, ...r.array.asArray().slice(1).map((x) => clonePrim(sctx.lookup(x)))]));
     return [{ ref: dctx.register(dict), dict, open: n.open, kids }];
   });
@@ -235,6 +270,55 @@ function pageWidgets(pages) {
   return out;
 }
 
+/** The field type (/FT) of `node`, inherited through /Parent. */
+function fieldType(node) {
+  const seen = new Set();
+  for (let d = node; d instanceof PDFDict && !seen.has(d); d = d.lookup(N('Parent'))) {
+    seen.add(d);
+    const ft = d.lookup(N('FT'));
+    if (ft instanceof PDFName) return ft;
+  }
+  return undefined;
+}
+
+/**
+ * After button group `node`'s `kids` were pruned to the old indices `kept` along with /Opt: a kid whose
+ * on-state is named by its old /Opt index ("0", "1"...) gets its new index in /AP /N and /D and /AS,
+ * and the group /V and /DV follow (Off when they named a removed kid), so a state name still indexes /Opt.
+ */
+function renumberStates(node, kids, kept) {
+  const onState = (i) => {
+    const w = kids.lookup(i);
+    const ap = w instanceof PDFDict ? get(w, 'AP', PDFDict) : undefined;
+    const n = ap && get(ap, 'N', PDFDict);
+    return n && n.has(N(String(i))) ? { w, ap, name: N(String(i)) } : undefined;
+  };
+  const keptSet = new Set(kept);
+  const removed = new Set();
+  for (let i = 0; i < kids.size(); i++) if (!keptSet.has(i) && onState(i)) removed.add(N(String(i)));
+  const renamed = new Map();
+  kept.forEach((i, j) => {
+    const s = i === j ? undefined : onState(i);
+    if (!s) return;
+    const to = N(String(j));
+    for (const key of ['N', 'D']) {
+      const d = get(s.ap, key, PDFDict);
+      if (d && d.has(s.name)) {
+        const v = d.get(s.name);
+        d.delete(s.name);
+        d.set(to, v);
+      }
+    }
+    if (s.w.get(N('AS')) === s.name) s.w.set(N('AS'), to);
+    renamed.set(s.name, to);
+  });
+  for (const key of ['V', 'DV']) {
+    const v = node.get(N(key));
+    if (renamed.has(v)) node.set(N(key), renamed.get(v));
+    else if (removed.has(v)) node.set(N(key), N('Off'));
+  }
+}
+
 /**
  * Remove from the field tree under `node` the widgets for which drop(widget) is true, and any field
  * left without kids. Returns false when `node` itself goes.
@@ -252,9 +336,13 @@ function pruneField(ctx, node, drop, seen) {
   }
   if (keep.length === kids.size()) return true;
   if (!keep.length) return false;
-  // A radio group's /Opt export values are positional, one per kid: pdf-lib's select() reads them that way.
+  // A button group's /Opt export values are positional, one per kid: pdf-lib's select() reads them that
+  // way. A choice field's /Opt is its option list and stays whole.
   const opt = get(node, 'Opt', PDFArray);
-  if (opt && opt.size() === kids.size()) node.set(N('Opt'), ctx.obj(kept.map((i) => opt.get(i))));
+  if (opt && opt.size() === kids.size() && fieldType(node) === N('Btn')) {
+    node.set(N('Opt'), ctx.obj(kept.map((i) => opt.get(i))));
+    renumberStates(node, kids, kept);
+  }
   node.set(N('Kids'), ctx.obj(keep));
   return true;
 }
