@@ -1,0 +1,3 @@
+{
+  "panel:differences": { "selector": "[data-sb-tab=\"differences\"]", "source": "renderer/ui/sidebar.js (tab id from renderer/ui/comparerev.js:7)" }
+}

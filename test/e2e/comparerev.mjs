@@ -2,10 +2,11 @@
 // Tools > Compare revisions (ui/comparerev.js) in Chromium with the browser shim: Rev.00 (3 pages) vs
 // Rev.01 (4 pages: page 2 changed, page 3 shifted 10 pt, page 4 new). Prints "COMPAREREV OK".
 // COMPARE_NO_ALIGN=1 unchecks "Align shifted pages" (the page 3 check must then fail).
+// COMPAREREV_SHOTS=<dir> writes screenshots of the Differences panel in the light and dark themes there.
 // Run `node scripts/vendor.js` first. Chromium path: $CHROMIUM_PATH or the sandbox default.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { extname, resolve, sep } from 'node:path';
+import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PDFDocument, StandardFonts } from 'pdf-lib';
@@ -79,11 +80,12 @@ try {
   const ann = await page.evaluate(async () => {
     const t = window.ashStudio.state.tabs.find((x) => x.compare);
     const out = [];
-    for (let i = 0; i < t.numPages; i++) out.push((t.objects ?? []).filter((o) => o.page === i && o.author === 'Compare').map((o) => `${o.type} ${JSON.stringify(o)}`));
+    for (let i = 0; i < t.numPages; i++) out.push((t.objects ?? []).filter((o) => o.page === i && o.author === 'Compare').map((o) => String(o.note ?? '')));
     const txt = (await t.pages[3].getTextContent()).items.map((x) => x.str).join(' ');
     return { out, txt };
   });
-  check(ann.out[1].some((c) => /added/.test(c)), `page 2 square: ${JSON.stringify(ann.out[1])}`);
+  // the drawn-in line: an area of added ink with no text in it, noted exactly as compareReport words it
+  check(ann.out[1].some((c) => /^Change [0-9]+: added$/.test(c)), `page 2 squares: ${JSON.stringify(ann.out[1])}`);
   check(ann.out[2].length === 0, `page 3 none: ${JSON.stringify(ann.out[2])}`);
   check(/Page only in the newer revision/.test(ann.txt), `page 4 note: ${ann.txt}`);
   step = 'Differences panel lists + DN150 and − DN100; click scrolls to page 2';
@@ -100,14 +102,46 @@ try {
   const sync = await page.evaluate(async () => (await import('./ui/splitview.js')).splitView.state);
   check(sync?.sync === true, `split: ${JSON.stringify(sync)}`);
   await page.evaluate(async () => (await import('./ui/splitview.js')).splitView.unsplit());
+  await page.evaluate(() => window.ashStudio.activate(window.ashStudio.state.tabs.find((x) => x.compare).id));
+  step = 'Copy list puts diffText on the system clipboard (api.copyText)';
+  const want = await page.evaluate(async () => (await import('./ui/comparerev-lib.js')).diffText(window.ashStudio.state.tabs.find((x) => x.compare).compare.pages));
+  await page.click('.cmp-copy');
+  await page.waitForFunction((w) => window.__ashShim.clipboardText() === w, want, { timeout: 5000 });
+  check(/^Page 2 — [0-9]+ areas?, text: \+1 \/ −1\n/.test(want) && want.includes('\n  + DN150') && want.includes('Page 4 — only in the newer revision'), `copied: ${want}`);
+  step = 'Export CSV downloads the list with a BOM and the header row';
+  const dl = page.waitForEvent('download');
+  await page.click('.cmp-csv');
+  const download = await dl;
+  const chunks = [];
+  for await (const c of await download.createReadStream()) chunks.push(c);
+  const csv = Buffer.concat(chunks).toString('utf8');
+  check(csv.startsWith('\uFEFFPage,Kind,Item,Text\r\n') && csv.includes("\r\n2,text added,'+ DN150,DN150\r\n") && csv.includes('\r\n2,text removed,− DN100,DN100\r\n') && csv.includes('\r\n4,page,Page only in the newer revision,\r\n'), `csv: ${JSON.stringify(csv)}`);
+  if (process.env.COMPAREREV_SHOTS) {
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate((th) => { document.documentElement.dataset.theme = th; }, theme);
+      await page.screenshot({ path: join(process.env.COMPAREREV_SHOTS, `comparerev-panel-${theme}.png`), clip: { x: 0, y: 0, width: 640, height: 800 } });
+    }
+    await page.evaluate(() => { document.documentElement.dataset.theme = window.ashStudio.state.theme; });
+  }
+  step = 'a reopened compare PDF: the Differences panel lists its areas from the compare marks';
+  const saved = await page.evaluate(() => [...window.ashStudio.state.tabs.find((x) => x.compare).bytes]);
+  const marks = ann.out.flat().length;
+  await openFile('Compare saved.pdf', Buffer.from(saved));
+  await page.waitForFunction(() => window.ashStudio.state.tabs.find((t) => t.name === 'Compare saved.pdf')?.id === window.ashStudio.state.activeId);
+  await page.waitForSelector('.cmp-note:text-matches("Saved compare document")');
+  const reopened = await page.$$eval('.cmp-item', (els) => els.map((e) => e.textContent));
+  const heads = reopened.filter((s) => / — [0-9]+ marks?$/.test(s));
+  check(heads[0]?.startsWith('Page 2 — ') && reopened.length - heads.length === marks && reopened.filter((s) => /^Change [0-9]+: added$/.test(s)).length >= 1, `reopened: ${JSON.stringify(reopened)} (${marks} marks)`);
+  await page.click('.cmp-copy');
+  await page.waitForFunction(() => /^Page 2 — /.test(window.__ashShim.clipboardText()) && !window.__ashShim.clipboardText().includes('DN150'));
   step = 'Cancel midway on a larger set leaves no new tab';
   const before = await page.evaluate(() => window.ashStudio.state.tabs.length);
   await page.evaluate(() => {
-    const [a, b] = window.ashStudio.state.tabs.filter((t) => !t.compare);
+    const [a, b] = window.ashStudio.state.tabs.filter((t) => !t.compare && t.name.startsWith('PS-001'));
     window.__cmp = window.ashStudio.compareRevisions.compareRevisions(a, b, { indices: [0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2], dpi: 200 });
   });
   await page.waitForFunction(() => /page [2-9] of 12/.test(document.querySelector('#compare-progress')?.textContent ?? ''), null, { timeout: 20_000 });
-  await page.click('.compare-progress button');
+  await page.click('.compare-progress .dialog-buttons button'); // the title also has a help (?) button
   const back = await page.evaluate(() => window.__cmp);
   const after = await page.evaluate(() => window.ashStudio.state.tabs.length);
   check(back === null && after === before, `cancel: ${back}, tabs ${before} -> ${after}`);

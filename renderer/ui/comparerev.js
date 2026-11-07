@@ -66,7 +66,7 @@ async function words(tab, i) {
 }
 
 /**
- * Compare `older` and `newer` (open tabs) with opts {indices?, dpi, ignoreColor, align, text}.
+ * Compare `older` and `newer` (open tabs) with opts {indices?, dpi, align, text}.
  * Resolves the new compare tab, or null when cancelled.
  */
 export async function compareRevisions(older, newer, opts = {}) {
@@ -162,7 +162,6 @@ export async function compareDialog() {
     pick('cmp-older', 'Older revision', g0), pick('cmp-newer', 'Newer revision', g1),
     h('label.cmp-row', {}, h('span', {}, 'Pages'), range),
     h('label.cmp-row', {}, h('span', {}, 'Quality'), dpi),
-    h('label.cmp-check', { title: 'Colour-sensitive compare is not available yet: ink is always compared' }, h('input', { type: 'checkbox', id: 'cmp-ignore-color', checked: true, disabled: true }), h('span', {}, 'Ignore colour (compare ink only)')),
     check('cmp-align', 'Align shifted pages automatically', saved.align),
     check('cmp-text', 'List text changes', saved.text),
     h('p.ocr-note', {}, 'Pages are compared in order (page 1 with page 1, …) as pictures at the chosen quality.'),
@@ -186,7 +185,7 @@ export async function compareDialog() {
     if (older === newer) { error.textContent = 'Choose two different documents.'; return false; }
     let indices = null;
     try { if (range.value.trim()) indices = parseRanges(range.value, Math.max(older.numPages, newer.numPages)); } catch (err) { error.textContent = `Pages: ${err.message}`; range.focus(); return false; }
-    chosen = { older, newer, opts: { indices, dpi: Number(dpi.value), ignoreColor: body.querySelector('#cmp-ignore-color').checked,
+    chosen = { older, newer, opts: { indices, dpi: Number(dpi.value),
       align: body.querySelector('#cmp-align').checked, text: body.querySelector('#cmp-text').checked } };
     return true;
   };
@@ -207,7 +206,7 @@ function fromAnnotations(tab) {
   const pages = new Map();
   for (const o of objs) {
     const p = pages.get(o.page) ?? { index: o.page, status: 'compared', regions: [], text: { added: [], removed: [] }, notes: [] };
-    p.notes.push({ text: String(o.contents ?? o.text ?? '').split('\n')[0], id: o.id });
+    p.notes.push({ text: String(o.note ?? '').split('\n')[0], id: o.id });
     pages.set(o.page, p);
   }
   return [...pages.values()].sort((a, b) => a.index - b.index);
@@ -246,7 +245,8 @@ function sideBySide(tab, i) {
 }
 
 async function copyList(pages) {
-  try { await navigator.clipboard.writeText(diffText(pages)); toast('Differences copied'); } catch (err) { showError('Copy list', err); }
+  // api.copyText: navigator.clipboard is denied in the app (see copytext.js).
+  try { await window.api.copyText(diffText(pages)); toast('Differences copied'); } catch (err) { showError('Copy list', err); }
 }
 
 async function exportCsv(tab, pages) {

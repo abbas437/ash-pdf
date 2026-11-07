@@ -1,0 +1,4 @@
+{
+  "dialog:Compare revisions": "compare-revisions",
+  "[data-sb-tab=\"differences\"]": "compare-revisions/the-differences-panel"
+}

@@ -3,12 +3,12 @@ id: split-view
 title: Split view
 section: Getting started
 order: 60
-keywords: split, side by side, compare, two panes, divider, vertical, horizontal, unsplit, sync, scroll together, zoom together, link panes
+keywords: split, side by side, compare, compare revisions, two panes, divider, vertical, horizontal, unsplit, sync, scroll together, zoom together, link panes
 ---
 
 # Split view
 
-Split view shows two documents (or two parts of the same document) at once. Each pane has its own scrolling, zoom and current page, so you can compare drawings or read one page while editing another. Turn on **Scroll and zoom together** to page through two revisions side by side.
+Split view shows two documents (or two parts of the same document) at once. Each pane has its own scrolling, zoom and current page, so you can compare drawings or read one page while editing another. Turn on **Scroll and zoom together** to page through two revisions side by side. To have the changes between two revisions found and marked for you, see [Compare revisions](#topic:compare-revisions).
 
 ## Open a split
 
@@ -60,4 +60,4 @@ Choose **View** ▸ **Unsplit**, or **Close split** in the **Split** button menu
 
 > **Tip:** The **Split** button looks pressed while a split is open.
 
-See also [Open files and use tabs](#topic:open-and-tabs) and [Navigate and zoom](#topic:navigate-and-zoom).
+See also [Open files and use tabs](#topic:open-and-tabs), [Navigate and zoom](#topic:navigate-and-zoom) and [Compare revisions](#topic:compare-revisions).

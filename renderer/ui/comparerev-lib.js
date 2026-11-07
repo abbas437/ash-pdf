@@ -13,7 +13,7 @@ const LIM = { area: 16384 * 16384, side: 32767 };
 export const fitsCanvas = (w, h) => w > 0 && h > 0 && w <= LIM.side && h <= LIM.side && w * h <= LIM.area;
 
 export const DPI_PRESETS = [100, 150, 200];
-export const DEFAULT_OPTIONS = Object.freeze({ dpi: 150, ignoreColor: true, align: true, text: true });
+export const DEFAULT_OPTIONS = Object.freeze({ dpi: 150, align: true, text: true });
 
 // Revision tokens, most specific first: "Rev.01", "Rev 1", "Rev-B", "R1", a trailing "_B" / "-B".
 const PATTERNS = [/(?:^|[^a-z])rev(?:ision)?[\s._-]*([0-9]+|[a-z])(?![a-z])/i, /(?:^|[\s._-])r([0-9]+)(?![a-z0-9])/i, /[\s._-]([a-z])$/i];

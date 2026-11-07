@@ -12,6 +12,7 @@ The most recent additions, newest first. Versions up to 0.2.10 are tagged in the
 
 ## Version 0.2.15
 
+- **Compare revisions.** **Tools ▸ Compare revisions…** compares two revisions page by page and opens a new PDF with removed ink in red, added ink in green and each change boxed, plus a **Differences** list you can copy or export to CSV. See [Compare revisions](#topic:compare-revisions).
 - **Text box frame.** Give a text box a border, a fill colour and an inner margin, as in Word. See [Text boxes](#topic:text-boxes).
 - **Pictures inside text boxes.** Paste a picture or use **Insert picture** in the right-click menu. Click a picture to select it, and use the **Picture size** menu to resize it. Damaged or recompressed picture data no longer causes problems, and photos taken with a rotated camera open upright.
 - **Group and Ungroup.** Combine several objects and resize them as one. Ctrl+G groups the selection. See [Select, group and clipboard](#topic:select-group-clipboard).
