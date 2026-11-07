@@ -10,12 +10,18 @@
 // the second pane gets the tab's secondary view (viewer.secondary) with its own scroll, zoom and
 // current page; focusing that pane swaps the views (viewer.swapViews) so the focused pane is still
 // the tab's own view. Leaving same-document mode keeps the view that stays on screen.
+// "Scroll and zoom together" (View and Split menus, the link button in the pane headers) links the
+// panes: scrolling one shows the same page at the same fraction of its height (and width) in the
+// other, and a zoom of one (factor or fit mode) is given to the other. The sync maps by page index and
+// fraction (splitview-lib.js syncScroll), never raw pixels, as the documents may differ in page sizes
+// and count. The toggle outlives Unsplit and is remembered in the settings store (view.splitSync).
 import { bus } from '../bus.js';
 import { state, getTab } from '../state.js';
 import { h } from './dom.js';
 import { viewer } from './viewer.js';
 import { showDialog } from './dialogs.js';
-import { defaultPair, chooseTab, pickForPane, closeTabIn, clampRatio } from './splitview-lib.js';
+import { icon } from './icons.js';
+import { defaultPair, chooseTab, pickForPane, closeTabIn, clampRatio, syncScroll, zoomToSync } from './splitview-lib.js';
 
 let host = null;
 let activate = null;
@@ -25,7 +31,14 @@ const heads = [];
 let divider = null;
 // Every change of the split (opened, closed, orientation, documents, focused pane, divider) emits
 // split:changed, so the last session can record it.
-const changed = () => bus.emit('split:changed', split ? { split: true, dir: split.dir } : { split: false });
+const changed = () => bus.emit('split:changed', split ? { split: true, dir: split.dir, sync: together } : { split: false });
+const SYNC_KEY = 'view.splitSync';
+let together = false;   // "Scroll and zoom together" (kept across Unsplit)
+let togetherSet = false; // set this session: the stored default no longer applies
+let syncing = false;    // a change made by the sync (or a view swap) in progress: its zoom events are not synced back
+const expected = new WeakMap(); // scrollEl -> {top, left} the sync scrolled it to (its scroll event is ignored)
+let syncRaf = 0;
+let syncSource = -1;
 
 export const splitView = {
   split: splitOn,
@@ -33,7 +46,9 @@ export const splitView = {
   setPane,
   open: openSplit,
   chooseDialog,
-  get state() { return split && { dir: split.dir, ratio: split.ratio, ids: [...split.ids], focus: split.focus }; },
+  get together() { return together; },
+  setTogether,
+  get state() { return split && { dir: split.dir, ratio: split.ratio, ids: [...split.ids], focus: split.focus, sync: together }; },
 };
 
 export function initSplitView(app) {
@@ -45,6 +60,8 @@ export function initSplitView(app) {
   M('View', { id: 'split-v', label: 'Split vertically', action: () => splitOn('v'), enabled: canSplit });
   M('View', { id: 'split-h', label: 'Split horizontally', action: () => splitOn('h'), enabled: canSplit });
   M('View', { id: 'unsplit', label: 'Unsplit', action: unsplit, enabled: () => !!split });
+  M('View', { id: 'split-sync', label: syncLabel(), labelFn: syncLabel, action: () => setTogether(!together) });
+  window.api?.settingsGet?.(SYNC_KEY).then((v) => { if (!togetherSet && typeof v === 'boolean') { together = v; markSync(); } }).catch(() => {});
   // A tab chosen from the tab strip while split goes into the focused pane.
   bus.on('tab:activated', ({ tab }) => {
     if (tab) recent = [tab.id, ...recent.filter((id) => id !== tab.id)];
@@ -66,6 +83,94 @@ export function initSplitView(app) {
   bus.on('state:changed', ({ key }) => { if (key === 'tabs' && split) syncPickers(); });
   host.addEventListener('pointerdown', onPaneFocus, true);
   host.addEventListener('focusin', onPaneFocus);
+  host.addEventListener('scroll', onPaneScroll, true); // scroll does not bubble: listen in the capture phase
+  bus.on('zoom:changed', ({ tab }) => {
+    if (!split || !together || syncing) return;
+    const k = paneHolders().indexOf(tab);
+    if (k >= 0) alignFrom(k);
+  });
+}
+
+/** Menu label of the toggle: a check mark while on. */
+export const syncLabel = () => `${together ? '\u2713 ' : ''}Scroll and zoom together`;
+
+/** Turn "Scroll and zoom together" on or off; turning it on brings the other pane to the focused one. */
+function setTogether(on, { save = true } = {}) {
+  together = !!on;
+  togetherSet = true;
+  if (save) window.api?.settingsSet?.(SYNC_KEY, together).catch(() => {});
+  markSync();
+  if (!split) return;
+  if (together) alignFrom(split.focus);
+  changed();
+}
+
+function markSync() {
+  for (const el of heads) {
+    const b = el?.querySelector('.split-sync');
+    if (b) { b.setAttribute('aria-pressed', String(together)); b.classList.toggle('on', together); }
+  }
+}
+
+/** The view holders in panes a and b (the same document: the tab and its secondary). */
+function paneHolders() {
+  const tabs = split.ids.map(getTab);
+  if (!same()) return tabs;
+  const hs = [];
+  hs[split.focus] = tabs[0];
+  hs[1 - split.focus] = viewer.secondaryOf(tabs[0]);
+  return hs;
+}
+
+function geometry(t) {
+  const { scrollEl: el, pageEls } = t.view;
+  return {
+    tops: pageEls.map((p) => p.offsetTop), heights: pageEls.map((p) => p.offsetHeight),
+    lefts: pageEls.map((p) => p.offsetLeft), widths: pageEls.map((p) => p.offsetWidth),
+    clientWidth: el.clientWidth, scrollTop: el.scrollTop, scrollLeft: el.scrollLeft,
+  };
+}
+
+// A pane scrolled by the user (or by page navigation): sync the other once per animation frame.
+// The scroll event of a pane the sync itself moved is ignored, so the panes do not chase each other.
+function onPaneScroll(e) {
+  if (!split || !together) return;
+  const el = e.target;
+  const k = PANE.indexOf(el?.dataset?.pane || '-');
+  if (k < 0 || !el.classList.contains('viewer-scroll')) return;
+  const exp = expected.get(el);
+  if (exp) {
+    expected.delete(el);
+    if (Math.abs(el.scrollTop - exp.top) <= 1 && Math.abs(el.scrollLeft - exp.left) <= 1) return;
+  }
+  syncSource = k;
+  if (!syncRaf) syncRaf = requestAnimationFrame(() => { syncRaf = 0; if (syncSource >= 0) syncFrom(syncSource); syncSource = -1; });
+}
+
+/** Scroll the other pane to pane k's page and fraction. */
+function syncFrom(k) {
+  if (!split || !together) return;
+  const hs = paneHolders();
+  const src = hs[k], dst = hs[1 - k];
+  if (!src?.view || !dst?.view || !src.numPages || !dst.numPages || dst.view.scrollEl.hidden) return;
+  const r = syncScroll(geometry(src), geometry(dst));
+  const el = dst.view.scrollEl;
+  el.scrollTop = r.top;
+  el.scrollLeft = r.left;
+  expected.set(el, { top: el.scrollTop, left: el.scrollLeft });
+}
+
+/** Give the other pane pane k's zoom (mode or factor), then its scroll position. */
+function alignFrom(k) {
+  const hs = paneHolders();
+  const src = hs[k], dst = hs[1 - k];
+  if (!src?.view || !dst?.view) return;
+  const differs = dst.zoomMode !== src.zoomMode || (src.zoomMode === 'custom' && Math.abs(dst.zoom - src.zoom) > 1e-6);
+  if (differs) {
+    syncing = true;
+    try { viewer.setZoom(dst, zoomToSync(src)); } finally { syncing = false; }
+  }
+  syncFrom(k);
 }
 
 const same = () => split.ids[0] === split.ids[1];
@@ -96,6 +201,7 @@ function splitOn(dir) {
  */
 function openSplit(ids, dir = split?.dir ?? 'v', opts = {}) {
   if (!ids?.every(getTab)) return;
+  if (typeof opts.sync === 'boolean') setTogether(opts.sync, { save: false });
   const focus = opts.focus === 0 || opts.focus === 1 ? opts.focus : ids[0] !== ids[1] && ids[1] === state.activeId ? 1 : 0;
   const ratio = Number.isFinite(opts.ratio) ? clampRatio(opts.ratio) : split?.ratio ?? 0.5;
   if (!split) {
@@ -139,12 +245,15 @@ async function chooseDialog() {
 function buildChrome() {
   for (const k of [0, 1]) {
     const select = h('select.split-pick', { 'aria-label': `Document in pane ${k + 1}`, onchange: (e) => setPane(k, e.target.value) });
-    heads[k] = h('div.split-head', { dataset: { pane: k ? 'b' : 'a' }, style: `grid-area: ${k ? 'hb' : 'ha'}` }, select);
+    const link = h('button.split-sync', { type: 'button', title: 'Scroll and zoom together', 'aria-label': 'Scroll and zoom together', 'aria-pressed': String(together),
+      html: icon('link', 14), onclick: () => setTogether(!together) });
+    heads[k] = h('div.split-head', { dataset: { pane: k ? 'b' : 'a' }, style: `grid-area: ${k ? 'hb' : 'ha'}` }, select, link);
   }
   divider = h('div.split-divider', { role: 'separator', tabindex: '-1', title: 'Drag to resize; double-click for 50 / 50', style: 'grid-area: dv' });
   divider.addEventListener('pointerdown', startDrag);
   divider.addEventListener('dblclick', () => { split.ratio = 0.5; applyTracks(); viewer.refit(); changed(); });
   host.append(heads[0], divider, heads[1]);
+  markSync();
 }
 
 function syncPickers() {
@@ -156,7 +265,15 @@ function syncPickers() {
   });
 }
 
+// The layout's own zoom and scroll events are not synced; afterwards, with the panes linked, the
+// other pane follows the focused one.
 function apply() {
+  syncing = true;
+  try { applyLayout(); } finally { syncing = false; }
+  if (split && together) alignFrom(split.focus);
+}
+
+function applyLayout() {
   const tabs = split.ids.map(getTab);
   if (tabs.some((t) => !t?.view)) { unsplit(); return; }
   // A tab leaving same-document mode keeps the view of the pane it stays in.
@@ -212,7 +329,10 @@ function onPaneFocus(e) {
   if (k < 0) return;
   const changedFocus = k !== split.focus;
   if (changedFocus) {
-    if (same()) viewer.swapViews(getTab(split.ids[0])); // the focused pane holds the tab's own view
+    if (same()) { // the focused pane holds the tab's own view
+      syncing = true;
+      try { viewer.swapViews(getTab(split.ids[0])); } finally { syncing = false; }
+    }
     split.focus = k;
     markFocus();
   }

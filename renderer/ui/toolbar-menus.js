@@ -6,7 +6,7 @@ import { state, activeTab } from '../state.js';
 import { addToolbarItem, dropdownButton } from './toolbar.js';
 import { selectionOf } from './pagetools.js';
 import { reduceDialog } from './compress.js';
-import { splitView } from './splitview.js';
+import { splitView, syncLabel } from './splitview.js';
 
 export function initToolbarMenus(app) {
   const P = app.pageTools;
@@ -47,6 +47,7 @@ export function initToolbarMenus(app) {
         ...others.map((t) => ({ id: `split-with-${t.id}`, label: `\u2003${t.name}`, action: () => splitView.open([state.activeId, t.id]) })),
         { id: 'split-choose', label: 'Choose documents\u2026', enabled: any, action: () => splitView.chooseDialog() },
         { separator: true },
+        { id: 'split-sync', label: syncLabel(), action: () => splitView.setTogether(!splitView.together) },
         s ? { id: 'split-orient', label: s.dir === 'v' ? 'Switch to horizontal (top / bottom)' : 'Switch to vertical (side by side)', action: () => splitView.split(s.dir === 'v' ? 'h' : 'v') }
           : { id: 'split-h', label: 'Split horizontally', enabled: any, action: () => splitView.split('h') },
         { id: 'unsplit', label: 'Close split', enabled: () => !!splitView.state, action: () => splitView.unsplit() },

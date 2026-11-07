@@ -1,6 +1,6 @@
 // Validation of one window's last-session state (pure, unit-tested in test/sessionState.test.js).
 // The renderer writes it (app:sessionUpdate) and session.json holds it, so both are untrusted:
-//   { files: [{ path, page }], active: path | null, split?: { dir, ratio, files: [pathA, pathB], focus } }
+//   { files: [{ path, page }], active: path | null, split?: { dir, ratio, files: [pathA, pathB], focus, sync? } }
 import { isAbsolute, resolve } from 'node:path';
 import { SPLIT_DIRS, clampRatio } from '../renderer/ui/splitview-lib.js';
 
@@ -13,7 +13,8 @@ export const pathKey = (p) => (process.platform === 'win32' ? resolve(p).toLower
 /**
  * One window's state, keeping only files whose path passes `accept` (no duplicates, page 1-based).
  * `split` is kept only when it is entirely valid and both its documents are among the kept files
- * (the same document twice is allowed); otherwise it is dropped and the rest kept.
+ * (the same document twice is allowed); otherwise it is dropped and the rest kept. Its optional `sync`
+ * ("Scroll and zoom together") is kept when it is a boolean.
  */
 export function cleanWindowState(v, accept) {
   if (!isPlainObject(v) || !Array.isArray(v.files)) return null;
@@ -34,5 +35,7 @@ function cleanSplit(s, kept) {
   if (!isPlainObject(s) || !SPLIT_DIRS.includes(s.dir) || typeof s.ratio !== 'number' || !Number.isFinite(s.ratio)
     || (s.focus !== 0 && s.focus !== 1) || !Array.isArray(s.files) || s.files.length !== 2
     || ![0, 1].every((i) => isPathString(s.files[i]) && kept.has(pathKey(s.files[i])))) return null; // by index: holes are invalid
-  return { dir: s.dir, ratio: clampRatio(s.ratio), files: [kept.get(pathKey(s.files[0])), kept.get(pathKey(s.files[1]))], focus: s.focus };
+  const out = { dir: s.dir, ratio: clampRatio(s.ratio), files: [kept.get(pathKey(s.files[0])), kept.get(pathKey(s.files[1]))], focus: s.focus };
+  if (typeof s.sync === 'boolean') out.sync = s.sync;
+  return out;
 }

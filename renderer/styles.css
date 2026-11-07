@@ -206,6 +206,9 @@ body.sidebar-closed .sidebar { display: none; }
 .viewer-scroll.pane-focused { box-shadow: inset 0 0 0 2px var(--brass); }
 .split-head { display: flex; align-items: center; min-width: 0; padding: 3px 8px; background: var(--surface); color: var(--muted); border-top: 2px solid transparent; border-bottom: 1px solid var(--line); }
 .split-head.focused { border-top-color: var(--brass); color: var(--text); }
+.split-sync { flex: none; display: inline-flex; align-items: center; margin-left: 6px; padding: 2px 4px; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 4px; cursor: pointer; opacity: .6; }
+.split-sync:hover { opacity: 1; border-color: var(--line); }
+.split-sync.on { opacity: 1; color: var(--brass); border-color: var(--brass); }
 .split-pick { min-width: 0; max-width: 100%; font: inherit; font-size: 12px; color: inherit; background: var(--surface-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; }
 .split-choose { display: grid; gap: 10px; min-width: 320px; }
 .split-choose-row { display: grid; grid-template-columns: 9em minmax(0, 1fr); align-items: center; gap: 8px; }

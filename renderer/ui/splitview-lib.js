@@ -62,3 +62,54 @@ export function closeTabIn({ ids, focus }, closedId, openIds, recent = []) {
   next[k] = pick;
   return { ids: next, focus };
 }
+
+// ---- "Scroll and zoom together": page-relative scroll sync between the two panes.
+// A pane's layout is {tops, heights, lefts, widths} (page boxes in its scroll content, CSS px) and
+// its client size; the two documents may differ in page sizes and page count, so the sync maps by
+// page index and fraction of the page, never by raw pixels.
+
+/**
+ * Where scroll offset `top` falls: {page, fy, gap}. Each page owns the space from halfway up the gap
+ * above it to halfway down the gap below it; fy is the fraction (0..1) of the page at `top`, gap the
+ * px above (< 0) or below (> 0) the page when `top` is in a gap. Before the first page: page 0.
+ */
+export function pageAt({ tops, heights }, top) {
+  let i = 0;
+  for (let k = 1; k < tops.length; k++) {
+    if (top >= (tops[k - 1] + heights[k - 1] + tops[k]) / 2) i = k;
+    else break;
+  }
+  const t = tops[i], hgt = heights[i];
+  if (top < t) return { page: i, fy: 0, gap: top - t };
+  if (top > t + hgt) return { page: i, fy: 1, gap: top - t - hgt };
+  return { page: i, fy: hgt > 0 ? (top - t) / hgt : 0, gap: 0 };
+}
+
+/**
+ * The scroll offset showing position {page, fy, gap} in layout `dst`. A page past the last one
+ * clamps to the end of the last page.
+ */
+export function topFor({ page, fy, gap }, { tops, heights }) {
+  const n = tops.length;
+  if (!n) return 0;
+  if (page > n - 1) return tops[n - 1] + heights[n - 1];
+  return tops[page] + fy * heights[page] + gap;
+}
+
+/**
+ * Sync pane `dst` to pane `src` (each {tops, heights, lefts, widths, clientWidth}; src also
+ * {scrollTop, scrollLeft}): {top, left, page} for dst. Vertically: the same page at the same fraction
+ * of its height at the top of the pane. Horizontally: the same fraction of the page width at the pane's
+ * centre line.
+ */
+export function syncScroll(src, dst) {
+  const pos = pageAt(src, src.scrollTop);
+  const top = topFor(pos, dst);
+  const i = pos.page, j = Math.min(pos.page, dst.tops.length - 1);
+  const fx = src.widths[i] > 0 ? (src.scrollLeft + src.clientWidth / 2 - src.lefts[i]) / src.widths[i] : 0.5;
+  const left = dst.lefts[j] + fx * dst.widths[j] - dst.clientWidth / 2;
+  return { top, left: Math.max(0, left), page: j };
+}
+
+/** The zoom to give the other pane: a fit mode is shared as the mode, a custom zoom as its factor. */
+export const zoomToSync = ({ zoomMode, zoom }) => (zoomMode === 'custom' ? zoom : zoomMode);
