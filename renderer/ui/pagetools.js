@@ -68,7 +68,13 @@ function commit(tab, bytes, map, select, restore = null, remove = null) {
 /** Push; returns the entry the cap dropped, if any. */
 function pushCapped(stack, entry) { stack.push(entry); return stack.length > UNDO_CAP ? stack.shift() : null; }
 /** Drop the oldest snapshots over the byte budget (both stacks); `keep` is the entry just pushed. */
-function trimToBudget(tab, keep) { enforceBudget(tab, snapshotBudget(tab.bytes?.byteLength ?? 0), keep); }
+function trimToBudget(tab, keep) {
+  const budget = budgetOverride ?? snapshotBudget(tab.bytes?.byteLength ?? 0);
+  if (enforceBudget(tab, budget, keep)) bus.emit('history:changed', { tab }); // the Undo/Redo buttons drop them too
+}
+let budgetOverride = null;
+/** Test hook: a fixed snapshot budget in bytes for every tab (null: the default rule). */
+export function setSnapshotBudget(bytes = null) { budgetOverride = Number.isFinite(bytes) && bytes >= 0 ? bytes : null; }
 /** Count `job` in `queued` until it settles. */
 function track(job) { queued++; job.finally(() => { queued--; }).catch(() => {}); return job; }
 
@@ -1257,5 +1263,5 @@ export function initPageTools(appApi) {
   item('Document', { id: 'flatten-annotations', label: 'Flatten annotations…', action: withTab(flattenAnnotationsDialog) });
   item('Document', { id: 'apply-redactions', label: 'Apply redactions…', action: withTab((t) => import('./redact.js').then((m) => m.applyRedactionsDialog(t))) },
     (t) => !!t.objects?.some((o) => o.type === 'redactMark'));
-  app.pageTools = { runOp, insertSources, insertFiles, insertFromFile, imagesAsPdf, undo, redo, undoAny, redoAny, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog };
+  app.pageTools = { runOp, insertSources, insertFiles, insertFromFile, imagesAsPdf, undo, redo, undoAny, redoAny, rotate, deletePages, insertBlank, duplicate, reorder, move, mergeDialog, splitDialog, cropDialog, propertiesDialog, imagesDialog, insertFromDialog, replaceDialog, flattenAnnotationsDialog, authorDialog, reverse, reverseDialog, resizeDialog, interleaveDialog, setSnapshotBudget };
 }
