@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { invertMap, droppedBy, restoreDropped, takeObjects, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan, clearBytesHistory } from '../renderer/ui/pagehistory-lib.js';
+import { invertMap, droppedBy, restoreDropped, takeObjects, swapObjs, newEntry, nextHistory, peekHistory, dropOlderThan, clearBytesHistory, enforceBudget, snapshotBudget } from '../renderer/ui/pagehistory-lib.js';
 
 const del3 = new Map([[0, 0], [1, 1], [2, null], [3, 2]]); // delete page 3 of 4
 
@@ -129,4 +129,41 @@ test('clearBytesHistory: drops the page entries and the annotation entries only 
   act(u, 'undo'); act(u, 'undo'); // a1 and p undone
   clearBytesHistory(u);
   assert.deepEqual([u.undo.map((e) => e.label), u.redo.length, u.bytesRedo.length], [['a0'], 0, 0]);
+});
+
+const MB = 1024 * 1024;
+const snap = (seq, mb) => ({ seq, bytes: { byteLength: mb * MB } });
+
+test('snapshotBudget: 3 x the file size, at least 256 MB', () => {
+  assert.equal(snapshotBudget(10 * MB), 256 * MB);
+  assert.equal(snapshotBudget(300 * MB), 900 * MB);
+});
+
+test('enforceBudget: a 300 MB file keeps 3 snapshots of 20, the oldest go first', () => {
+  const undo = Array.from({ length: 20 }, (_, i) => snap(i + 1, 300));
+  const tab = { bytesUndo: [...undo], bytesRedo: [], undo: [{ seq: 5.5 }, { seq: 18.5 }], redo: [] };
+  assert.equal(enforceBudget(tab, snapshotBudget(300 * MB), undo[19]), 17);
+  assert.deepEqual(tab.bytesUndo.map((e) => e.seq), [18, 19, 20]);
+  assert.deepEqual(tab.undo.map((e) => e.seq), [18.5], 'annotation entries older than a dropped page entry go too');
+});
+
+test('enforceBudget: within budget nothing goes; the most recent entry always stays', () => {
+  const tab = { bytesUndo: [snap(1, 50), snap(2, 50)], bytesRedo: [snap(3, 50)] };
+  assert.equal(enforceBudget(tab, 256 * MB), 0);
+  assert.equal(tab.bytesUndo.length + tab.bytesRedo.length, 3);
+  const big = snap(4, 400), solo = { bytesUndo: [big], bytesRedo: [] };
+  assert.equal(enforceBudget(solo, 256 * MB, big), 0, 'one snapshot over the budget is kept');
+  assert.deepEqual(solo.bytesUndo, [big]);
+});
+
+test('enforceBudget: redo snapshots count; after the undo entries, the furthest redo goes first', () => {
+  // three undos of a 200 MB file: redo stack bottom = furthest from now (seq 3), top = next redo (seq 1)
+  const r3 = snap(3, 200), r2 = snap(2, 200), r1 = snap(1, 200);
+  const tab = { bytesUndo: [], bytesRedo: [r3, r2, r1], undo: [], redo: [{ seq: 3.5 }, { seq: 2.5 }, { seq: 1.5 }] };
+  assert.equal(enforceBudget(tab, snapshotBudget(150 * MB), r1), 1);
+  assert.deepEqual(tab.bytesRedo, [r2, r1]);
+  assert.deepEqual(tab.redo.map((e) => e.seq), [2.5, 1.5], 'annotation redo entries after the dropped page entry go too');
+  const mixed = { bytesUndo: [snap(1, 200)], bytesRedo: [snap(3, 200), snap(2, 200)] };
+  enforceBudget(mixed, 400 * MB, mixed.bytesRedo[1]);
+  assert.deepEqual([mixed.bytesUndo.length, mixed.bytesRedo.map((e) => e.seq)], [0, [3, 2]], 'undo entries go before redo entries');
 });

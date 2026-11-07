@@ -3,7 +3,7 @@ id: save-and-print
 title: Save and print
 section: Getting started
 order: 70
-keywords: save, save as, print, signed, signature, unsaved changes, read-only, encrypted, copies, page range
+keywords: save, save as, changed on disk, overwrite, print, signed, signature, unsaved changes, read-only, encrypted, copies, page range
 ---
 
 # Save and print
@@ -15,12 +15,16 @@ keywords: save, save as, print, signed, signature, unsaved changes, read-only, e
 
 To keep the original, use **Save as…** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>S</kbd>) and choose a new name. [Show me](#showme:btn:saveas) A document that has no file yet always asks for a name. If the original sits in a folder the app may not write to, Save falls back to Save As.
 
+If the file was changed by someone else since you opened or last saved it in this tab (another program, a colleague on a shared folder, or the same file saved from another tab or window), Save asks first: **Overwrite** replaces their version with yours, **Save as a copy…** keeps both, and **Cancel** writes nothing. Reading the file for Advanced search or to insert its pages does not count as opening it, so the question still comes.
+
+The check compares the file's modification time and size, so a file on a FAT-formatted USB stick may show this question after a daylight-saving time change even though nobody changed it.
+
 ## Signed documents
 
 Saving over a digitally signed file can break its signature.
 
-- If you only added annotations, the app appends them as an update and shows **Saved as an update; the signature is kept**.
-- If a full rewrite is needed (after a page operation, or for a document certified against changes), a dialog asks first. Choose **Save as a copy…** to keep the signed original, **Overwrite original** to accept the loss of the signature, or **Cancel**.
+- If you only added annotations, the app appends them as an update and shows **Saved as an update; the signature is kept**. **Save as…** does the same for the new copy, so the copy is still validly signed.
+- If a full rewrite is needed (after a page operation, or for a document certified against changes), a dialog asks first. Choose **Save as a copy…** to keep the signed original (the copy is written in full, so its signature is not valid), **Overwrite original** to accept the loss of the signature, or **Cancel**. **Save as…** after such a change writes the copy in full without asking.
 
 ## Closing with unsaved changes
 

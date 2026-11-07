@@ -124,6 +124,14 @@ try {
   check(await ev('return await app.saveTab(tab, true);'), 'saveTab returned false');
   const out = Buffer.from(await ev('return Array.from(await window.api.readFile(tab.path));'));
   eq(await annotCounts(out), [0, 1, 0], 'annotations per page in the saved file');
+
+  step = '(d) snapshot budget: entries over it are dropped and the Undo/Redo controls are told';
+  await open('four.pdf', four, 4);
+  await ev('window.__hist = 0; window.__histOff = app.bus.on("history:changed", () => { window.__hist++; }); pt.setSnapshotBudget(1);');
+  for (let k = 0; k < 3; k++) await ev('await pt.rotate(tab, [0], 90);');
+  eq(await ev('return tab.bytesUndo.length;'), 1, 'one page undo entry kept within a 1-byte budget');
+  check((await ev('return window.__hist;')) >= 2, 'history:changed after the entries were dropped');
+  await ev('pt.setSnapshotBudget(null); window.__histOff();');
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {

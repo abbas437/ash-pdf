@@ -2,7 +2,8 @@
 // End-to-end test of the incremental save of a signed PDF (renderer/app.js saveTab + core
 // appendIncrementalUpdate) in Chromium via playwright-core, served over HTTP with the browser shim.
 // Annotation-only changes on a signed original are appended as an update without the overwrite
-// warning, also on an object-stream original (new objects numbered from its /Size); a page rotation still asks. Prints "SIGNED-SAVE OK".
+// warning, also on an object-stream original (new objects numbered from its /Size); a page rotation still asks. Save As of an annotation-only change writes the copy as an update too
+// (still signed); Save As after a page change writes it in full. Prints "SIGNED-SAVE OK".
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
@@ -101,6 +102,29 @@ try {
   const objstmSaved = await fileBytes();
   check(isPrefix(objstmOriginal, objstmSaved), 'object-stream original is a prefix');
   checkAppendedXref(objstmOriginal, objstmSaved);
+
+  step = 'Save As with a new annotation: the copy is an appended update and still signed';
+  await ev('an.add(tab, { type: "highlight", page: 0, x: 40, y: 200, w: 120, h: 14, color: "#00ff00" });');
+  await page.click('#btn-saveas');
+  await clean();
+  eq(await dialogCount(), 0, 'no overwrite warning for Save As of an annotation-only change');
+  await toastSeen(/Saved as an update; the signature is kept/);
+  const copyPath = await ev('return tab.path;');
+  check(copyPath !== signedPath && /signed-objstm\.pdf$/.test(copyPath), `Save As wrote a new file (${copyPath})`);
+  const copy = await fileBytes();
+  check(isPrefix(objstmSaved, copy), 'the copy starts with the signed bytes (incremental append)');
+  checkAppendedXref(objstmSaved, copy);
+  check(await ev('const c = await import("/src/core/index.js"); return (await c.detectSignatures(await window.api.readFile(tab.path))).signed;'), 'detectSignatures still sees the signature in the copy');
+  eq(await ev('return tab.signedPath === tab.path;'), true, 'the copy is treated as signed for the next save');
+
+  step = 'rotate + Save As: full copy, no warning';
+  await ev('await pt.rotate(tab, [0], 90);');
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return t?.dirty; }, null, { timeout: 10_000 });
+  await page.click('#btn-saveas');
+  await clean();
+  eq(await dialogCount(), 0, 'no signed warning for Save As of a page change');
+  const rotated = await fileBytes();
+  check(!isPrefix(copy, rotated), 'a page change is written in full');
 } catch (err) {
   problems.push(`[${step}] ${err.message.split('\n')[0]}`);
 } finally {

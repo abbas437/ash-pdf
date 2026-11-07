@@ -25,7 +25,7 @@ The menu items and the button tooltips name the step, for example "Undo" followe
 
 Rotating, deleting, inserting, reordering and similar page changes are undoable too. After each one a message appears with an **Undo** button. It stays for a few seconds, and only works while that change is still the newest. Annotations on deleted pages come back with the undo.
 
-The app remembers the last 20 page operations per document. Edit ▸ Undo steps through annotation and page changes in the order you made them.
+The app remembers the last 20 page operations per document. Each one keeps a copy of the document as it was, so for a large file it keeps fewer: the copies together stay within three times the file size (at least 256 MB), and the oldest steps are forgotten first. The most recent step can always be undone. Edit ▸ Undo steps through annotation and page changes in the order you made them.
 
 > **Important:** Applying redactions, then saving, clears the earlier page history, because it still holds the content that was removed. Keep a copy first if you may need it.
 
