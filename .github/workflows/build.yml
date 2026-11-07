@@ -128,6 +128,33 @@ jobs:
           fi
           exit $code
 
+  e2e:
+    # End-to-end tests: the browser suites (Chromium through playwright-core) and the Electron tests, which
+    # npm test does not run. See scripts/e2e-all.mjs. Like smoke, a failure marks the run red without
+    # blocking the release job.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run vendor
+      - name: Chromium for playwright-core
+        run: |
+          npx playwright-core install --with-deps chromium
+          echo "CHROMIUM_PATH=$(node -e "console.log(require('playwright-core').chromium.executablePath())")" >> "$GITHUB_ENV"
+      - name: Browser e2e
+        run: CHROME_PATH="$CHROMIUM_PATH" node scripts/e2e-all.mjs
+      - name: Electron e2e
+        if: success() || failure()
+        run: |
+          sudo apt-get install -y --no-install-recommends xvfb
+          # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's sandbox needs
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          xvfb-run -a node scripts/e2e-all.mjs --electron
+
   tidy:
     # after a manual pre-release build, retitle the older test builds as superseded
     needs: windows
