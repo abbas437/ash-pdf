@@ -32,6 +32,7 @@ const PAD = 2; // points between a region's ink bounds and its rectangle
 const LEGEND = { margin: 6, pad: 4, size: 7.5, lead: 10, swatch: 7 };
 const PHRASES = 3; // phrases quoted per side in a region's /Contents
 const PHRASE_LEN = 60;
+const ERROR_LEN = 120; // characters of a failure reason kept on the legend
 
 /** 'removed' when removed >= 2 x added, 'added' when added >= 2 x removed, else 'mixed'. */
 export function changeKind({ added = 0, removed = 0 }) {
@@ -58,8 +59,8 @@ const showDate = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.g
 
 function checkPage(p, i) {
   if (!p || !(p.width > 0) || !(p.height > 0) || !Number.isFinite(p.width) || !Number.isFinite(p.height)) throw new RangeError(`pages[${i}]: width and height must be positive numbers`);
-  if (!p.image || !(p.image.bytes instanceof Uint8Array) || !['png', 'jpeg', 'jpg'].includes(p.image.type)) throw new TypeError(`pages[${i}].image must be {bytes: Uint8Array, type: 'png' | 'jpeg'}`);
-  if (p.status !== undefined && !['compared', 'added', 'removed'].includes(p.status)) throw new RangeError(`pages[${i}].status must be 'compared', 'added' or 'removed'`);
+  if (p.status !== 'error' && (!p.image || !(p.image.bytes instanceof Uint8Array) || !['png', 'jpeg', 'jpg'].includes(p.image.type))) throw new TypeError(`pages[${i}].image must be {bytes: Uint8Array, type: 'png' | 'jpeg'}`);
+  if (p.status !== undefined && !['compared', 'added', 'removed', 'error'].includes(p.status)) throw new RangeError(`pages[${i}].status must be 'compared', 'added', 'removed' or 'error'`);
   if (p.regions !== undefined && !Array.isArray(p.regions)) throw new TypeError(`pages[${i}].regions must be an array`);
 }
 
@@ -196,7 +197,7 @@ function writeOutline(doc, items) {
 /**
  * Build the compare overlay PDF.
  * pages[i] = {width, height (points), image: {bytes, type: 'png'|'jpeg'}, regions?: [{x, y, w, h, added,
- *   removed}] (top-left points; added/removed = changed pixel counts), status?: 'compared'|'added'|'removed',
+ *   removed}] (top-left points; added/removed = changed pixel counts), status?: 'compared'|'added'|'removed'|'error' (error: no image needed; `error` = short reason, the page is blank with the legend and a note),
  *   textChanges?: {added: [{text, box: {x, y, w, h}}], removed: [...]} (boxes in the same frame as regions),
  *   newerPage?, olderPage? (1-based source page numbers: legend line "Page 5 of <newer>" and bookmark names)}
  * meta = {older: {name}, newer: {name}, date?: Date | ISO string (default now)}
@@ -220,6 +221,13 @@ export async function buildCompareReport(pages, meta = {}) {
     const p = pages[i];
     const pw = p.width, ph = p.height;
     const page = doc.addPage([pw, ph]);
+    if (p.status === 'error') {
+      // A page that could not be compared: blank, with the legend and the reason only.
+      const reason = clip(oneLine(sanitizeText(p.error)) || 'unknown error', ERROR_LEN);
+      drawLegend(page, fonts, { ...legendNames, notes: [`${sourceLabel(p, i)} could not be compared: ${reason}`] });
+      outline.push([`${sourceLabel(p, i)} – not compared`, page.ref]);
+      continue;
+    }
     const img = p.image.type === 'png' ? await doc.embedPng(p.image.bytes) : await doc.embedJpg(p.image.bytes);
     page.drawImage(img, { x: 0, y: 0, width: pw, height: ph });
 

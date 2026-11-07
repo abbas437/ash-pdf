@@ -202,3 +202,19 @@ test('bad input is rejected at the boundary', async () => {
   await assert.rejects(buildCompareReport([page({ width: 0 })], META), RangeError);
   await assert.rejects(buildCompareReport([page({ image: { bytes: PNG, type: 'gif' } })], META), TypeError);
 });
+
+test("an 'error' page needs no image: blank page of the given size, legend and note, bookmark", async () => {
+  const bytes = await buildCompareReport([page(), { width: 200, height: 300, status: 'error', error: 'Render failed\non  page', newerPage: 2, olderPage: 2 }], META);
+  const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+  assert.equal(doc.getPageCount(), 2);
+  assert.deepEqual(doc.getPage(1).getSize(), { width: 200, height: 300 });
+  assert.equal((await annotsOf(bytes, 1)).list.length, 0);
+  const pdf = await pdfjsDoc(bytes);
+  const items = (await (await pdf.getPage(2)).getTextContent()).items.map((x) => x.str).join(' ');
+  assert.match(items, /Page 2 could not be compared: Render failed on page/);
+  assert.match(items, /Compare:/);
+  const outline = await pdf.getOutline();
+  assert.deepEqual(outline.map((o) => o.title), ['Page 2 – not compared']);
+  await assert.rejects(buildCompareReport([page({ status: 'bogus' })], META), RangeError);
+  await assert.rejects(buildCompareReport([{ width: 10, height: 10, status: 'compared' }], META), TypeError);
+});

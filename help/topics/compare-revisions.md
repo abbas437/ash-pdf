@@ -34,6 +34,10 @@ On each page of the result:
 
 Each changed area has a **dashed rectangle** round it with a short note, such as "Change 1: added" or "Change 2: added and removed", plus the words that changed inside it. Point at a rectangle, or open it, to read its note. A legend in the corner names the two revisions, the date of the compare and the page compared (for example, "Page 5 of Rev.01"), and the **Bookmarks** list each page with changes by that page number.
 
+## Pages that cannot be compared
+
+If one page cannot be compared (for example, it cannot be drawn), it is skipped and the compare carries on with the others. In the result that page is blank, with the legend and a note "Page 5 could not be compared" and the reason, and it has a bookmark "Page 5 – not compared". The Differences panel, **Copy list** and **Export CSV** list it as "Page 5 – not compared" with the reason. If no page can be compared, no result is opened and a message lists the pages and the first reason. Cancel always stops the compare, with or without such pages.
+
 ## The Differences panel
 
 The **Differences** panel opens in the sidebar with the result. It lists each page with changes by its page number in the revisions (with **Pages** set to `5-7`, the first is **Page 5**; if the older revision's page number differs, it is shown too, as in **Page 5 (older 4)**), then its areas (**Change 1**, **Change 2**, …) and its text changes (**+** added, **−** removed).
@@ -51,6 +55,6 @@ The result is an ordinary PDF. Save, print or send it like any other document (s
 
 - Pages are compared **in order**: page 1 with page 1, page 2 with page 2, and so on. If a sheet was inserted or deleted, the pages after it are compared with the wrong partner; use **Pages** to compare a part of the set.
 - Pages beyond the end of the shorter revision are shown as **added** (only in the newer revision) or **removed** (only in the older one).
-- The pages are compared as pictures at the chosen quality. Very fine changes, such as a small digit in a dimension, may need **200 dpi**.
+- The pages are compared as pictures at the chosen quality. Very fine changes, such as a small digit in a dimension, may need **200 dpi**. Very small marks such as a decimal point are caught most reliably at 200 dpi or through the text list.
 - Text changes come from the text stored in the PDF. A scanned page has none unless it has been through [Recognise text (OCR)](#topic:ocr).
 - When you reopen a saved compare PDF, the Differences panel lists its marked areas. The text list and **Side by side** work only in the session that made the compare; run it again to get them back.

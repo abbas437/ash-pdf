@@ -68,3 +68,11 @@ test('a page range: labels, Copy list and CSV use the source page numbers, not t
   const csv = diffCsv(ranged).split('\r\n');
   assert.deepEqual(csv.slice(1, 5), ['5,5,area,Change 1: added,', "5,5,text added,'+ DN150,DN150", '6,4,area,Change 1: added,', ',7,page,Page only in the older revision,']);
 });
+
+test("an 'error' page is listed as not compared in the summary, rows, CSV and text", () => {
+  const pages = [{ index: 1, olderPage: 2, newerPage: 2, status: 'error', error: 'Render failed', regions: [], text: { added: [], removed: [] } }];
+  assert.equal(pageSummary(pages[0]), 'Page 2 – not compared (Render failed)');
+  assert.deepEqual(diffRows(pages), [[2, 2, 'page', 'Page 2 – not compared (Render failed)', '']]);
+  assert.ok(diffCsv(pages).includes('Page 2 – not compared (Render failed)'));
+  assert.equal(diffText(pages), 'Page 2 – not compared (Render failed)');
+});

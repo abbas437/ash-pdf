@@ -27,6 +27,11 @@ const BROWSE = '__browse__';
 let app = null;
 
 const nextFrame = () => new Promise((r) => setTimeout(r, 0));
+/** A short, single-line reason for a page that failed: no stack, no control characters, at most 100 characters. */
+const errorReason = (err) => {
+  const t = String(err?.message ?? err ?? '').replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim() || 'unknown error';
+  return t.length > 100 ? `${t.slice(0, 99)}…` : t;
+};
 const release = (c) => { c.width = 0; c.height = 0; };
 const baseName = (n) => String(n ?? '').replace(/\.pdf$/i, '');
 
@@ -81,40 +86,58 @@ export async function compareRevisions(older, newer, opts = {}) {
       prog.set(`Comparing page ${k + 1} of ${pairs.length}…`);
       await nextFrame();
       const ref = p.newer !== null ? newer : older, ri = p.newer ?? p.older;
-      const v = ref.pages[ri].getViewport({ scale: 1 });
-      const scale = renderScale(v.width, v.height, o.dpi);
-      const W = Math.max(1, Math.round(v.width * scale)), H = Math.max(1, Math.round(v.height * scale));
       // index: the output page in the compare document; olderPage / newerPage: the 1-based source pages (null: none).
       const res = { index: k, older: p.older, newer: p.newer, olderPage: p.older === null ? null : p.older + 1, newerPage: p.newer === null ? null : p.newer + 1, regions: [], text: { added: [], removed: [] }, stats: null, shift: { dx: 0, dy: 0 }, scaled: false, capped: false };
-      let composite;
-      if (p.older !== null && p.newer !== null) {
-        const b = await draw(newer, p.newer, W, H);
-        const a = await draw(older, p.older, W, H);
-        release(a.canvas); release(b.canvas);
-        res.scaled = Math.abs(a.v1.width - v.width) > 0.5 || Math.abs(a.v1.height - v.height) > 0.5;
-        const cmp = comparePages(a.rgba, b.rgba, W, H, { align: o.align });
-        composite = cmp.composite;
-        Object.assign(res, { regions: regionsToPoints(cmp.regions, scale), stats: cmp.stats, capped: cmp.capped,
-          shift: { dx: cmp.shift.dx / scale, dy: cmp.shift.dy / scale } });
-        res.status = 'compared';
-        if (o.text) {
-          const k2 = a.fit / scale; // older points -> newer points when the older page was scaled to fit
-          const ow = (await words(older, p.older)).map((w) => ({ ...w, box: { x: w.box.x * k2, y: w.box.y * k2, w: w.box.w * k2, h: w.box.h * k2 } }));
-          const d = diffWords(ow, await words(newer, p.newer), { shiftPt: res.shift });
-          res.text = { added: d.added, removed: d.removed };
+      let size = { width: 595.28, height: 841.89 }; // used for a failed page whose own size is unknown
+      try {
+        const v = ref.pages[ri].getViewport({ scale: 1 });
+        size = { width: v.width, height: v.height };
+        if (window.__compareFailPage === ri + 1) throw new Error('Test failure: page render failed'); // e2e hook (test/e2e/comparerev.mjs)
+        const scale = renderScale(v.width, v.height, o.dpi);
+        const W = Math.max(1, Math.round(v.width * scale)), H = Math.max(1, Math.round(v.height * scale));
+        let composite;
+        if (p.older !== null && p.newer !== null) {
+          const b = await draw(newer, p.newer, W, H);
+          const a = await draw(older, p.older, W, H);
+          release(a.canvas); release(b.canvas);
+          res.scaled = Math.abs(a.v1.width - v.width) > 0.5 || Math.abs(a.v1.height - v.height) > 0.5;
+          const cmp = comparePages(a.rgba, b.rgba, W, H, { align: o.align });
+          composite = cmp.composite;
+          Object.assign(res, { regions: regionsToPoints(cmp.regions, scale), stats: cmp.stats, capped: cmp.capped,
+            shift: { dx: cmp.shift.dx / scale, dy: cmp.shift.dy / scale } });
+          res.status = 'compared';
+          if (o.text) {
+            const k2 = a.fit / scale; // older points -> newer points when the older page was scaled to fit
+            const ow = (await words(older, p.older)).map((w) => ({ ...w, box: { x: w.box.x * k2, y: w.box.y * k2, w: w.box.w * k2, h: w.box.h * k2 } }));
+            const d = diffWords(ow, await words(newer, p.newer), { shiftPt: res.shift });
+            res.text = { added: d.added, removed: d.removed };
+          }
+        } else {
+          const one = await draw(ref, ri, W, H);
+          release(one.canvas);
+          composite = onlyPage(one.rgba, W, H, p.newer !== null ? 'newer' : 'older');
+          res.status = p.newer !== null ? 'added' : 'removed';
         }
-      } else {
-        const one = await draw(ref, ri, W, H);
-        release(one.canvas);
-        composite = onlyPage(one.rgba, W, H, p.newer !== null ? 'newer' : 'older');
-        res.status = p.newer !== null ? 'added' : 'removed';
+        if (prog.isCancelled()) return null;
+        const image = await encode(composite, W, H);
+        out.push({ width: v.width, height: v.height, image, regions: res.regions, status: res.status, textChanges: res.text, olderPage: res.olderPage, newerPage: res.newerPage });
+      } catch (err) {
+        if (err === CANCELLED || prog.isCancelled()) return null; // Cancel wins over errors
+        // Skip this page, keep going: the report gets a blank page with the reason.
+        const reason = errorReason(err);
+        console.warn(`[compare] page ${res.newerPage ?? res.olderPage} not compared: ${err?.message ?? err}`);
+        Object.assign(res, { status: 'error', error: reason, regions: [], text: { added: [], removed: [] }, stats: null, shift: { dx: 0, dy: 0 }, scaled: false, capped: false });
+        out.push({ ...size, status: 'error', error: reason, olderPage: res.olderPage, newerPage: res.newerPage });
       }
-      if (prog.isCancelled()) return null;
-      const image = await encode(composite, W, H);
-      out.push({ width: v.width, height: v.height, image, regions: res.regions, status: res.status, textChanges: res.text, olderPage: res.olderPage, newerPage: res.newerPage });
       results.push(res);
     }
     if (prog.isCancelled() || !out.length) return null;
+    const failed = results.filter((r) => r.status === 'error');
+    if (failed.length === results.length) {
+      const nums = failed.map((r) => r.newerPage ?? r.olderPage);
+      await showError('Could not compare the revisions', new Error(`No page could be compared (page${nums.length === 1 ? '' : 's'} ${nums.join(', ')}). ${failed[0].error}`));
+      return null;
+    }
     prog.set('Building the compare document…');
     const { buildCompareReport } = await import('../../src/core/index.js');
     const bytes = await buildCompareReport(out, { older: { name: older.name }, newer: { name: newer.name }, date: new Date() });
@@ -127,8 +150,9 @@ export async function compareRevisions(older, newer, opts = {}) {
     showSidebarTab(TAB);
     if (!state.sidebarOpen) state.sidebarOpen = true;
     refreshSidebarTab(TAB);
-    const changed = results.filter(hasChanges).length;
-    toast(changed ? `${changed} page${changed === 1 ? '' : 's'} with differences` : 'No differences found');
+    const changed = results.filter((r) => hasChanges(r) && r.status !== 'error').length;
+    const skipped = failed.length ? `; ${failed.length} not compared` : '';
+    toast((changed ? `${changed} page${changed === 1 ? '' : 's'} with differences` : 'No differences found') + skipped);
     return tab;
   } catch (err) {
     if (err !== CANCELLED) showError('Could not compare the revisions', err);
@@ -200,6 +224,20 @@ export async function compareDialog() {
 
 // ---------------------------------------------------------------- Differences panel
 
+/**
+ * One compare mark read from its /Contents (see compareReport.js): "Change 3: added" / "removed" / "added and
+ * removed" for an area, "Change 4: text added" / "text removed" plus a `Text: "…"` line for a text phrase.
+ * Returns {area: kind} or {text: side, phrase}, or null for a note in another wording.
+ */
+function parseMark(note) {
+  const lines = String(note ?? '').split('\n');
+  const m = /^Change \d+: (text )?(added and removed|added|removed)\s*$/.exec(lines[0].trim());
+  if (!m) return null;
+  if (!m[1]) return { area: m[2] };
+  const t = lines.slice(1).find((l) => l.startsWith('Text: '));
+  return { text: m[2], phrase: t ? t.slice(6).replace(/^"|"$/g, '') : '' };
+}
+
 /** A basic list from a saved compare PDF: its /T "Compare" squares (session results are richer). */
 function fromAnnotations(tab) {
   const objs = (tab.objects ?? []).filter((o) => o.author === 'Compare');
@@ -207,7 +245,17 @@ function fromAnnotations(tab) {
   const pages = new Map();
   for (const o of objs) {
     const p = pages.get(o.page) ?? { index: o.page, status: 'compared', regions: [], text: { added: [], removed: [] }, notes: [] };
-    p.notes.push({ text: String(o.note ?? '').split('\n')[0], id: o.id });
+    const first = String(o.note ?? '').split('\n')[0];
+    const mark = parseMark(o.note);
+    if (mark?.text) {
+      p.text[mark.text].push({ text: mark.phrase });
+      p.notes.push({ text: `${mark.text === 'added' ? '+' : '−'} ${mark.phrase}`, id: o.id });
+    } else {
+      // regionKind() reads added / removed pixel counts: 1 / 0, 0 / 1 or 1 / 1 stand for the kind.
+      const kind = mark?.area;
+      p.regions.push({ added: kind === 'removed' ? 0 : 1, removed: kind === 'added' ? 0 : 1 });
+      p.notes.push({ text: first, id: o.id });
+    }
     pages.set(o.page, p);
   }
   return [...pages.values()].sort((a, b) => a.index - b.index);
@@ -286,7 +334,7 @@ function render(container, tab) {
       for (const n of p.notes) list.append(item(n.text || 'Change', () => { viewer.scrollToPage(tab, p.index); app.annotations?.select(tab, [n.id]); }));
     }
   }
-  const pages = live ?? saved.map((p) => ({ ...p, regions: p.notes.map(() => ({})) }));
+  const pages = live ?? saved;
   const bar = h('div.cm-toolbar', {},
     h('button.btn.cmp-copy', { type: 'button', onclick: () => copyList(pages) }, 'Copy list'),
     h('button.btn.cmp-csv', { type: 'button', onclick: () => exportCsv(tab, pages) }, 'Export CSV'));

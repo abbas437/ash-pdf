@@ -73,6 +73,7 @@ const num = (v) => v ?? '';
 
 /** "Page 3 — 4 areas, text: +2 / −1" (see pageLabel for the page). */
 export function pageSummary(p) {
+  if (p.status === 'error') return `${pageLabel(p)} – not compared (${p.error || 'unknown error'})`;
   const head = `${pageLabel(p)} — `;
   if (p.status === 'added') return `${head}only in the newer revision`;
   if (p.status === 'removed') return `${head}only in the older revision`;
@@ -94,7 +95,8 @@ export function diffRows(pages) {
   for (const p of pages.filter(hasChanges)) {
     const known = p.newerPage != null || p.olderPage != null;
     const pg = known ? [num(p.newerPage), num(p.olderPage)] : [p.index + 1, p.index + 1];
-    if (p.status !== 'compared') rows.push([...pg, 'page', p.status === 'added' ? 'Page only in the newer revision' : 'Page only in the older revision', '']);
+    if (p.status === 'error') rows.push([...pg, 'page', pageSummary(p), '']);
+    else if (p.status !== 'compared') rows.push([...pg, 'page', p.status === 'added' ? 'Page only in the newer revision' : 'Page only in the older revision', '']);
     p.regions.forEach((r, k) => rows.push([...pg, 'area', `Change ${k + 1}: ${KIND(r)}`, '']));
     for (const t of p.text.added) rows.push([...pg, 'text added', `+ ${t.text}`, t.text]);
     for (const t of p.text.removed) rows.push([...pg, 'text removed', `− ${t.text}`, t.text]);

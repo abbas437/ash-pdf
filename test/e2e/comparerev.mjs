@@ -133,7 +133,28 @@ try {
   const heads = reopened.filter((s) => / — [0-9]+ marks?$/.test(s));
   check(heads[0]?.startsWith('Page 2 — ') && reopened.length - heads.length === marks && reopened.filter((s) => /^Change [0-9]+: added$/.test(s)).length >= 1, `reopened: ${JSON.stringify(reopened)} (${marks} marks)`);
   await page.click('.cmp-copy');
-  await page.waitForFunction(() => /^Page 2 — /.test(window.__ashShim.clipboardText()) && !window.__ashShim.clipboardText().includes('DN150'));
+  check(reopened.includes('Change 1: added and removed') && reopened.includes('Change 2: added') && reopened.includes('+ DN150') && reopened.includes('− DN100'), `reopened kinds / text: ${JSON.stringify(reopened)}`);
+  await page.waitForFunction(() => /^Page 2 — 2 areas, text: \+1 \/ −1\n  Change 1: added and removed\n  Change 2: added\n  \+ DN150\n  − DN100$/.test(window.__ashShim.clipboardText()), null, { timeout: 5000 });
+  step = 'a reopened compare PDF: area kinds and text changes come from the marks';
+  const synth = await page.evaluate(async () => {
+    const { buildCompareReport } = await import('/src/core/index.js');
+    const c = document.createElement('canvas'); c.width = 60; c.height = 80;
+    const png = new Uint8Array(await (await new Promise((r) => c.toBlob(r, 'image/png'))).arrayBuffer());
+    const bytes = await buildCompareReport([{ width: 300, height: 400, image: { bytes: png, type: 'png' }, status: 'compared',
+      regions: [{ x: 20, y: 40, w: 40, h: 20, added: 30, removed: 0 }, { x: 20, y: 100, w: 40, h: 20, added: 0, removed: 30 }, { x: 20, y: 160, w: 40, h: 20, added: 10, removed: 10 }],
+      textChanges: { added: [{ text: 'LOOSE NEW', box: { x: 150, y: 300, w: 60, h: 10 } }], removed: [{ text: 'LOOSE OLD', box: { x: 150, y: 330, w: 60, h: 10 } }] } }],
+    { older: { name: 'a.pdf' }, newer: { name: 'b.pdf' }, date: new Date() });
+    return [...bytes];
+  });
+  await openFile('Compare synthetic.pdf', Buffer.from(synth));
+  await page.waitForFunction(() => window.ashStudio.state.tabs.find((t) => t.name === 'Compare synthetic.pdf')?.id === window.ashStudio.state.activeId);
+  await page.waitForFunction(() => [...document.querySelectorAll('.cmp-item')].some((e) => e.textContent === '+ LOOSE NEW'));
+  const synthItems = await page.$$eval('.cmp-item', (els) => els.map((e) => e.textContent));
+  check(synthItems.filter((s) => /^Change [0-9]+: /.test(s)).join('|') === 'Change 1: added|Change 2: removed|Change 3: added and removed'
+    && synthItems.includes('+ LOOSE NEW') && synthItems.includes('− LOOSE OLD') && synthItems.some((s) => / — 5 marks$/.test(s)), `synthetic reopened: ${JSON.stringify(synthItems)}`);
+  await page.click('.cmp-copy');
+  await page.waitForFunction(() => { const t = window.__ashShim.clipboardText(); return /Change 1: added\n/.test(t) && /Change 2: removed\n/.test(t) && /Change 3: added and removed/.test(t) && t.includes('+ LOOSE NEW') && t.includes('− LOOSE OLD') && /Page 1 — 3 areas, text: \+1 \/ −1/.test(t); });
+  await page.evaluate(() => window.ashStudio.activate(window.ashStudio.state.tabs.find((x) => x.compare).id));
   step = 'pages "2-3": the panel, CSV, bookmarks and Side by side use the source page numbers';
   await page.evaluate(async () => {
     const { parseRanges } = await import('/src/core/pdfOps.js');
@@ -158,6 +179,23 @@ try {
   await page.waitForFunction(() => ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].every((n) => window.ashStudio.state.tabs.find((t) => t.name === n).currentPage === 1), null, { timeout: 5000 })
     .catch(async () => { throw new Error(`Side by side pages: ${await page.evaluate(() => JSON.stringify(window.ashStudio.state.tabs.map((t) => [t.name, t.currentPage])))}`); });
   await page.evaluate(async () => (await import('./ui/splitview.js')).splitView.unsplit());
+  step = 'a page that fails is skipped: the run completes, the panel and report say "not compared"';
+  await page.evaluate(() => { window.__compareFailPage = 2; });
+  await page.evaluate(() => {
+    const [a, b] = ['PS-001 Rev.00.pdf', 'PS-001 Rev.01.pdf'].map((n) => window.ashStudio.state.tabs.find((t) => t.name === n));
+    return window.ashStudio.compareRevisions.compareRevisions(a, b, {});
+  });
+  await page.evaluate(() => { window.__compareFailPage = undefined; });
+  const failed = await page.evaluate(async () => {
+    const t = window.ashStudio.state.tabs.at(-1), lib = await import('./ui/comparerev-lib.js');
+    const outline = await t.pdfDoc.getOutline();
+    return { n: t.numPages, active: window.ashStudio.state.activeId === t.id, status: t.compare.pages.map((p) => p.status), csv: lib.diffCsv(t.compare.pages), text: lib.diffText(t.compare.pages),
+      marks: (outline ?? []).map((o) => o.title), note: (await t.pages[1].getTextContent()).items.map((x) => x.str).join(' '), dlg: !!document.querySelector('.dialog.error') };
+  });
+  check(failed.n === 4 && failed.active && failed.status.join() === 'compared,error,compared,added' && !failed.dlg, `failed run: ${JSON.stringify(failed)}`);
+  check(/Page 2 could not be compared: /.test(failed.note) && failed.marks.includes('Page 2 – not compared'), `failed report: ${JSON.stringify(failed)}`);
+  check(/Page 2 – not compared \(/.test(failed.text) && /,page,Page 2 – not compared \(/.test(failed.csv), `failed list: ${failed.text}`);
+  await page.waitForFunction(() => [...document.querySelectorAll('.cmp-page-head')].some((e) => /^Page 2 – not compared \(.+\)$/.test(e.textContent)), null, { timeout: 5000 });
   step = 'Cancel midway on a larger set leaves no new tab';
   const before = await page.evaluate(() => window.ashStudio.state.tabs.length);
   await page.evaluate(() => {

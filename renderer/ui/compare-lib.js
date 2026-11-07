@@ -34,7 +34,7 @@
 // popcount). Ties go to the smaller shift, so an unshifted page stays at (0, 0).
 
 export const DEFAULTS = Object.freeze({
-  inkThreshold: 200, chroma: 48, tolerancePx: 1, minArea: 8, mergeGap: 16, cell: 4, maxRegions: 500,
+  inkThreshold: 200, chroma: 48, tolerancePx: 1, minArea: 4, mergeGap: 16, cell: 4, maxRegions: 500,
   maxShift: 0.02, align: true,
 });
 

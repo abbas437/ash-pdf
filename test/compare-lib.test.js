@@ -109,6 +109,19 @@ test('noise speckles below minArea are dropped; a block above it is kept', () =>
   assert.equal(r.regions[0].added, 16);
 });
 
+test('default minArea (4): isolated 1-2 px specks are dropped, a 2 x 2 mark such as a decimal point is kept', () => {
+  const w = 400, h = 500;
+  const a = drawing(w, h);
+  const b = drawing(w, h);
+  rect(b, w, 70, 470, 1, 1);
+  rect(b, w, 150, 470, 2, 1);
+  assert.deepEqual(comparePages(a, b, w, h).regions, []);
+  rect(b, w, 300, 470, 2, 2);
+  const r = comparePages(a, b, w, h);
+  assert.equal(r.regions.length, 1);
+  assert.equal(r.regions[0].added, 4);
+});
+
 test('nearby changes merge within mergeGap; far ones stay apart', () => {
   const w = 400, h = 500;
   const a = drawing(w, h);
