@@ -7,6 +7,8 @@ import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { PDFDocument } from 'pdf-lib';
+import { writeViewports } from '../../src/core/annots.js';
+import { scaleFromDrawingScale } from '../../src/core/measure.js';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
@@ -15,6 +17,9 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/jav
 async function makePdf() {
   const doc = await PDFDocument.create();
   doc.addPage([612, 792]);
+  doc.addPage([612, 792]);
+  // Page 1: a whole-sheet 1:50 mm viewport and another app's partial detail viewport at 1:5.
+  writeViewports(doc, 0, [{ bbox: [0, 0, 612, 792], name: 'Sheet', scale: scaleFromDrawingScale(50, 'mm') }, { bbox: [400, 20, 600, 200], name: 'Detail A', scale: scaleFromDrawingScale(5, 'mm') }]);
   return Buffer.from(await doc.save());
 }
 const server = createServer(async (req, res) => {
@@ -50,7 +55,7 @@ try {
   const chooser = page.waitForEvent('filechooser');
   await page.click('#btn-open');
   await (await chooser).setFiles({ name: 'measure.pdf', mimeType: 'application/pdf', buffer: await makePdf() });
-  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs[0]; return t?.numPages === 1 && a.viewer.getOverlaySvg(t, 0); }, null, { timeout: 10_000 });
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs[0]; return t?.numPages === 2 && a.viewer.getOverlaySvg(t, 0); }, null, { timeout: 10_000 });
   await ev('v.setZoom(tab, 1);');
   await frames();
 
@@ -94,6 +99,34 @@ try {
   check(pts[0][0] === 100 && pts[1][0] === 300 && pts[3][1] === 550, 'other vertices unchanged');
   check(await label(pid) !== a0 && /m²$/.test(await label(pid)), `area label updates (${a0} -> ${await label(pid)})`);
   await page.screenshot({ path: join(OUT, 'measure.png') });
+
+  step = 'opening reads the page scale';
+  await page.waitForFunction(() => { const a = window.ashStudio; return a.annotations.measureScaleOf(a.state.tabs[0], 0).source === 'pdf'; }, null, { timeout: 5_000 }).catch(() => {});
+  const s0 = await ev('return an.measureScaleOf(tab, 0);');
+  check(s0.source === 'pdf' && s0.scale.label === '1:50' && s0.scale.unit === 'mm', `page 1 scale from the PDF: ${JSON.stringify(s0)}`);
+  check((await ev('return an.measureScaleOf(tab, 1).source;')) === 'default', 'page 2 has no /VP: default');
+
+  step = 'preset 1:100 m on all pages, one undo step';
+  await ev(`const { scaleFromDrawingScale } = await import('/src/core/measure.js'); an.setMeasureScale(tab, 'all', scaleFromDrawingScale(100, 'm'));`);
+  check((await ev('return [0, 1].map((i) => an.measureScaleOf(tab, i).scale.label + " " + an.measureScaleOf(tab, i).scale.unit).join();')) === '1:100 m,1:100 m', 'both pages 1:100 m');
+  await ev('an.undo(tab);');
+  check((await ev('return an.measureScaleOf(tab, 0).scale.label;')) === '1:50', 'undo restores 1:50');
+  await ev('an.redo(tab);');
+
+  step = 'save writes /VP; reading back keeps scale, measurement and the foreign viewport';
+  const back = await ev(`const { scaleFromDrawingScale } = await import('/src/core/measure.js');
+    const core = await import('/src/core/annots.js');
+    const { PDFDocument } = await import('/renderer/vendor/pdf-lib.esm.min.js');
+    const m = an.add(tab, { type: 'line', page: 0, x1: 100, y1: 500, x2: 100 + 2000 / 50 * 72 / 25.4, y2: 500, stroke: '#d62828', measure: { kind: 'distance', scale: scaleFromDrawingScale(50, 'mm') } });
+    const hook = app.state.hooks.beforeSave.find((h) => h.id === 'annotations');
+    const out = await hook(tab, tab.bytes);
+    const r = await core.readAnnotations(out, { scales: true });
+    const doc = await PDFDocument.load(out);
+    return { scales: r.scales.map((s) => s && s.label + ' ' + s.unit), vps: core.readViewports(doc, 0).map((v) => v.name),
+      label: r.objects.find((o) => o.id === m.id)?.measure?.label };`);
+  check(back.scales.join() === '1:100 m,1:100 m', `scales read back: ${back.scales}`);
+  check(back.vps.join() === 'ASH,Detail A', `our /VP first, the foreign partial one kept: ${back.vps}`);
+  check(back.label === '2000 mm', `measurement keeps its own 1:50 scale: ${back.label}`);
 
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('MEASURE OK');
