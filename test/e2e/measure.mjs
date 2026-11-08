@@ -128,6 +128,94 @@ try {
   check(back.vps.join() === 'ASH,Detail A', `our /VP first, the foreign partial one kept: ${back.vps}`);
   check(back.label === '2000 mm', `measurement keeps its own 1:50 scale: ${back.label}`);
 
+  // ---- the scale dialog (renderer/ui/measure-scale.js)
+  const scale0 = () => ev('return an.measureScaleOf(tab, 0);');
+  const openDlg = async () => {
+    await page.click('.menu-btn[data-menu="Tools"]');
+    await page.click('.menu-item[data-id="measure-scale"]');
+    await page.waitForSelector('.ms-dialog', { timeout: 5_000 });
+  };
+  const dlgGone = () => page.waitForSelector('.ms-dialog', { state: 'detached', timeout: 5_000 });
+  await ev('v.scrollToPage(tab, 0); v.setZoom(tab, 1);'); await frames();
+
+  step = 'dialog from the menu: 1:20 mm on this page';
+  await openDlg();
+  check((await page.textContent('#ms-source')) === '1:100', `source shown: ${await page.textContent('#ms-source')}`);
+  const u0 = await ev('return tab.undo.length;');
+  await page.selectOption('#ms-preset', '20');
+  await page.selectOption('#ms-unit', 'mm');
+  await page.click('.ms-dialog [data-value="ok"]');
+  await dlgGone();
+  let s = await scale0();
+  check(s.scale.label === '1:20' && s.scale.unit === 'mm' && s.source === 'preset', `1:20 mm: ${JSON.stringify(s)}`);
+  near(s.scale.ratio, (25.4 / 72) * 20, '1:20 mm ratio', 1e-9);
+  check((await ev('return an.measureScaleOf(tab, 1).scale.label;')) === '1:100', 'this page only');
+  check((await ev('return tab.undo.length;')) === u0 + 1, 'one undo step');
+
+  step = 'calibrate: two clicks 100 pt apart = 1000 mm';
+  await openDlg();
+  await page.click('.ms-dialog [data-value="calibrate"]');
+  await dlgGone();
+  await page.mouse.click(...await toClient(400, 300));
+  await page.mouse.move(...await toClient(450, 302), { steps: 3 });
+  check(await ev('return !!v.getPageEl(tab, 0).querySelector(".ms-cal-line");'), 'preview line while picking');
+  await page.mouse.click(...await toClient(500, 300));
+  await page.waitForSelector('.ms-dialog', { timeout: 5_000 });
+  check(/100\.0 pt/.test(await page.textContent('.ms-picked')), `picked length: ${await page.textContent('.ms-picked')}`);
+  await page.fill('#ms-real', '1000');
+  await page.selectOption('#ms-cal-unit', 'mm');
+  await page.click('.ms-dialog [data-value="ok"]');
+  await dlgGone();
+  s = await scale0();
+  check(s.source === 'calibrated' && s.scale.unit === 'mm', `calibrated: ${JSON.stringify(s)}`);
+  near(s.scale.ratio, 10, 'calibrated ratio 1000 mm / 100 pt', 0.01);
+  const calibrated = s;
+
+  step = 'Esc cancels a calibration';
+  const u1 = await ev('return tab.undo.length;');
+  await openDlg();
+  await page.click('.ms-dialog [data-value="calibrate"]');
+  await dlgGone();
+  await page.mouse.click(...await toClient(400, 300));
+  await page.mouse.move(...await toClient(480, 300), { steps: 3 });
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.ms-dialog', { timeout: 5_000 });
+  check(!(await page.$('.ms-picked')), 'no picked length after Esc');
+  await page.click('.ms-dialog [data-value="cancel"]');
+  await dlgGone();
+  check(JSON.stringify(await scale0()) === JSON.stringify(calibrated) && (await ev('return tab.undo.length;')) === u1, 'Esc changes nothing');
+
+  step = 'a too-short line is refused';
+  await openDlg();
+  await page.click('.ms-dialog [data-value="calibrate"]');
+  await dlgGone();
+  await page.mouse.click(...await toClient(400, 300));
+  await page.mouse.click(...await toClient(403, 300));
+  await page.waitForFunction(() => [...document.querySelectorAll('.toast')].some((t) => /too short/.test(t.textContent)), null, { timeout: 3_000 });
+  check(!(await page.$('.ms-dialog')), 'the pick goes on after a refused line');
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('.ms-dialog', { timeout: 5_000 });
+  await page.keyboard.press('Escape');
+  await dlgGone();
+  check(JSON.stringify(await scale0()) === JSON.stringify(calibrated) && (await ev('return tab.undo.length;')) === u1, 'a refused line changes nothing');
+
+  step = 'imperial preset 1/4" = 1\'-0"';
+  await openDlg();
+  await page.check('input[name="ms-mode"][value="imperial"]');
+  await page.selectOption('#ms-imperial', '2');
+  await page.click('.ms-dialog [data-value="ok"]');
+  await dlgGone();
+  s = await scale0();
+  check(s.scale.label === '1/4" = 1\'-0"' && s.scale.unit === 'ft' && s.scale.style === 'architectural', `imperial: ${JSON.stringify(s)}`);
+  near(s.scale.ratio, 1 / 18, '1/4" = 1\'-0" ratio (18 pt per foot)', 1e-12);
+  const chip = await ev(`const { scaleChip } = await import('/renderer/ui/measure-scale.js');
+    const d = document.createElement('div'); document.body.append(d); scaleChip()(d); const t = d.textContent; d.remove(); return t;`);
+  check(chip === 'Scale 1/4" = 1\'-0" (ft-in)', `chip: ${chip}`);
+
+  step = 'undo restores the previous scale';
+  await ev('an.undo(tab);');
+  check(JSON.stringify(await scale0()) === JSON.stringify(calibrated), `undo: ${JSON.stringify(await scale0())}`);
+
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('MEASURE OK');
 } catch (err) {

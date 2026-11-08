@@ -39,6 +39,7 @@ import { initExports } from './ui/exports.js';
 import { initCompress } from './ui/compress.js';
 import { initOcr } from './ui/ocr.js';
 import { initCompareRevisions } from './ui/comparerev.js';
+import { initMeasureScale } from './ui/measure-scale.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
 import { initTextMenu } from './ui/text-menu.js';
 import { initHandTool } from './ui/tools-hand.js';
@@ -850,6 +851,7 @@ initExports(app); // File > Export to Excel, Export page as image
 initCompress(app); // File > Reduce file size
 initOcr(app); // Tools > Recognize text (OCR)
 initCompareRevisions(app); // Tools > Compare revisions…, Differences sidebar tab
+initMeasureScale(app); // Tools > Set measure scale…
 initAdvancedSearch(app);
 initCopyText(app);
 initTextMenu();
