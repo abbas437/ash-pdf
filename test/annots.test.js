@@ -668,6 +668,25 @@ describe('polygons and measurements (§12.9)', () => {
     assert.equal(again.getPage(0).node.get(PDFName.of('VP')), undefined);
   });
 
+  test('writeAnnotations viewports: page scale replaces ours and whole-page /VP, keeps partial ones; readAnnotations scales', async () => {
+    const doc = await PDFDocument.load(await makePdf(2));
+    writeViewports(doc, 0, [{ bbox: [0, 0, 612, 792], name: 'Sheet', scale: S50 }, { bbox: [300, 50, 600, 300], name: 'Detail A', scale: scaleFromDrawingScale(5, 'mm') }]);
+    const src = await doc.save();
+    let r = await readAnnotations(src, { scales: true });
+    assert.deepEqual(r.scales.map((s) => s?.label ?? null), ['1:50', null], 'the viewport at the page centre');
+    const S100 = scaleFromDrawingScale(100, 'm');
+    const out = await writeAnnotations(src, { viewports: [{ page: 0, scale: S100 }, { page: 1, scale: S100 }] });
+    const d2 = await PDFDocument.load(out);
+    assert.deepEqual(readViewports(d2, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:100'], ['Detail A', '1:5']], 'ours first, the partial viewport kept');
+    r = await readAnnotations(out, { scales: true });
+    assert.deepEqual(r.scales.map((s) => [s.label, s.unit]), [['1:100', 'm'], ['1:100', 'm']]);
+    const again = await writeAnnotations(out, { viewports: [{ page: 0, scale: S50 }, { page: 1, scale: null }] });
+    const d3 = await PDFDocument.load(again);
+    assert.deepEqual(readViewports(d3, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:50'], ['Detail A', '1:5']], 'ours replaced, not added');
+    assert.deepEqual(readViewports(d3, 1), []);
+    assert.deepEqual(Object.keys(await readAnnotations(again)), ['objects', 'skipped'], 'scales only on request');
+  });
+
   test('appearances render in pdf.js: filled polygon and a measured line with its caption', async () => {
     const add = [
       { id: 'pg', page: 0, type: 'polygon', points: [[40, 40], [200, 40], [200, 200], [40, 200]], stroke: '#0000ff', fill: '#00ff00', strokeWidth: 2, opacity: 1 },

@@ -14,7 +14,7 @@ import { cloudArc } from './cloud.js';
 import { stampShape } from './stamps.js';
 import { runsOf, normalizeRuns, isImageRun, OBJ_CHAR } from './richtext.js';
 import { toRichContents, richFromRC } from './richxhtml.js';
-import { measureDict, scaleFromMeasureDict, measurePoints, viewportDict, viewportFromDict, UNITS } from './measure.js';
+import { measureDict, scaleFromMeasureDict, measurePoints, viewportDict, viewportFromDict, viewportAt, UNITS } from './measure.js';
 
 const N = (s) => PDFName.of(s);
 const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
@@ -306,6 +306,46 @@ export function readViewports(doc, pageIndex) {
   const vp = doc.getPage(pageIndex).node.lookup(N('VP'));
   if (!(vp instanceof PDFArray)) return [];
   return vp.asArray().map((x) => viewportFromDict(pdfToPlain(doc.context, x))).filter(Boolean);
+}
+
+/** Our page-scale viewport's /Name: the one writeAnnotations({ viewports }) replaces. */
+export const OWN_VIEWPORT = 'ASH';
+const covers = (b, c, tol = 1) => b[0] <= c[0] + tol && b[1] <= c[1] + tol && b[2] >= c[2] - tol && b[3] >= c[3] - tol;
+
+/** A page's visible area (/CropBox) in PDF user space as [x1 y1 x2 y2]. */
+function cropOf(page) {
+  const c = page.getCropBox();
+  return [c.x, c.y, c.x + c.width, c.y + c.height];
+}
+
+/**
+ * Set page scales: for each { page, scale|null }, our viewport (/Name OWN_VIEWPORT) and other
+ * whole-page viewports go; a scale adds one of ours over the visible area, FIRST, so another app's
+ * partial viewports (details at their own scale, §12.9.1: the last containing a point wins) stay in force.
+ */
+function setPageScales(doc, list) {
+  const pages = doc.getPages();
+  for (const { page, scale } of list) {
+    if (!Number.isInteger(page) || page < 0 || page >= pages.length) throw new RangeError(`viewports: no page ${page}`);
+    const crop = cropOf(pages[page]);
+    const keep = readViewports(doc, page).filter((v) => v.name !== OWN_VIEWPORT && !covers(v.bbox, crop));
+    writeViewports(doc, page, scale ? [{ bbox: crop, name: OWN_VIEWPORT, scale }, ...keep] : keep);
+  }
+}
+
+/**
+ * The scale a page's /VP gives the page: our viewport, else the one at the visible area's centre,
+ * else the one covering the largest area; null when no viewport has a scale.
+ */
+export function pageScale(doc, pageIndex) {
+  const vps = readViewports(doc, pageIndex).filter((v) => v.scale);
+  if (!vps.length) return null;
+  const c = cropOf(doc.getPage(pageIndex));
+  const own = vps.find((v) => v.name === OWN_VIEWPORT);
+  const at = own ?? viewportAt(vps, [(c[0] + c[2]) / 2, (c[1] + c[3]) / 2]);
+  if (at) return at.scale;
+  const size = (b) => (b[2] - b[0]) * (b[3] - b[1]);
+  return vps.reduce((a, v) => (size(v.bbox) > size(a.bbox) ? v : a)).scale;
 }
 
 /** Replace a page's /VP with `vps` (as readViewports returns them); none removes it. Edits `doc` in place. */
@@ -791,8 +831,8 @@ function collectGarbage(doc) {
  * Write overlay objects as real PDF annotations. `add`/`update` are overlay objects, `remove`
  * annotation ids. Annotations not mentioned are left exactly as they are.
  */
-export async function writeAnnotations(pdfBytes, { add = [], update = [], remove = [] } = {}, { author, now } = {}) {
-  for (const [k, v] of Object.entries({ add, update, remove })) if (!Array.isArray(v)) throw new TypeError(`${k} must be an array`);
+export async function writeAnnotations(pdfBytes, { add = [], update = [], remove = [], viewports = [] } = {}, { author, now } = {}) {
+  for (const [k, v] of Object.entries({ add, update, remove, viewports })) if (!Array.isArray(v)) throw new TypeError(`${k} must be an array`);
   const doc = await loadPdf(pdfBytes);
   // New objects are numbered from the file's /Size: pdf-lib does not register object streams and
   // cross-reference streams, so its own count can hand out their numbers, and an incremental
@@ -970,6 +1010,7 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
       if (en.irt && t.dropped.has(refKey(en.irt))) en.dict.set(N('IRT'), t.byId.get(t.dropped.get(refKey(en.irt))) ?? t.ref);
     }
   }
+  if (viewports.length) setPageScales(doc, viewports);
   if (touched) collectGarbage(doc);
   return saveEdited(doc);
 }
@@ -1431,7 +1472,7 @@ function toObject(doc, en, g) {
  * Read markup annotations as overlay objects; everything else is listed in `skipped`.
  * Replies and review state are grouped onto their parent object.
  */
-export async function readAnnotations(pdfBytes) {
+export async function readAnnotations(pdfBytes, { scales = false } = {}) {
   const doc = await loadPdf(pdfBytes);
   const pages = doc.getPages();
   const sc = scan(doc);
@@ -1473,5 +1514,5 @@ export async function readAnnotations(pdfBytes) {
     const reason = { readonly: 'read-only annotation (kept as it is in the file)', group: 'grouped annotation (RT /Group)', reply: 'reply not shown on its markup (state, or to an unsupported annotation)', xreply: 'reply that is not a Text annotation' }[en.kind];
     skip(en, reason ?? 'not a supported markup type');
   }
-  return { objects, skipped };
+  return scales ? { objects, skipped, scales: pages.map((_, i) => pageScale(doc, i)) } : { objects, skipped };
 }
