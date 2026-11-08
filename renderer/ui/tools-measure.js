@@ -5,7 +5,7 @@
 //   Area        the last vertex, Esc cancels. Area finishes with 3+ points. A click on the last vertex
 //               adds nothing, so a double-click there finishes without a duplicate vertex.
 // Shift holds the current segment to 0/45/90° from the previous point. Every point first goes through
-// snapHook(tab, page, pt) => pt (identity here; setSnapHook installs object snapping later).
+// snapHook(tab, page, pt, event) => pt (identity here; measure-snap.js installs object snapping).
 // The finished object is one annotations.add (one undo step) and is selected.
 // Each tool keeps its own colour and width: onActivate swaps them into the shared state.toolStyle and
 // onDeactivate puts the shared values back (remembered in settings 'measure.toolStyle').
@@ -37,7 +37,8 @@ const TOOLS = {
 
 // ---------------------------------------------------------------- snap hook
 let snapHook = (tab, page, pt) => pt;
-/** Install the point filter every measure point goes through (before Shift); null restores identity. */
+/** Install the point filter every measure point goes through (before Shift), called with the pointer
+ *  event as its 4th argument; null restores identity. */
 export function setSnapHook(fn) { snapHook = typeof fn === 'function' ? fn : (tab, page, pt) => pt; }
 
 // ---------------------------------------------------------------- per-tool style
@@ -64,7 +65,7 @@ function measureTool(kind) {
   let quiet = null; // the click that finished by double-click: its repeat does not start a new measurement
   const point = (e) => {
     const raw = annotations.toPage(g.tab, g.page, e.clientX, e.clientY);
-    const p = snapHook(g.tab, g.page, raw);
+    const p = snapHook(g.tab, g.page, raw, e);
     const prev = g.pts[g.pts.length - 1];
     return e.shiftKey && prev ? snapAngle({ x: prev[0], y: prev[1] }, p) : p;
   };

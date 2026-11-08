@@ -813,4 +813,6 @@ body.reading-mode { cursor: default; }
 .ms-form #ms-custom, .ms-form #ms-real { width: 120px; }
 .ms-error { margin: 0; min-height: 1.2em; color: var(--danger, #c62828); }
 .ms-cal-svg { z-index: 6; pointer-events: none; }
+/* Measure snap marker (ui/measure-snap.js) */
+.measure-snap-marker { position: fixed; width: 8px; height: 8px; box-sizing: border-box; border: 1.5px solid var(--focus); outline: 1px solid rgba(255, 255, 255, 0.8); pointer-events: none; z-index: 50; }
 .ms-cal-line { stroke: var(--focus); stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }

@@ -6,7 +6,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { extname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument } from 'pdf-lib';
+import { PDFDocument, degrees } from 'pdf-lib';
 import { writeViewports } from '../../src/core/annots.js';
 import { scaleFromDrawingScale } from '../../src/core/measure.js';
 
@@ -14,9 +14,19 @@ const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const OUT = join(root, 'test', 'e2e', 'out');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
 
+// One page with /Rotate 90 and a MediaBox offset by (50, 50), a line from (100, 200) to (400, 200):
+// in page space (origin top-left of the turned page) that is (150, 50)-(150, 350).
+async function makeRotatedPdf() {
+  const doc = await PDFDocument.create();
+  const p = doc.addPage([612, 792]);
+  p.setMediaBox(50, 50, 612, 792);
+  p.setRotation(degrees(90));
+  p.drawLine({ start: { x: 100, y: 200 }, end: { x: 400, y: 200 }, thickness: 1 });
+  return Buffer.from(await doc.save());
+}
 async function makePdf() {
   const doc = await PDFDocument.create();
-  doc.addPage([612, 792]);
+  doc.addPage([612, 792]).drawLine({ start: { x: 100, y: 100 }, end: { x: 300, y: 100 }, thickness: 1 }); // snap target: page space (100, 692)-(300, 692)
   doc.addPage([612, 792]);
   // Page 1: a whole-sheet 1:50 mm viewport and another app's partial detail viewport at 1:5.
   writeViewports(doc, 0, [{ bbox: [0, 0, 612, 792], name: 'Sheet', scale: scaleFromDrawingScale(50, 'mm') }, { bbox: [400, 20, 600, 200], name: 'Detail A', scale: scaleFromDrawingScale(5, 'mm') }]);
@@ -306,6 +316,72 @@ try {
   step = 'leaving the tool restores the shared colour';
   await ev('an.select(tab, []); app.setTool("select");');
   check((await ev('return app.state.toolStyle.color;')) === '#123456', `shared colour: ${await ev('return app.state.toolStyle.color;')}`);
+
+  // ---------------------------------------------------------------- object snapping
+  const markerAt = () => page.evaluate(() => { const m = document.querySelector('.measure-snap-marker'); if (!m || m.hidden) return null; const r = m.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; });
+  const off = async (x, y, dx, dy) => { const [cx, cy] = await at(x, y); return [cx + dx, cy + dy]; };
+  // Two clicks at the given screen points (Alt held when `alt`); returns the committed line.
+  const distance = async (a, b, alt = false) => {
+    const n = await objCount();
+    if (alt) await page.keyboard.down('Alt');
+    await page.mouse.click(...a);
+    await page.mouse.move(b[0], b[1], { steps: 3 });
+    await page.mouse.click(...b);
+    if (alt) await page.keyboard.up('Alt');
+    check((await objCount()) === n + 1, 'one distance added');
+    return lastObj();
+  };
+
+  step = 'snap: the marker shows on a line end near the pointer';
+  await setTool('measure-distance');
+  await ev('tab.view.scrollEl.scrollTop += 400;'); await frames(); // bring the line (y 692) on screen
+  const e1 = await at(100, 692);
+  check(e1[1] > 0 && e1[1] < 1000, `line end on screen: ${e1}`);
+  await page.mouse.move(...await off(100, 692, 3, -4), { steps: 3 });
+  await page.waitForFunction(() => !document.querySelector('.measure-snap-marker')?.hidden, null, { timeout: 5000 }).catch(() => {});
+  let m = await markerAt();
+  check(m && Math.hypot(m[0] - e1[0], m[1] - e1[1]) < 1, `marker on the end (${e1}): ${m}`);
+
+  step = 'snap: Distance clicks 3-5 px off both ends measure the line exactly';
+  o = await distance(await off(100, 692, 3, -4), await off(300, 692, -4, 3));
+  for (const [k, want] of [['x1', 100], ['y1', 692], ['x2', 300], ['y2', 692]]) near(o[k], want, `snapped ${k}`, 0.01);
+  near(o.measure?.value, 200 * MM, 'snapped distance is exactly 200 pt at 1:100 mm', 1e-6);
+
+  step = 'snap: Alt turns snapping off';
+  o = await distance(await off(100, 692, 3, -4), await off(300, 692, -4, 3), true);
+  check(Math.abs(o.x1 - 100) > 1 && Math.abs(o.y1 - 692) > 1 && Math.abs(o.x2 - 300) > 1 && Math.abs(o.y2 - 692) > 1, `Alt: not snapped ${JSON.stringify([o.x1, o.y1, o.x2, o.y2])}`);
+  check(Math.abs(o.measure.value - 200 * MM) > 0.01, 'Alt: value is not exact');
+  await page.keyboard.down('Alt');
+  await page.mouse.move(...await off(300, 692, -3, 4), { steps: 2 });
+  check(!(await markerAt()), 'no marker while Alt is held');
+  await page.keyboard.up('Alt');
+
+  step = 'snap: Esc and a tool change hide the marker';
+  await page.mouse.click(...await at(200, 600)); // a measurement in progress, so Esc cancels it and keeps the tool
+  await page.mouse.move(...await off(300, 692, -3, -3), { steps: 2 });
+  check(await markerAt(), 'marker shown before Esc');
+  await page.keyboard.press('Escape');
+  check(!(await markerAt()), 'marker hidden after Esc');
+  await page.mouse.move(...await off(300, 692, -4, -4), { steps: 2 });
+  check(await markerAt(), `marker shown again on move (tool ${await ev('return app.state.tool;')})`);
+  await setTool('select');
+  check(!(await markerAt()), 'marker hidden after a tool change');
+
+  step = 'snap: /Rotate 90 page with an offset MediaBox';
+  const chooser2 = page.waitForEvent('filechooser');
+  await page.click('#btn-open');
+  await (await chooser2).setFiles({ name: 'rotated.pdf', mimeType: 'application/pdf', buffer: await makeRotatedPdf() });
+  await page.waitForFunction(() => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return a.state.tabs.length === 2 && t?.numPages === 1 && a.viewer.getOverlaySvg(t, 0); }, null, { timeout: 10_000 });
+  await ev(`const { scaleFromDrawingScale } = await import('/src/core/measure.js');
+    v.setZoom(tab, 1); an.setMeasureScale(tab, 0, scaleFromDrawingScale(100, 'mm'), 'preset');`);
+  await frames();
+  check(JSON.stringify(await ev('const vp = tab.pages[0].getViewport({ scale: 1 }); return [vp.width, vp.height];')) === '[792,612]', 'rotated page is 792 x 612');
+  await setTool('measure-distance');
+  await page.mouse.move(...await off(150, 50, 4, 3), { steps: 3 });
+  await page.waitForFunction(() => !document.querySelector('.measure-snap-marker')?.hidden, null, { timeout: 5000 }).catch(() => {});
+  o = await distance(await off(150, 50, 4, 3), await off(150, 350, -3, -5));
+  for (const [k, want] of [['x1', 150], ['y1', 50], ['x2', 150], ['y2', 350]]) near(o[k], want, `rotated snapped ${k}`, 0.01);
+  await setTool('select');
 
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('MEASURE OK');

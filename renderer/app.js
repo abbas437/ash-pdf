@@ -19,6 +19,7 @@ import { initSearch, search } from './ui/search.js';
 import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
 import { initMeasureTools } from './ui/tools-measure.js';
+import { initMeasureSnap } from './ui/measure-snap.js';
 import { initTextTools } from './ui/tools-text.js';
 import { initCalloutTools } from './ui/tools-callout.js';
 import { initStampTools, placeImages } from './ui/tools-stamp.js';
@@ -836,6 +837,7 @@ window.ashStudio = app;
 initAnnotations();
 initShapeTools();
 initMeasureTools(); // Measure distance / perimeter / area
+initMeasureSnap(); // their object snapping
 initTextTools(app);
 initCalloutTools(app);
 initStampTools(app);
