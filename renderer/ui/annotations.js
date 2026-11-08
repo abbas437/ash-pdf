@@ -58,6 +58,7 @@ import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from 
 import { objectsSummary, unionBox, pasteDelta, clampDelta, pageBox } from './clipboard-lib.js';
 import { stable, changedKeys } from './objdiff-lib.js';
 import { canGroup, canUngroup, groupPatches, ungroupPatches, soleGroup, groupResizeBox, scaleMember } from './grouping-lib.js';
+import { withValue, labelBox, tickSegments, pointInPolygon, AREA_FILL_OPACITY } from './measure-lib.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -206,13 +207,83 @@ const polyType = {
   },
   style: shapeStyle,
 };
+
+// ---------------------------------------------------------------- measurements (measure-lib.js)
+/** Draw a measurement's caption (white box, page points, so it scales with zoom) into `g`. */
+function measureCaption(o, g) {
+  const lb = labelBox(o);
+  if (!lb) return;
+  const c = svgEl('g', { class: 'ann-measure-label' }, g);
+  svgEl('rect', { x: lb.x, y: lb.y, width: lb.w, height: lb.h, fill: '#ffffff', stroke: paint(o.stroke ?? '#000000'), 'stroke-width': 0.5 }, c);
+  const t = svgEl('text', { x: lb.x + lb.w / 2, y: lb.y + lb.h / 2, 'font-family': 'Helvetica, Arial, sans-serif', 'font-size': lb.fontSize, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: paint(o.stroke ?? '#000000') }, c);
+  t.textContent = lb.text;
+}
+/** A patch for `o` as patched by `patch`: adds the re-computed measure when `o` is a measurement. */
+const remeasure = (o, patch) => (o.measure?.scale ? { ...patch, measure: withValue({ ...o, ...patch }) } : patch);
+/** Vertex handles v0..vn of a points object; dragging one moves that vertex only. */
+const vertexHandles = (o) => o.points.map(([x, y], k) => ({ id: `v${k}`, x, y }));
+function moveVertex(o, handle, dx, dy) {
+  const k = Number(handle.slice(1));
+  return { points: o.points.map(([x, y], i) => (i === k ? [x + dx, y + dy] : [x, y])) };
+}
+const polygonType = {
+  render(o, parent) {
+    const g = svgEl('g', { opacity: opacityOf(o.opacity) }, parent);
+    const stroke = paint(o.stroke ?? '#000000');
+    // An area measurement without a fill of its own: a translucent fill of the stroke colour.
+    const fill = o.fill && o.fill !== 'none' ? o.fill : o.measure?.kind === 'area' ? stroke : 'none';
+    svgEl('path', { d: `${polyPath(o.points)}Z`, fill, 'fill-opacity': o.fill && o.fill !== 'none' ? null : o.measure?.kind === 'area' ? AREA_FILL_OPACITY : null, 'stroke-linejoin': 'round', ...strokeAttrs(o), opacity: null }, g);
+    if (o.measure) measureCaption(o, g);
+    return g;
+  },
+  bbox: (o) => pointsBox(o.points),
+  handles: vertexHandles,
+  hit(o, x, y, tol) {
+    const n = o.points.length, sw = (o.strokeWidth ?? 1) / 2;
+    for (let i = 0; i < n; i++) { const a = o.points[i], b = o.points[(i + 1) % n]; if (segDist(x, y, a[0], a[1], b[0], b[1]) <= tol + sw) return true; }
+    return (o.fill && o.fill !== 'none') || o.measure?.kind === 'area' ? pointInPolygon(o.points, x, y) : false;
+  },
+  move: (o, dx, dy) => ({ points: o.points.map(([x, y]) => [x + dx, y + dy]) }),
+  resize: (o, handle, dx, dy) => remeasure(o, moveVertex(o, handle, dx, dy)),
+  style: (o, s, keys) => ({ ...shapeStyle(o, s, keys), ...(keys.includes('fill') ? { fill: s.fill ?? null } : {}) }),
+};
+/** Polylines: a measured one (perimeter) gets vertex handles and its caption; others are polyType. */
+const polylineType = {
+  ...polyType,
+  render(o, parent) {
+    if (!o.measure) return polyType.render(o, parent);
+    const g = svgEl('g', {}, parent);
+    polyType.render(o, g);
+    measureCaption(o, g);
+    return g;
+  },
+  handles: (o) => (o.measure ? vertexHandles(o) : polyType.handles(o)),
+  resize: (o, handle, dx, dy) => (handle.startsWith('v') ? remeasure(o, moveVertex(o, handle, dx, dy)) : polyType.resize(o, handle, dx, dy)),
+};
+/** Lines: a measured one (distance) gets tick ends and its caption; its value follows the end points. */
+function measurableLine(base) {
+  return {
+    ...base,
+    render(o, parent) {
+      const g = base.render(o, parent);
+      if (!o.measure) return g;
+      for (const t of tickSegments(o, Math.max(4, (o.strokeWidth ?? 1) * 4))) {
+        svgEl('line', { class: 'ann-measure-tick', x1: t[0], y1: t[1], x2: t[2], y2: t[3], stroke: paint(o.stroke ?? '#000000'), 'stroke-width': Number.isFinite(o.strokeWidth) ? o.strokeWidth : 1 }, g);
+      }
+      measureCaption(o, g);
+      return g;
+    },
+    resize: (o, handle, dx, dy) => remeasure(o, base.resize(o, handle, dx, dy)),
+  };
+}
 function registerBuiltins() {
   registerObjectType('rect', boxType((o, p) => svgEl('rect', { x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.fill), ...strokeAttrs(o) }, p), { style: shapeStyle }));
   registerObjectType('ellipse', boxType((o, p) => svgEl('ellipse', { cx: o.x + o.w / 2, cy: o.y + o.h / 2, rx: o.w / 2, ry: o.h / 2, fill: paint(o.fill), ...strokeAttrs(o) }, p), { style: shapeStyle }));
   registerObjectType('cloud', boxType((o, p) => svgEl('path', { d: cloudPath(o), fill: paint(o.fill), 'stroke-linejoin': 'round', ...strokeAttrs(o) }, p), { style: shapeStyle }));
-  registerObjectType('line', lineType(false));
-  registerObjectType('arrow', lineType(true));
-  registerObjectType('polyline', polyType);
+  registerObjectType('line', measurableLine(lineType(false)));
+  registerObjectType('arrow', measurableLine(lineType(true)));
+  registerObjectType('polyline', polylineType);
+  registerObjectType('polygon', polygonType);
   registerObjectType('ink', polyType);
   registerObjectType('highlight', boxType((o, p) => svgEl('rect', { class: 'ann-highlight ann-blend', x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.color ?? '#ffff00'), opacity: Math.min(opacityOf(o.opacity, 0.4), 0.5) }, p), {
     style: (o, s, keys) => ({ ...(keys.includes('hlColor') ? { color: s.hlColor } : {}), ...(keys.includes('hlOpacity') ? { opacity: s.hlOpacity } : {}) }),

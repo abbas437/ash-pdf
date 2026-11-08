@@ -4,11 +4,15 @@ export const TYPE_LABELS = {
   rect: 'Rectangle', ellipse: 'Ellipse', line: 'Line', arrow: 'Arrow', ink: 'Drawing', highlight: 'Highlight',
   text: 'Text box', callout: 'Callout', stamp: 'Stamp', image: 'Image', note: 'Sticky note', underline: 'Underline',
   strikeout: 'Strikeout', textHighlight: 'Text highlight', whiteout: 'Whiteout', squiggly: 'Squiggly', apStamp: 'Stamp',
+  polyline: 'Polyline', polygon: 'Polygon', distance: 'Distance', perimeter: 'Perimeter', area: 'Area',
 };
 export const STATUSES = ['accepted', 'rejected', 'cancelled', 'completed', 'none'];
 export const STATUS_LABELS = { accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled', completed: 'Completed', none: 'None' };
 
 export const typeLabel = (t) => TYPE_LABELS[t] ?? t;
+const MEASURE_KINDS = new Set(['distance', 'perimeter', 'area']);
+/** The list's type of an object: a measurement is listed by its kind ("Distance", "Area"). */
+export const objectType = (o) => (MEASURE_KINDS.has(o.measure?.kind) ? o.measure.kind : o.type);
 
 /**
  * Label of one entry: another app's stamp adds its /Name ("Stamp: Approved"), except names that are
@@ -25,7 +29,7 @@ export function commentText(o) {
 /** One list entry per object; `author` fills objects without one (not saved yet). */
 export function toEntries(objects, author = '') {
   return objects.map((o, order) => ({
-    id: o.id, order, page: o.page, type: o.type, ...(o.type === 'apStamp' ? { name: o.name } : {}), author: o.author || author,
+    id: o.id, order, page: o.page, type: objectType(o), ...(o.type === 'apStamp' ? { name: o.name } : {}), author: o.author || author,
     date: o.modified || o.created || null, status: o.status || 'none', text: commentText(o),
     replies: (o.replies ?? []).map((r) => ({ ...r })),
   }));
