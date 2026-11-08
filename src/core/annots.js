@@ -305,12 +305,22 @@ function readMeasure(doc, dict, o, subtype, extra) {
 export function readViewports(doc, pageIndex) {
   const vp = doc.getPage(pageIndex).node.lookup(N('VP'));
   if (!(vp instanceof PDFArray)) return [];
-  return vp.asArray().map((x) => viewportFromDict(pdfToPlain(doc.context, x))).filter(Boolean);
+  return vp.asArray().map((x) => {
+    try {
+      return viewportFromDict(pdfToPlain(doc.context, x));
+    } catch {
+      return null; // a hostile entry gives no scale rather than failing the page
+    }
+  }).filter(Boolean);
 }
 
 /** Our page-scale viewport's /Name: the one writeAnnotations({ viewports }) replaces. */
 export const OWN_VIEWPORT = 'ASH';
-const covers = (b, c, tol = 1) => b[0] <= c[0] + tol && b[1] <= c[1] + tol && b[2] >= c[2] - tol && b[3] >= c[3] - tol;
+/** Whether a /VP array element (dict or ref) is our viewport. */
+const isOwnViewport = (ctx, x) => {
+  const d = ctx.lookup(x);
+  return d instanceof PDFDict && readText(d, 'Name') === OWN_VIEWPORT;
+};
 
 /** A page's visible area (/CropBox) in PDF user space as [x1 y1 x2 y2]. */
 function cropOf(page) {
@@ -319,22 +329,30 @@ function cropOf(page) {
 }
 
 /**
- * Set page scales: for each { page, scale|null }, our viewport (/Name OWN_VIEWPORT) and other
- * whole-page viewports go; a scale adds one of ours over the visible area, FIRST, so another app's
- * partial viewports (details at their own scale, §12.9.1: the last containing a point wins) stay in force.
+ * Set page scales: for each { page, scale|null }, our viewport (/Name OWN_VIEWPORT) goes and a scale
+ * adds one of ours over the visible area, FIRST (readers taking the first match use it; under §12.9.1's
+ * last-match rule another app's viewports, e.g. details at their own scale, stay in force where they lie).
+ * Every other /VP element is kept exactly as it is (the same dict or ref); an empty /VP is removed.
  */
 function setPageScales(doc, list) {
   const pages = doc.getPages();
+  const ctx = doc.context;
   for (const { page, scale } of list) {
     if (!Number.isInteger(page) || page < 0 || page >= pages.length) throw new RangeError(`viewports: no page ${page}`);
-    const crop = cropOf(pages[page]);
-    const keep = readViewports(doc, page).filter((v) => v.name !== OWN_VIEWPORT && !covers(v.bbox, crop));
-    writeViewports(doc, page, scale ? [{ bbox: crop, name: OWN_VIEWPORT, scale }, ...keep] : keep);
+    const node = pages[page].node;
+    const vp = node.lookup(N('VP'));
+    const all = vp instanceof PDFArray ? vp.asArray() : [];
+    const foreign = all.filter((x) => !isOwnViewport(ctx, x));
+    if (!scale && foreign.length === all.length) continue; // nothing of ours to clear
+    const items = scale ? [plainToPdf(ctx, viewportDict({ bbox: cropOf(pages[page]), name: OWN_VIEWPORT, scale })), ...foreign] : foreign;
+    if (items.length) node.set(N('VP'), ctx.obj(items));
+    else node.delete(N('VP'));
   }
 }
 
 /**
- * The scale a page's /VP gives the page: our viewport, else the one at the visible area's centre,
+ * The scale a page's /VP gives the page: our viewport (wherever it is in /VP, ahead of the §12.9.1
+ * last-match rule), else the one at the visible area's centre,
  * else the one covering the largest area; null when no viewport has a scale.
  */
 export function pageScale(doc, pageIndex) {

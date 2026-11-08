@@ -1,8 +1,8 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { PDFDocument, PDFName, PDFArray, PDFHexString, PDFString } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFArray, PDFHexString, PDFString, PDFDict, PDFRef } from 'pdf-lib';
 import { writeAnnotations, readAnnotations, flattenAnnotations, readViewports, writeViewports } from '../src/core/annots.js';
-import { scaleFromDrawingScale, viewportAt } from '../src/core/measure.js';
+import { scaleFromDrawingScale, viewportAt, formatScaled } from '../src/core/measure.js';
 import { makePdf, makeGeometryFixture, makeImage, near, pdfjsDoc, renderPage, isColor } from './helpers.js';
 
 const NOW = '2026-10-07T10:00:00.000Z';
@@ -668,7 +668,7 @@ describe('polygons and measurements (§12.9)', () => {
     assert.equal(again.getPage(0).node.get(PDFName.of('VP')), undefined);
   });
 
-  test('writeAnnotations viewports: page scale replaces ours and whole-page /VP, keeps partial ones; readAnnotations scales', async () => {
+  test('writeAnnotations viewports: page scale replaces ours, keeps foreign ones; readAnnotations scales', async () => {
     const doc = await PDFDocument.load(await makePdf(2));
     writeViewports(doc, 0, [{ bbox: [0, 0, 612, 792], name: 'Sheet', scale: S50 }, { bbox: [300, 50, 600, 300], name: 'Detail A', scale: scaleFromDrawingScale(5, 'mm') }]);
     const src = await doc.save();
@@ -677,14 +677,96 @@ describe('polygons and measurements (§12.9)', () => {
     const S100 = scaleFromDrawingScale(100, 'm');
     const out = await writeAnnotations(src, { viewports: [{ page: 0, scale: S100 }, { page: 1, scale: S100 }] });
     const d2 = await PDFDocument.load(out);
-    assert.deepEqual(readViewports(d2, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:100'], ['Detail A', '1:5']], 'ours first, the partial viewport kept');
+    assert.deepEqual(readViewports(d2, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:100'], ['Sheet', '1:50'], ['Detail A', '1:5']], 'ours first, foreign viewports kept');
     r = await readAnnotations(out, { scales: true });
     assert.deepEqual(r.scales.map((s) => [s.label, s.unit]), [['1:100', 'm'], ['1:100', 'm']]);
     const again = await writeAnnotations(out, { viewports: [{ page: 0, scale: S50 }, { page: 1, scale: null }] });
     const d3 = await PDFDocument.load(again);
-    assert.deepEqual(readViewports(d3, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:50'], ['Detail A', '1:5']], 'ours replaced, not added');
+    assert.deepEqual(readViewports(d3, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:50'], ['Sheet', '1:50'], ['Detail A', '1:5']], 'ours replaced, not added');
     assert.deepEqual(readViewports(d3, 1), []);
+    assert.equal(d3.getPage(1).node.get(PDFName.of('VP')), undefined, 'an emptied /VP is removed');
     assert.deepEqual(Object.keys(await readAnnotations(again)), ['objects', 'skipped'], 'scales only on request');
+  });
+
+  // a page with a measured line and a /VP whose /Measure is `measure` (also put on the line)
+  async function hostileScalePdf(measure) {
+    const src = await writeAnnotations(await makePdf(1), { add: [
+      { id: 'r', page: 0, type: 'rect', x: 40, y: 50, w: 80, h: 30, stroke: '#ff0000' },
+      { id: 'md', page: 0, type: 'line', x1: 100, y1: 400, x2: 300, y2: 400, stroke: '#ff0000', measure: { kind: 'distance', scale: S50 } },
+    ] }, OPTS);
+    const doc = await PDFDocument.load(src);
+    const ctx = doc.context;
+    const node = doc.getPage(0).node;
+    for (const a of node.lookup(PDFName.of('Annots'), PDFArray).asArray()) {
+      const d = ctx.lookup(a);
+      if (d.lookup(PDFName.of('Measure'))) d.set(PDFName.of('Measure'), ctx.obj(measure(ctx)));
+    }
+    node.set(PDFName.of('VP'), ctx.obj([ctx.obj({ Type: 'Viewport', BBox: [0, 0, 612, 792], Name: PDFString.of('Plan'), Measure: ctx.obj(measure(ctx)) })]));
+    return doc.save();
+  }
+  const nfm = (ctx, u, c, f, d) => ctx.obj({ Type: 'NumberFormat', U: PDFString.of(u), C: c, F: f, D: d });
+
+  test('hostile /VP and /Measure numbers: no scale (or a clamped one), the annotations intact', async () => {
+    const cases = {
+      'X [null]': { m: (ctx) => ({ Type: 'Measure', Subtype: 'RL', X: [null] }), scale: null },
+      'D [null]': { m: (ctx) => ({ Type: 'Measure', Subtype: 'RL', X: [nfm(ctx, 'm', 1, 'D', 100)], D: [null] }), scale: null },
+      '1e200 x 1e200': { m: (ctx) => ({ Type: 'Measure', Subtype: 'RL', X: [nfm(ctx, 'm', 1e200, 'D', 100)], D: [nfm(ctx, 'm', 1e200, 'D', 100)] }), scale: null },
+      'huge ratio': { m: (ctx) => ({ Type: 'Measure', Subtype: 'RL', X: [nfm(ctx, 'm', 1e200, 'D', 100)] }), scale: null },
+      '/D 1e300': { m: (ctx) => ({ Type: 'Measure', Subtype: 'RL', X: [nfm(ctx, 'm', 0.01, 'D', 1e300)] }), scale: { unit: 'm', precision: 6 } },
+      '/D 2.5 architectural': { m: (ctx) => ({ Type: 'Measure', Subtype: 'RL', X: [nfm(ctx, 'ft', 4 / 72, 'T', 1), nfm(ctx, 'in', 12, 'F', 2.5)] }), scale: { unit: 'ft', precision: 16 } },
+    };
+    for (const [name, c] of Object.entries(cases)) {
+      const r = await readAnnotations(await hostileScalePdf(c.m), { scales: true });
+      assert.deepEqual(r.objects.map((o) => o.id).sort(), ['md', 'r'], `${name}: annotations intact`);
+      assert.deepEqual(r.skipped, [], `${name}: nothing skipped`);
+      const md = r.objects.find((o) => o.id === 'md');
+      if (!c.scale) {
+        assert.equal(r.scales[0], null, `${name}: no page scale`);
+        assert.equal(md.measure, undefined, `${name}: a plain line`);
+      } else {
+        assert.deepEqual([r.scales[0].unit, r.scales[0].precision], [c.scale.unit, c.scale.precision], `${name}: page scale`);
+        assert.equal(typeof formatScaled(1, r.scales[0]), 'string');
+        assert.deepEqual([md.measure.scale.unit, md.measure.scale.precision], [c.scale.unit, c.scale.precision], `${name}: measurement scale`);
+      }
+      // saving a scale on that page works
+      const out = await writeAnnotations(await hostileScalePdf(c.m), { viewports: [{ page: 0, scale: S50 }] });
+      assert.equal((await readAnnotations(out, { scales: true })).scales[0].label, '1:50', `${name}: scale saved`);
+    }
+  });
+
+  test('foreign /VP entries (GEO with /PtData, RL with /O and /CYX) are kept exactly when our scale is set and cleared', async () => {
+    const doc = await PDFDocument.load(await makePdf(1));
+    const ctx = doc.context;
+    const T = (s) => PDFString.of(s);
+    const geo = ctx.obj({
+      Type: 'Viewport', BBox: [0, 0, 612, 792], Name: T('Map'),
+      Measure: ctx.obj({ Type: 'Measure', Subtype: 'GEO', Bounds: [0, 0, 0, 1, 1, 1, 1, 0], GCS: ctx.obj({ Type: 'GEOGCS', EPSG: 4326 }), GPTS: [0, 0, 0, 1, 1, 1, 1, 0], LPTS: [0, 0, 0, 1, 1, 1, 1, 0], PDU: ['M', 'SQM', 'DEG'],
+        PtData: ctx.obj({ Type: 'PtData', Subtype: 'Cloud', Names: ['LAT', 'LON', 'ALT'], XPTS: [[24.5, 46.6, 600]] }) }),
+    });
+    const rl = ctx.register(ctx.obj({
+      Type: 'Viewport', BBox: [300, 50, 600, 300], Name: T('Detail'),
+      Measure: ctx.obj({ Type: 'Measure', Subtype: 'RL', R: T('1:20'), X: [nfm(ctx, 'mm', 25.4 / 72 * 20, 'D', 10)], D: [nfm(ctx, 'mm', 1, 'D', 10)], A: [nfm(ctx, 'sq mm', 1, 'D', 1)], O: [10, 20], CYX: 1.5 }),
+    }));
+    doc.getPage(0).node.set(PDFName.of('VP'), ctx.obj([geo, rl]));
+    const src = await doc.save();
+    const vpOf = async (bytes) => {
+      const d = await PDFDocument.load(bytes);
+      const vp = d.getPage(0).node.lookup(PDFName.of('VP'), PDFArray);
+      return vp.asArray().map((x) => ({ raw: x, dict: d.context.lookup(x, PDFDict) }));
+    };
+    const nameOf = (e) => e.dict.lookup(PDFName.of('Name')).decodeText();
+    const before = (await vpOf(src)).map((e) => e.dict.toString());
+    const set = await vpOf(await writeAnnotations(src, { viewports: [{ page: 0, scale: S50 }] }));
+    assert.deepEqual(set.map(nameOf), ['ASH', 'Map', 'Detail'], 'ours first, both foreign kept in order');
+    assert.deepEqual(set.slice(1).map((e) => e.dict.toString()), before, 'foreign dicts unchanged');
+    assert.ok(set[2].raw instanceof PDFRef, 'an indirect foreign entry stays a reference');
+    const setBytes = await writeAnnotations(src, { viewports: [{ page: 0, scale: S50 }] });
+    assert.equal((await readAnnotations(setBytes, { scales: true })).scales[0].label, '1:50', 'our viewport is the page scale');
+    const cleared = await vpOf(await writeAnnotations(setBytes, { viewports: [{ page: 0, scale: null }] }));
+    assert.deepEqual(cleared.map((e) => e.dict.toString()), before, 'clearing removes only ours');
+    assert.ok(cleared[1].raw instanceof PDFRef);
+    const untouched = await vpOf(await writeAnnotations(src, { viewports: [{ page: 0, scale: null }] }));
+    assert.deepEqual(untouched.map((e) => e.dict.toString()), before, 'clearing with none of ours keeps the rest');
   });
 
   test('appearances render in pdf.js: filled polygon and a measured line with its caption', async () => {

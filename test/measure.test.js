@@ -137,6 +137,32 @@ describe('measure dictionary (§12.9)', () => {
     assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: [{ U: 'furlong', C: 1 }] }), null);
     assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: [{ U: 'mm', C: 0 }] }), null);
   });
+  test('hostile dictionaries give null, never throw', () => {
+    const m = (C) => ({ U: 'm', C, F: 'D', D: 100 });
+    assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: [null] }), null);
+    assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: [m(1)], D: [null] }), null);
+    assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: ['m'] }), null);
+    assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: [m(1e200)], D: [m(1e200)] }), null, 'product overflows to Infinity');
+    assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: [m(1e200)] }), null, 'finite but huge');
+    assert.equal(scaleFromMeasureDict({ Subtype: 'RL', X: [m(1e-200)] }), null, 'tiny');
+    assert.ok(scaleFromMeasureDict({ Subtype: 'RL', X: [m(1e9)] }), 'at the bound');
+  });
+  test('number formats from a file: decimals clamped to 0-6, fraction denominators from 2..64', () => {
+    const dec = scaleFromMeasureDict({ Subtype: 'RL', X: [{ U: 'm', C: 0.01, F: 'D', D: 1e300 }] });
+    assert.equal(dec.precision, 6);
+    assert.equal(formatScaled(1.5, dec), '1.500000 m');
+    const ftin = (D) => scaleFromMeasureDict({ Subtype: 'RL', X: [{ U: 'ft', C: 4 / 72, F: 'T', D: 1 }, { U: 'in', C: 12, F: 'F', D }] });
+    assert.equal(ftin(2.5).precision, 16);
+    assert.equal(ftin(3).precision, 16);
+    assert.equal(ftin(1e300).precision, 16);
+    assert.equal(ftin(64).precision, 64);
+    assert.equal(formatScaled(12.5, ftin(2.5)), '12\'-6"');
+  });
+  test('UI scales out of range: a clear RangeError', () => {
+    assert.throws(() => scaleFromDrawingScale(1e12, 'mm'), { name: 'RangeError', message: /out of range/ });
+    assert.throws(() => scaleFromCalibration(1000, 1e-12, 'mm'), { name: 'RangeError', message: /out of range/ });
+    near(scaleFromDrawingScale(1000, 'mm').ratio, 25.4 / 72 * 1000, 1e-9, 'largest preset well inside');
+  });
 });
 
 describe('viewports', () => {

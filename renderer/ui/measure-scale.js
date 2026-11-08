@@ -108,6 +108,13 @@ function form(tab, pageIndex, f) {
     Object.assign(f, { unit: unit.value, imperial: Number(imperial.value), display: display.value, precision: Number(precision.value), real: real.value, calUnit: calUnit.value });
   }
   function choice() {
+    try {
+      return pick();
+    } catch (e) {
+      return { error: e.message }; // a scale out of range (measure.js makeScale)
+    }
+  }
+  function pick() {
     read();
     if (f.mode === 'metric' && preset.value === 'custom' && parseRatio(custom.value) == null) return { error: 'Enter the custom drawing scale as 1:n, for example 1:30.', focus: custom };
     if (f.mode === 'calibrated') {

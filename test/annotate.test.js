@@ -227,6 +227,7 @@ describe('flattenObjects draws every overlay type the app creates', () => {
     line: { x1: 40, y1: 130, x2: 140, y2: 130 },
     arrow: { x1: 40, y1: 150, x2: 140, y2: 150 },
     polyline: { points: [[40, 170], [90, 180], [140, 170]] },
+    polygon: { points: [[160, 170], [200, 170], [180, 200]] },
     ink: { points: [[40, 190], [90, 200], [140, 190]] },
     highlight: { x: 40, y: 210, w: 100, h: 14, color: '#ffff00' },
     whiteout: { x: 40, y: 230, w: 50, h: 10 },

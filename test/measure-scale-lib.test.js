@@ -73,3 +73,8 @@ test('precision choices, labels and the starting form', () => {
   assert.deepEqual(formFromScale(scaleFromDrawingScale(100, 'm')), { mode: 'metric', n: 100, unit: 'm', imperial: 2, display: 'ftin', precision: 3 });
   assert.equal(formFromScale(buildScale({ mode: 'imperial', imperial: 6, display: 'decimal', precision: 2 })).imperial, 6);
 });
+
+test('buildScale: a scale out of range is a clear error, not a scale', () => {
+  assert.throws(() => buildScale({ mode: 'metric', n: 1e12, unit: 'mm', precision: 1 }), /out of range/);
+  assert.throws(() => buildScale({ mode: 'calibrated', lengthPt: 1000, real: 1e-12, unit: 'mm', precision: 1 }), /out of range/);
+});

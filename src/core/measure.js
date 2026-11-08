@@ -10,6 +10,11 @@ export const UNITS = Object.keys(MM_PER);
 const DEF_DIST = { mm: 0, cm: 1, m: 3, in: 2, ft: 2 };
 const DEF_AREA = { mm: 0, cm: 1, m: 2, in: 2, ft: 2 };
 const ARCH_DEN = 16;
+/** Fraction-of-an-inch denominators an architectural scale may use; others fall back to ARCH_DEN. */
+const ARCH_DENS = [2, 4, 8, 16, 32, 64];
+/** Bounds of a scale's ratio (real units per point): wider than any drawing, narrow enough that an area stays finite. */
+export const MIN_RATIO = 1e-9;
+export const MAX_RATIO = 1e9;
 
 const isUnit = (u) => Object.hasOwn(MM_PER, u);
 const fmtNum = (n) => String(Math.round(n * 1e6) / 1e6 + 0);
@@ -20,7 +25,12 @@ const fmtNum = (n) => String(Math.round(n * 1e6) / 1e6 + 0);
  */
 function makeScale(ratio, unit, label, precision, style) {
   if (!(ratio > 0) || !Number.isFinite(ratio)) throw new RangeError('scale ratio must be a positive number');
-  const s = { ratio, unit, label, precision: precision ?? (style === 'architectural' ? ARCH_DEN : DEF_DIST[unit] ?? 2) };
+  if (ratio < MIN_RATIO || ratio > MAX_RATIO) {
+    throw new RangeError(`That scale is out of range: 1 pt on the page would be ${ratio.toPrecision(3)} ${unit}. Check the drawing scale or the real length.`);
+  }
+  const arch = style === 'architectural';
+  const p = arch ? (ARCH_DENS.includes(precision) ? precision : ARCH_DEN) : Number.isInteger(precision) ? Math.max(0, Math.min(6, precision)) : DEF_DIST[unit] ?? 2;
+  const s = { ratio, unit, label, precision: p };
   if (style === 'architectural') s.style = 'architectural';
   return s;
 }
@@ -159,6 +169,7 @@ function unitOf(u) {
 }
 
 const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
+const isDict = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 /**
  * A scale from plain /Measure data (as measureDict returns, or read from a file), or null when it is
@@ -166,24 +177,31 @@ const numOr = (v, d) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
  * = X[0].C x D[0].C. A feet-then-inches array (/X or /D) reads as architectural feet.
  */
 export function scaleFromMeasureDict(d) {
-  if (!d || (d.Subtype && d.Subtype !== 'RL')) return null;
+  if (!isDict(d) || (d.Subtype && d.Subtype !== 'RL')) return null;
   const X = Array.isArray(d.X) ? d.X : [];
-  if (!X.length) return null;
+  if (!isDict(X[0])) return null;
   let ratio = numOr(X[0].C, NaN);
   let arr = X;
   const D = Array.isArray(d.D) && d.D.length ? d.D : null;
   if (D) {
+    if (!isDict(D[0])) return null;
     ratio *= numOr(D[0].C, 1);
     arr = D;
   }
   const unit = unitOf(arr[0].U);
-  if (!unit || !(ratio > 0)) return null;
-  const second = arr[1];
+  // a file's numbers are untrusted: the product must be finite and within the scale bounds
+  if (!unit || !Number.isFinite(ratio) || !(ratio >= MIN_RATIO && ratio <= MAX_RATIO)) return null;
+  const second = isDict(arr[1]) ? arr[1] : null;
   const arch = unit === 'ft' && second && unitOf(second.U) === 'in' && Math.abs(numOr(second.C, 12) - 12) < 1e-9;
   let precision;
-  if (arch) precision = second.F === 'F' && numOr(second.D, 0) > 0 ? second.D : ARCH_DEN;
-  else if (arr[0].F === 'D' || arr[0].F === undefined) precision = Math.max(0, Math.round(Math.log10(numOr(arr[0].D, 100))));
-  return makeScale(ratio, unit, typeof d.R === 'string' ? d.R : '', precision, arch ? 'architectural' : undefined);
+  // makeScale keeps decimals to 0-6 and a fraction denominator to ARCH_DENS
+  if (arch) precision = second.F === 'F' ? numOr(second.D, ARCH_DEN) : ARCH_DEN;
+  else if (arr[0].F === 'D' || arr[0].F === undefined) precision = Math.round(Math.log10(Math.max(1, numOr(arr[0].D, 100))));
+  try {
+    return makeScale(ratio, unit, typeof d.R === 'string' ? d.R : '', precision, arch ? 'architectural' : undefined);
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------- viewports (/VP)
