@@ -75,7 +75,7 @@ try {
   step = 'empty state';
   await ev("app.state.sidebarOpen = true; app.showSidebarTab('measurements');");
   await page.waitForSelector(`${P} .sb-empty`);
-  eq((await panel()).empty, 'No measurements yet. Use Distance, Perimeter or Area in the toolbar.', 'empty state');
+  eq((await panel()).empty, 'No measurements yet. Use Measure in the toolbar.', 'empty state');
   check(await page.isDisabled(`${P} .ms-export`), 'Export CSV is disabled without measurements');
 
   step = 'create';

@@ -1,5 +1,7 @@
-// Measure tools: Distance, Perimeter and Area. Each click places a point in page points; the object
-// in progress is drawn as a preview that carries `measure`, so it shows the running value.
+// Measure tool ('measure'): one toolbar button whose options bar picks Distance, Perimeter or Area
+// (remembered in settings 'measure.kind'; measureTools.setKind / getKind). Each click places a point
+// in page points; the object in progress is drawn as a preview that carries `measure`, so it shows
+// the running value.
 //   Distance  : click, click; or press, drag, release. Under 1 pt is ignored.
 //   Perimeter : click vertex by vertex; double-click or Enter finishes (2+ points), Backspace removes
 //   Area        the last vertex, Esc cancels. Area finishes with 3+ points. A click on the last vertex
@@ -7,13 +9,14 @@
 // Shift holds the current segment to 0/45/90° from the previous point. Every point first goes through
 // snapHook(tab, page, pt, event) => pt (identity here; measure-snap.js installs object snapping).
 // The finished object is one annotations.add (one undo step) and is selected.
-// Each tool keeps its own colour and width: onActivate swaps them into the shared state.toolStyle and
-// onDeactivate puts the shared values back (remembered in settings 'measure.toolStyle').
+// Each kind keeps its own colour and width: onActivate swaps them into the shared state.toolStyle and
+// onDeactivate puts the shared values back (remembered in settings 'measure.toolStyle'). Switching the
+// kind cancels a measurement in progress and swaps in the new kind's colour and width.
 import { bus } from '../bus.js';
 import { state, activeTab } from '../state.js';
-import { isTyping } from './dom.js';
+import { h, isTyping } from './dom.js';
 import { dialogOpen } from './dialogs.js';
-import { registerTool } from './toolbar.js';
+import { registerTool, setTool } from './toolbar.js';
 import { annotations } from './annotations.js';
 import { scaleChip } from './measure-scale.js';
 import { snapAngle } from './measure-scale-lib.js';
@@ -24,14 +27,16 @@ const DRAG_PX = 3;       // a press-release that moved less is a click
 const SAME_PX = 3;       // a click this close to the last vertex adds nothing
 const DBL_MS = 400;      // second click of a double-click
 const STYLE_KEY = 'measure.toolStyle';
+const KIND_KEY = 'measure.kind';
+const TOOL_ID = 'measure';
 
 const svg = (inner) => `<svg class="icon" width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${inner}</svg>`;
 const TOOLS = {
-  distance: { id: 'measure-distance', label: 'Measure distance', type: 'line', min: 2, color: '#d32f2f',
+  distance: { label: 'Distance', type: 'line', min: 2, color: '#d32f2f',
     icon: svg('<path d="M2 8h12M2 5.5v5M14 5.5v5M4 8l1.5-1.2M4 8l1.5 1.2M12 8l-1.5-1.2M12 8l-1.5 1.2"/>') },
-  perimeter: { id: 'measure-perimeter', label: 'Measure perimeter', type: 'polyline', min: 2, color: '#1565c0',
+  perimeter: { label: 'Perimeter', type: 'polyline', min: 2, color: '#1565c0',
     icon: svg('<path d="M2 12.5L6 4l4.5 6L14 3.5"/><path d="M1.2 11.6l1.6 1.8M5.1 4.3l1.8-.6M9.9 10.6l1.2-1.2M13.2 3l1.6 1"/>') },
-  area: { id: 'measure-area', label: 'Measure area', type: 'polygon', min: 3, color: '#2e7d32',
+  area: { label: 'Area', type: 'polygon', min: 3, color: '#2e7d32',
     icon: svg('<path d="M2.5 12.5L4 3.5l8.5 1.5 1 7.5z"/><path d="M4.3 9L8 5.2M5 11.8l6-6M8.5 12.2l4.2-4.2" stroke-width="0.8"/>') },
 };
 
@@ -58,7 +63,7 @@ function swapOut(kind) {
   window.api?.settingsSet?.(STYLE_KEY, own)?.catch?.(() => {});
 }
 
-// ---------------------------------------------------------------- one tool
+// ---------------------------------------------------------------- one kind
 function measureTool(kind) {
   const def = TOOLS[kind];
   let g = null; // {tab, page, scale, pts: [[x,y]], cursor: [x,y]|null, down: {x, y}|null, lastClick: {t, x, y}}
@@ -154,23 +159,48 @@ function measureTool(kind) {
   };
 }
 
+// ---------------------------------------------------------------- kind
+let kind = 'distance';
+const handlers = Object.fromEntries(Object.keys(TOOLS).map((k) => [k, measureTool(k)]));
+
+/** Make `k` the current kind: a measurement in progress is cancelled and, while the tool is active,
+ *  the new kind's colour and width replace the old one's. Unknown kinds are ignored. */
+function setKind(k) {
+  if (!TOOLS[k]) return;
+  window.api?.settingsSet?.(KIND_KEY, k)?.catch?.(() => {});
+  if (k === kind) return;
+  const active = state.tool === TOOL_ID;
+  handlers[kind].cancel();
+  if (active) swapOut(kind);
+  kind = k;
+  if (active) { swapIn(kind); setTool(TOOL_ID); } // same id: re-renders the options bar
+}
+
+function measurePicker(c) {
+  const seg = h('div.opt-seg', { role: 'group', 'aria-label': 'Measure' });
+  for (const [k, t] of Object.entries(TOOLS)) {
+    seg.append(h('button.tb-btn.opt-measure', {
+      type: 'button', title: t.label, 'aria-label': t.label, 'aria-pressed': String(kind === k),
+      dataset: { kind: k }, html: t.icon, onclick: () => setKind(k),
+    }));
+  }
+  c.append(seg);
+}
+
 // ---------------------------------------------------------------- init
 export function initMeasureTools() {
-  const handlers = {};
-  for (const [kind, t] of Object.entries(TOOLS)) {
-    const m = measureTool(kind);
-    handlers[t.id] = m;
-    registerTool({
-      id: t.id, label: t.label, icon: t.icon, cursor: 'crosshair', options: [scaleChip(), 'color', 'strokeWidth'],
-      onPointerDown: m.onPointerDown, onPointerMove: m.onPointerMove, onPointerUp: m.onPointerUp,
-      onActivate: () => swapIn(kind),
-      onDeactivate: () => { m.cancel(); swapOut(kind); },
-    });
-  }
+  registerTool({
+    id: TOOL_ID, label: 'Measure: distance, perimeter, area', icon: TOOLS.distance.icon, cursor: 'crosshair',
+    options: [measurePicker, scaleChip(), 'color', 'strokeWidth'],
+    onPointerDown: (e, ctx) => handlers[kind].onPointerDown(e, ctx),
+    onPointerMove: (e, ctx) => handlers[kind].onPointerMove(e, ctx),
+    onPointerUp: (e, ctx) => handlers[kind].onPointerUp(e, ctx),
+    onActivate: () => swapIn(kind),
+    onDeactivate: () => { handlers[kind].cancel(); swapOut(kind); },
+  });
   window.addEventListener('keydown', (e) => {
-    const m = handlers[state.tool];
-    if (!m || e.ctrlKey || e.metaKey || e.altKey || dialogOpen() || isTyping(e.target) || !activeTab()) return;
-    if (m.onKey(e)) { e.preventDefault(); e.stopPropagation(); }
+    if (state.tool !== TOOL_ID || e.ctrlKey || e.metaKey || e.altKey || dialogOpen() || isTyping(e.target) || !activeTab()) return;
+    if (handlers[kind].onKey(e)) { e.preventDefault(); e.stopPropagation(); }
   }, true);
   window.api?.settingsGet?.(STYLE_KEY)?.then?.((v) => {
     if (!v || typeof v !== 'object') return;
@@ -179,4 +209,7 @@ export function initMeasureTools() {
       if (s && /^#[0-9a-f]{6}$/i.test(s.color ?? '') && Number(s.strokeWidth) > 0) own[k] = { color: s.color, strokeWidth: Number(s.strokeWidth) };
     }
   }, () => {});
+  window.api?.settingsGet?.(KIND_KEY)?.then?.((v) => { if (TOOLS[v] && v !== kind) setKind(v); }, () => {});
 }
+
+export const measureTools = { setKind, getKind: () => kind };

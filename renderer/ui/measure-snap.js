@@ -17,7 +17,7 @@ import { setSnapHook } from './tools-measure.js';
 import { snapPointsFromOps, nearestSnap } from './measure-snap-lib.js';
 
 const SNAP_PX = 8;
-const isMeasure = (tool) => /^measure-(distance|perimeter|area)$/.test(tool ?? '');
+const isMeasure = (tool) => tool === 'measure';
 
 // ---------------------------------------------------------------- cache
 const cache = new WeakMap(); // tab -> {pages: tab.pages, map: Map<pageIndex, points | Promise>}

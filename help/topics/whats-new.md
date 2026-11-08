@@ -12,7 +12,7 @@ The most recent additions, newest first. Versions up to 0.2.10 are tagged in the
 
 ## Version 0.2.23
 
-- **Measure distances and areas.** Set the drawing scale (presets such as 1:50, imperial scales, or **Calibrate…** from a known dimension), then measure with **Measure distance**, **Measure perimeter** and **Measure area**. Points snap to the ends of lines in the drawing. The **Measurements** list shows totals and exports to CSV. Scales and measurements are saved in the PDF in the standard form other PDF programs read. See [Measure](#topic:measure).
+- **Measure distances and areas.** Set the drawing scale (presets such as 1:50, imperial scales, or **Calibrate…** from a known dimension), then measure with **Measure**: **Distance**, **Perimeter** or **Area**. Points snap to the ends of lines in the drawing. The **Measurements** list shows totals and exports to CSV. Scales and measurements are saved in the PDF in the standard form other PDF programs read. See [Measure](#topic:measure).
 - **Polygon markups** made in other PDF programs now open and can be edited.
 
 ## Version 0.2.22

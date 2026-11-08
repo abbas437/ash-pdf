@@ -234,10 +234,18 @@ try {
   const objCount = () => ev('return tab.objects.length;');
   const lastObj = () => ev('return tab.objects[tab.objects.length - 1];');
   const setTool = (id) => ev('app.setTool(arg);', id);
+  const getKind = () => ev('const { measureTools } = await import("/renderer/ui/tools-measure.js"); return measureTools.getKind();');
+  // The one Measure tool, then its Distance / Perimeter / Area segment in the options bar.
+  const useMeasure = async (kind) => {
+    await setTool('measure');
+    await page.click(`.opt-measure[data-kind="${kind}"]`);
+    check((await getKind()) === kind, `kind ${kind}: ${await getKind()}`);
+    check((await page.getAttribute(`.opt-measure[data-kind="${kind}"]`, 'aria-pressed')) === 'true', `${kind} segment pressed`);
+  };
   const at = (x, y) => toClient(x, y);
 
   step = 'Distance: two clicks 100 pt apart';
-  await setTool('measure-distance');
+  await useMeasure('distance');
   check((await ev('return app.state.toolStyle.color;')) === '#d32f2f', 'Distance colour swapped in');
   let n0 = await objCount();
   await page.mouse.click(...await at(100, 400));
@@ -258,7 +266,7 @@ try {
   check((await objCount()) === n0, 'a distance under 1 pt adds nothing');
 
   step = 'Area: 4-corner rectangle, Enter';
-  await setTool('measure-area');
+  await useMeasure('area');
   check((await ev('return app.state.toolStyle.color;')) === '#2e7d32', 'Area colour swapped in');
   n0 = await objCount();
   for (const [x, y] of [[100, 500], [300, 500], [300, 600], [100, 600]]) await page.mouse.click(...await at(x, y));
@@ -276,7 +284,7 @@ try {
   check(!(await ev('return v.getOverlaySvg(tab, 0).querySelector(".ann-preview *");')), 'no preview after Esc');
 
   step = 'Perimeter: 3 clicks, Backspace, 1 click, double-click';
-  await setTool('measure-perimeter');
+  await useMeasure('perimeter');
   n0 = await objCount();
   for (const [x, y] of [[100, 150], [200, 150], [250, 200]]) await page.mouse.click(...await at(x, y));
   await page.keyboard.press('Backspace');
@@ -298,8 +306,20 @@ try {
   o = await lastObj();
   check((await objCount()) === n0 + 1 && o.points.length === 2, `double-click finish: ${JSON.stringify(o.points)}`);
 
+  step = 'switching the kind cancels a measurement in progress';
+  await useMeasure('area');
+  n0 = await objCount();
+  for (const [x, y] of [[350, 300], [450, 300]]) await page.mouse.click(...await at(x, y));
+  await page.mouse.move(...await at(450, 350), { steps: 2 });
+  check(await ev('return !!v.getOverlaySvg(tab, 0).querySelector(".ann-preview *");'), 'area in progress');
+  await page.click('.opt-measure[data-kind="distance"]');
+  check((await getKind()) === 'distance' && (await ev('return app.state.tool;')) === 'measure', 'Distance picked, Measure still active');
+  check(!(await ev('return v.getOverlaySvg(tab, 0).querySelector(".ann-preview *");')), 'no preview after the switch');
+  check((await objCount()) === n0, 'the switch added nothing');
+  check((await ev('return app.state.toolStyle.color;')) === '#d32f2f', 'Distance colour after the switch');
+
   step = 'Shift snaps a near-horizontal segment flat';
-  await setTool('measure-distance');
+  await useMeasure('distance');
   await page.mouse.click(...await at(100, 300));
   await page.keyboard.down('Shift');
   await page.mouse.click(...await at(200, 306));
@@ -333,7 +353,7 @@ try {
   };
 
   step = 'snap: the marker shows on a line end near the pointer';
-  await setTool('measure-distance');
+  await useMeasure('distance');
   await ev('tab.view.scrollEl.scrollTop += 400;'); await frames(); // bring the line (y 692) on screen
   const e1 = await at(100, 692);
   check(e1[1] > 0 && e1[1] < 1000, `line end on screen: ${e1}`);
@@ -376,7 +396,7 @@ try {
     v.setZoom(tab, 1); an.setMeasureScale(tab, 0, scaleFromDrawingScale(100, 'mm'), 'preset');`);
   await frames();
   check(JSON.stringify(await ev('const vp = tab.pages[0].getViewport({ scale: 1 }); return [vp.width, vp.height];')) === '[792,612]', 'rotated page is 792 x 612');
-  await setTool('measure-distance');
+  await useMeasure('distance');
   await page.mouse.move(...await off(150, 50, 4, 3), { steps: 3 });
   await page.waitForFunction(() => !document.querySelector('.measure-snap-marker')?.hidden, null, { timeout: 5000 }).catch(() => {});
   o = await distance(await off(150, 50, 4, 3), await off(150, 350, -3, -5));

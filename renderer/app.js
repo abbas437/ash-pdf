@@ -837,7 +837,7 @@ export const app = { state, bus, viewer, dropHint, clearDrop, insertDroppedFiles
 window.ashStudio = app;
 initAnnotations();
 initShapeTools();
-initMeasureTools(); // Measure distance / perimeter / area
+initMeasureTools(); // Measure: distance / perimeter / area
 initMeasureSnap(); // their object snapping
 initTextTools(app);
 initCalloutTools(app);

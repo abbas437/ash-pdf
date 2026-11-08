@@ -40,9 +40,8 @@ also the starting scale of documents that have none.
 
 ## Measure
 
-The three measure tools are in the toolbar after the shapes: **Measure distance**, **Measure
-perimeter** and **Measure area**. Their options bar shows the page scale; click it to open the scale
-dialog.
+**Measure** in the toolbar, after Shapes. Choose **Distance**, **Perimeter** or **Area** in its options bar.
+The options bar also shows the page scale; click it to open the scale dialog.
 
 - **Distance**: click the two ends, or press, drag and release.
 - **Perimeter** and **Area**: click each corner in turn. The running value follows the pointer.
