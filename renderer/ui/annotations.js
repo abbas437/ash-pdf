@@ -58,6 +58,9 @@ import { restoreDropped, takeObjects, newEntry, nextHistory, peekHistory } from 
 import { objectsSummary, unionBox, pasteDelta, clampDelta, pageBox } from './clipboard-lib.js';
 import { stable, changedKeys } from './objdiff-lib.js';
 import { canGroup, canUngroup, groupPatches, ungroupPatches, soleGroup, groupResizeBox, scaleMember } from './grouping-lib.js';
+import { withValue, labelBox, tickSegments, pointInPolygon, AREA_FILL_OPACITY } from './measure-lib.js';
+import { signedSaveMode } from './save-lib.js';
+import { scaleFromDrawingScale, MIN_RATIO, MAX_RATIO, MM_PER } from '../../src/core/measure.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -206,13 +209,83 @@ const polyType = {
   },
   style: shapeStyle,
 };
+
+// ---------------------------------------------------------------- measurements (measure-lib.js)
+/** Draw a measurement's caption (white box, page points, so it scales with zoom) into `g`. */
+function measureCaption(o, g) {
+  const lb = labelBox(o);
+  if (!lb) return;
+  const c = svgEl('g', { class: 'ann-measure-label' }, g);
+  svgEl('rect', { x: lb.x, y: lb.y, width: lb.w, height: lb.h, fill: '#ffffff', stroke: paint(o.stroke ?? '#000000'), 'stroke-width': 0.5 }, c);
+  const t = svgEl('text', { x: lb.x + lb.w / 2, y: lb.y + lb.h / 2, 'font-family': 'Helvetica, Arial, sans-serif', 'font-size': lb.fontSize, 'text-anchor': 'middle', 'dominant-baseline': 'central', fill: paint(o.stroke ?? '#000000') }, c);
+  t.textContent = lb.text;
+}
+/** A patch for `o` as patched by `patch`: adds the re-computed measure when `o` is a measurement. */
+const remeasure = (o, patch) => (o.measure?.scale ? { ...patch, measure: withValue({ ...o, ...patch }) } : patch);
+/** Vertex handles v0..vn of a points object; dragging one moves that vertex only. */
+const vertexHandles = (o) => o.points.map(([x, y], k) => ({ id: `v${k}`, x, y }));
+function moveVertex(o, handle, dx, dy) {
+  const k = Number(handle.slice(1));
+  return { points: o.points.map(([x, y], i) => (i === k ? [x + dx, y + dy] : [x, y])) };
+}
+const polygonType = {
+  render(o, parent) {
+    const g = svgEl('g', { opacity: opacityOf(o.opacity) }, parent);
+    const stroke = paint(o.stroke ?? '#000000');
+    // An area measurement without a fill of its own: a translucent fill of the stroke colour.
+    const fill = o.fill && o.fill !== 'none' ? o.fill : o.measure?.kind === 'area' ? stroke : 'none';
+    svgEl('path', { d: `${polyPath(o.points)}Z`, fill, 'fill-opacity': o.fill && o.fill !== 'none' ? null : o.measure?.kind === 'area' ? AREA_FILL_OPACITY : null, 'stroke-linejoin': 'round', ...strokeAttrs(o), opacity: null }, g);
+    if (o.measure) measureCaption(o, g);
+    return g;
+  },
+  bbox: (o) => pointsBox(o.points),
+  handles: vertexHandles,
+  hit(o, x, y, tol) {
+    const n = o.points.length, sw = (o.strokeWidth ?? 1) / 2;
+    for (let i = 0; i < n; i++) { const a = o.points[i], b = o.points[(i + 1) % n]; if (segDist(x, y, a[0], a[1], b[0], b[1]) <= tol + sw) return true; }
+    return (o.fill && o.fill !== 'none') || o.measure?.kind === 'area' ? pointInPolygon(o.points, x, y) : false;
+  },
+  move: (o, dx, dy) => ({ points: o.points.map(([x, y]) => [x + dx, y + dy]) }),
+  resize: (o, handle, dx, dy) => remeasure(o, moveVertex(o, handle, dx, dy)),
+  style: (o, s, keys) => ({ ...shapeStyle(o, s, keys), ...(keys.includes('fill') ? { fill: s.fill ?? null } : {}) }),
+};
+/** Polylines: a measured one (perimeter) gets vertex handles and its caption; others are polyType. */
+const polylineType = {
+  ...polyType,
+  render(o, parent) {
+    if (!o.measure) return polyType.render(o, parent);
+    const g = svgEl('g', {}, parent);
+    polyType.render(o, g);
+    measureCaption(o, g);
+    return g;
+  },
+  handles: (o) => (o.measure ? vertexHandles(o) : polyType.handles(o)),
+  resize: (o, handle, dx, dy) => (handle.startsWith('v') ? remeasure(o, moveVertex(o, handle, dx, dy)) : polyType.resize(o, handle, dx, dy)),
+};
+/** Lines: a measured one (distance) gets tick ends and its caption; its value follows the end points. */
+function measurableLine(base) {
+  return {
+    ...base,
+    render(o, parent) {
+      const g = base.render(o, parent);
+      if (!o.measure) return g;
+      for (const t of tickSegments(o, Math.max(4, (o.strokeWidth ?? 1) * 4))) {
+        svgEl('line', { class: 'ann-measure-tick', x1: t[0], y1: t[1], x2: t[2], y2: t[3], stroke: paint(o.stroke ?? '#000000'), 'stroke-width': Number.isFinite(o.strokeWidth) ? o.strokeWidth : 1 }, g);
+      }
+      measureCaption(o, g);
+      return g;
+    },
+    resize: (o, handle, dx, dy) => remeasure(o, base.resize(o, handle, dx, dy)),
+  };
+}
 function registerBuiltins() {
   registerObjectType('rect', boxType((o, p) => svgEl('rect', { x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.fill), ...strokeAttrs(o) }, p), { style: shapeStyle }));
   registerObjectType('ellipse', boxType((o, p) => svgEl('ellipse', { cx: o.x + o.w / 2, cy: o.y + o.h / 2, rx: o.w / 2, ry: o.h / 2, fill: paint(o.fill), ...strokeAttrs(o) }, p), { style: shapeStyle }));
   registerObjectType('cloud', boxType((o, p) => svgEl('path', { d: cloudPath(o), fill: paint(o.fill), 'stroke-linejoin': 'round', ...strokeAttrs(o) }, p), { style: shapeStyle }));
-  registerObjectType('line', lineType(false));
-  registerObjectType('arrow', lineType(true));
-  registerObjectType('polyline', polyType);
+  registerObjectType('line', measurableLine(lineType(false)));
+  registerObjectType('arrow', measurableLine(lineType(true)));
+  registerObjectType('polyline', polylineType);
+  registerObjectType('polygon', polygonType);
   registerObjectType('ink', polyType);
   registerObjectType('highlight', boxType((o, p) => svgEl('rect', { class: 'ann-highlight ann-blend', x: o.x, y: o.y, width: o.w, height: o.h, fill: paint(o.color ?? '#ffff00'), opacity: Math.min(opacityOf(o.opacity, 0.4), 0.5) }, p), {
     style: (o, s, keys) => ({ ...(keys.includes('hlColor') ? { color: s.hlColor } : {}), ...(keys.includes('hlOpacity') ? { opacity: s.hlOpacity } : {}) }),
@@ -253,6 +326,8 @@ function applyCmd(tab, cmd, dir) { // dir: 'do' | 'undo'
     const ids = new Set(cmd.items.map((it) => it.obj.id));
     tab.objects = objs.filter((o) => !ids.has(o.id));
     for (const id of ids) selOf(tab).delete(id);
+  } else if (cmd.kind === 'scale') {
+    Object.assign(scaleState(tab), structuredClone(dir === 'do' ? cmd.after : cmd.before));
   } else if (cmd.kind === 'update') {
     for (const c of cmd.changes) {
       const o = objs.find((x) => x.id === c.id);
@@ -276,7 +351,7 @@ function commit(tab, cmd, coalesce = null) {
   tab.bytesRedo = [];
   changed(tab);
 }
-const KIND_LABEL = { add: 'Add annotation', remove: 'Delete annotation', update: 'Edit annotation' };
+const KIND_LABEL = { add: 'Add annotation', remove: 'Delete annotation', update: 'Edit annotation', scale: 'Set scale' };
 /** Name of an annotation history entry for the Undo / Redo tooltips and menu items. */
 function cmdLabel(cmd) {
   if (cmd.kind !== 'batch') return KIND_LABEL[cmd.kind] ?? 'Annotation change';
@@ -409,6 +484,11 @@ function batch(tab, fn) {
 }
 function remapPages(tab, map) {
   ensureTab(tab);
+  if (tab.measureScale) { // page scales (and what the file holds) move with their pages
+    const ms = tab.measureScale, move = (m) => Object.fromEntries(Object.entries(m).flatMap(([k, v]) => { const n = map.has(+k) ? map.get(+k) : +k; return n == null ? [] : [[n, v]]; }));
+    ms.pages = move(ms.pages);
+    ms.saved = move(ms.saved);
+  }
   const before = tab.objects.length;
   tab.objects = tab.objects.filter((o) => !map.has(o.page) || map.get(o.page) != null);
   const sync = syncOf(tab);
@@ -856,6 +936,45 @@ function updateChrome() {
   }
 }
 
+// ---------------------------------------------------------------- page scales (Measure)
+// tab.measureScale = { def: scale|null (document default), pages: {index: {scale, source}}, saved: {index:
+// stable(scale)} what the file's /VP gives each page }. source: 'pdf' (read from /VP), 'calibrated', 'preset'.
+export const LAST_SCALE_KEY = 'measure.lastScale';
+let lastScale = null; // settings measure.lastScale: the default of documents without a scale
+const FALLBACK_SCALE = scaleFromDrawingScale(1, 'mm');
+function scaleState(tab) { return (tab.measureScale ??= { def: null, pages: {}, saved: {} }); }
+function initScales(tab, scales = []) {
+  const ms = scaleState(tab);
+  scales.forEach((sc, i) => { if (sc) { ms.pages[i] = { scale: sc, source: 'pdf' }; ms.saved[i] = stable(sc); } });
+}
+/** {scale, source} of page `pageIndex`: its own, else the document default, else measure.lastScale ('default'). */
+export function measureScaleOf(tab, pageIndex) {
+  const ms = scaleState(tab), own = ms.pages[pageIndex];
+  if (own) return structuredClone(own);
+  return { scale: structuredClone(ms.def ?? lastScale ?? FALLBACK_SCALE), source: 'default' };
+}
+/**
+ * Set the scale of page `pageIndex`, or of every page and the document default ('all'): one undo step.
+ * Existing measurements keep their own scale; new ones use this. Remembered as measure.lastScale.
+ */
+export function setMeasureScale(tab, pageIndex, scale, source = 'preset') {
+  ensureTab(tab);
+  const ms = scaleState(tab), before = structuredClone({ def: ms.def, pages: ms.pages });
+  const entry = { scale: structuredClone(scale), source };
+  if (pageIndex === 'all') { ms.def = structuredClone(scale); ms.pages = Object.fromEntries(Array.from({ length: tab.numPages ?? 0 }, (_, i) => [i, structuredClone(entry)])); }
+  else ms.pages = { ...ms.pages, [pageIndex]: entry };
+  commit(tab, { kind: 'scale', before, after: structuredClone({ def: ms.def, pages: ms.pages }) });
+  lastScale = structuredClone(scale);
+  window.api?.settingsSet?.(LAST_SCALE_KEY, lastScale)?.catch?.(() => {});
+}
+/** writeAnnotations `viewports`: the pages whose scale differs from the file's /VP. */
+function scaleEdits(tab) {
+  const ms = tab.measureScale;
+  if (!ms) return [];
+  const keys = new Set([...Object.keys(ms.pages), ...Object.keys(ms.saved)].map(Number).filter((i) => i < (tab.numPages ?? Infinity)));
+  return [...keys].filter((i) => (ms.pages[i] ? stable(ms.pages[i].scale) : undefined) !== ms.saved[i]).map((i) => ({ page: i, scale: ms.pages[i]?.scale ?? null }));
+}
+
 // ---------------------------------------------------------------- save hook
 export const AUTHOR_KEY = 'annotations.author';
 export const DEFAULT_AUTHOR = 'ASH PDF Studio';
@@ -936,7 +1055,7 @@ async function makeView(tab, bytes) {
   if (tab.password != null) return asIs; // encrypted: read-only, rendered as is
   ensureTab(tab);
   try {
-    const { objects } = await coreWorker.readAnnotations(bytes);
+    const { objects, scales } = await coreWorker.readAnnotations(bytes, { scales: true });
     if (tab.bytes !== bytes) { // superseded: the newer reload reconciles (and these bytes, if they come back, are read again)
       if (views.get(tab)?.bytes === bytes) views.delete(tab);
       // Unless no newer reload exists (a save put its output in tab.bytes without one): the raw copy
@@ -954,7 +1073,7 @@ async function makeView(tab, bytes) {
         if (done) return;
         done = true;
         if (views.get(tab)?.bytes === bytes) views.delete(tab);
-        if (tab.bytes === bytes) { reconcile(tab, objects, bytes); return; }
+        if (tab.bytes === bytes) { if (!tab.measureScale) initScales(tab, scales); reconcile(tab, objects, bytes); return; }
         // Superseded while this copy was loading, by bytes no reload shows (a save puts its output in
         // tab.bytes without one): the installed copy lacks markups nothing mirrors. Reload the current
         // bytes, whose view copy and reconcile match again. (commit runs only for the newest reload, so
@@ -1016,11 +1135,14 @@ async function beforeSave(tab, bytes = tab.bytes) {
   const update = rest.filter((o) => sync.has(o.id) && stable(o) !== sync.get(o.id).snap).map((o) => ({ ...o, source: sync.get(o.id).source }));
   const live = new Set(rest.map((o) => o.id));
   const remove = [...sync.keys()].filter((id) => !live.has(id));
-  if (!burn.length && !add.length && !update.length && !remove.length) return undefined;
+  // Page scales as /VP, except in an incremental update over a signed original (page dictionaries
+  // must not change there; each measurement keeps its scale in its own /Measure).
+  const viewports = signedSaveMode(tab) === 'update' ? [] : scaleEdits(tab);
+  if (!burn.length && !add.length && !update.length && !remove.length && !viewports.length) return undefined;
   const { flattenObjects, writeAnnotations } = await import('../../src/core/index.js');
   let out = burn.length ? await flattenObjects(bytes, burn) : bytes;
-  if (add.length || update.length || remove.length) out = await writeAnnotations(out, { add, update, remove }, { author: await getAuthor() });
-  pending.set(tab, { base: tab.bytes, out, snaps: new Map(rest.map((o) => [o.id, stable(o)])), remove, burned: new Set(burn.map((o) => o.id)) });
+  if (add.length || update.length || remove.length || viewports.length) out = await writeAnnotations(out, { add, update, remove, viewports }, { author: await getAuthor() });
+  pending.set(tab, { base: tab.bytes, out, snaps: new Map(rest.map((o) => [o.id, stable(o)])), remove, burned: new Set(burn.map((o) => o.id)), viewports });
   return out;
 }
 beforeSave.id = 'annotations';
@@ -1035,6 +1157,7 @@ beforeSave.saved = (tab, clean) => {
   const sync = syncOf(tab);
   for (const id of p.remove) sync.delete(id); // ids reconcile added since beforeSave are kept
   for (const [id, snap] of p.snaps) sync.set(id, { source: sync.get(id)?.source ?? { nm: id }, snap });
+  for (const { page, scale } of p.viewports) { if (scale) scaleState(tab).saved[page] = stable(scale); else delete scaleState(tab).saved[page]; }
   if (p.burned.size) {
     tab.objects = tab.objects.filter((o) => !p.burned.has(o.id));
     for (const id of p.burned) selOf(tab).delete(id);
@@ -1063,6 +1186,7 @@ let inited = false;
 export function initAnnotations() {
   if (inited) return annotations;
   inited = true;
+  window.api?.settingsGet?.(LAST_SCALE_KEY)?.then?.((v) => { if (v?.ratio >= MIN_RATIO && v.ratio <= MAX_RATIO && Object.hasOwn(MM_PER, v.unit)) lastScale ??= v; }, () => {});
   registerBuiltins();
   placeHook();
   viewer.setViewBytes(viewBytes);
@@ -1099,4 +1223,5 @@ export const annotations = {
   /** Internal for tools: add several objects as one undo step, returns their ids. */
   addMany,
   getAuthor, setAuthor,
+  measureScaleOf, setMeasureScale,
 };

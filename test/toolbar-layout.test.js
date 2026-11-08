@@ -37,7 +37,7 @@ test('hidden, reorder, move to another group and group order are kept', () => {
 test('moves past the ends do nothing; the input layout is never changed', () => {
   const d = defaultLayout();
   assert.deepEqual(moveItem(d, 'select', -1), d);
-  assert.deepEqual(moveItem(d, 'shapes', 1), d);
+  assert.deepEqual(moveItem(d, 'measure', 1), d);
   assert.deepEqual(moveGroup(d, 'navigate', -1), d);
   assert.deepEqual(moveGroup(d, 'sign', 1), d);
   setHidden(d, 'hand', true);
@@ -74,7 +74,26 @@ test('a tool new in a later version appears in its default place', () => {
   // Reversed order is kept; squiggly goes after strikeout (its default predecessor).
   const c = l.order.comment;
   assert.equal(c.indexOf('squiggly'), c.indexOf('strikeout') + 1);
-  assert.equal(c[0], 'shapes');
+  assert.equal(c[0], 'measure');
+});
+
+test('a layout saved before the measure tool gets it after Shapes', () => {
+  const old = defaultLayout();
+  old.order.comment = old.order.comment.filter((id) => id !== 'measure');
+  const c = cleanLayout(old).order.comment;
+  assert.deepEqual(c.slice(c.indexOf('shapes')), ['shapes', 'measure']);
+});
+
+test('a layout saved with the three measure buttons keeps one Measure in their place', () => {
+  const old = defaultLayout();
+  old.order.comment = ['measure-area', 'measure-distance', ...old.order.comment.filter((id) => id !== 'measure'), 'measure-perimeter'];
+  old.hidden = ['measure-perimeter'];
+  const l = cleanLayout(old);
+  assert.deepEqual(l.order.comment.filter((id) => id.startsWith('measure')), ['measure']);
+  assert.equal(l.order.comment[0], 'measure');
+  assert.deepEqual(l.hidden, [], 'hiding one old measure button does not hide all of Measure');
+  assert.deepEqual(cleanLayout({ ...old, hidden: ['measure-area', 'measure-distance', 'measure-perimeter'] }).hidden, ['measure'], 'all three hidden hides Measure');
+  assert.equal(Object.values(l.order).flat().length, DEFAULT_GROUPS.flatMap((g) => g[2]).length);
 });
 
 test('Select can never be hidden', () => {

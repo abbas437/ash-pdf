@@ -615,6 +615,12 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .cm-act:hover:not(:disabled) { background: var(--hover); }
 .cm-act.danger { color: var(--sig-danger); }
 .cm-reply-text { width: min(360px, 80vw); box-sizing: border-box; resize: vertical; }
+.ms-kind { flex: 1; min-width: 0; font-weight: 600; }
+.ms-value { flex: none; font-variant-numeric: tabular-nums; }
+.ms-item .cm-type { margin-left: 0; }
+.ms-totals { flex: none; padding: 6px 10px 8px; border-top: 1px solid var(--line); background: var(--surface); font-size: 12px; }
+.ms-total { display: flex; justify-content: space-between; gap: 8px; }
+.ms-total-value { font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ---- Compare revisions dialog and Differences tab (ui/comparerev.js); added / removed reuse the Comments badge greens and reds (contrast checked in both themes). */
 :root { --cmp-added: var(--cm-accepted); --cmp-removed: var(--cm-rejected); }
@@ -803,3 +809,16 @@ body.reading-mode { cursor: default; }
 .btn.tbc-mini { min-width: 30px; padding: 2px 6px; }
 .tbc-group { width: 140px; }
 .tbc-empty { margin: 4px 8px; color: var(--muted); }
+
+/* Measure scale dialog (ui/measure-scale.js) */
+.ms-form { display: grid; gap: 8px; min-width: 420px; }
+.ms-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.ms-radio { display: inline-flex; align-items: center; gap: 4px; min-width: 110px; }
+.ms-label { min-width: 110px; color: var(--muted); }
+.ms-current { margin: 0 0 4px; color: var(--muted); }
+.ms-form #ms-custom, .ms-form #ms-real { width: 120px; }
+.ms-error { margin: 0; min-height: 1.2em; color: var(--danger, #c62828); }
+.ms-cal-svg { z-index: 6; pointer-events: none; }
+/* Measure snap marker (ui/measure-snap.js) */
+.measure-snap-marker { position: fixed; width: 8px; height: 8px; box-sizing: border-box; border: 1.5px solid var(--focus); outline: 1px solid rgba(255, 255, 255, 0.8); pointer-events: none; z-index: 50; }
+.ms-cal-line { stroke: var(--focus); stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }

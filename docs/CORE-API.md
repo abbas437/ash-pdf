@@ -194,7 +194,10 @@ Helpers described in *Text and fonts*.
 
 ## annots.js — real PDF annotations
 
-### `writeAnnotations(pdfBytes, {add=[], update=[], remove=[]}, {author, now}?) → Promise<Uint8Array>`
+### `writeAnnotations(pdfBytes, {add=[], update=[], remove=[], viewports=[]}, {author, now}?) → Promise<Uint8Array>`
+`viewports: [{page, scale|null}]` sets page scales in `/VP`: our viewport (`/Name (ASH)`) and other
+whole-page viewports are dropped, a scale adds ours over the CropBox first, so another app's partial
+viewports (details, the last containing a point wins) stay in force.
 Writes overlay objects (same model as `flattenObjects`, visible page space) as standard
 `/Annot` dictionaries with an `/AP /N` appearance stream. The appearance is drawn by the
 `flattenObjects` code on a scratch page sized to the object's bounding box and copied in as a
@@ -238,7 +241,9 @@ objects (old appearances) are dropped from the file. Annotations not mentioned a
 (unknown id, or a non-markup annotation such as a Link/Widget), `DUPLICATE_ID` (add with an id that
 exists), `TypeError` for malformed objects.
 
-### `readAnnotations(pdfBytes) → Promise<{objects, skipped}>`
+### `readAnnotations(pdfBytes, {scales}?) → Promise<{objects, skipped, scales?}>`
+`scales: true` adds one scale (or null) per page from `/VP` (`pageScale`: our viewport, else the one at
+the CropBox centre, else the largest).
 Markup annotations of the subtypes above → overlay objects in visible space (rotation and
 CropBox origin handled), with `id` (= `/NM`, else `ref-<obj>-<gen>`; a direct, non-indirect dict
 without `/NM` gets `d-<16 hex>` = hash of subtype + `/Rect` + `/Contents` + the page object's ref, with

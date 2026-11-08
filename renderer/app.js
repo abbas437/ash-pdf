@@ -18,6 +18,8 @@ import { initToolbarCustomize } from './ui/toolbar-custom.js';
 import { initSearch, search } from './ui/search.js';
 import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
+import { initMeasureTools } from './ui/tools-measure.js';
+import { initMeasureSnap } from './ui/measure-snap.js';
 import { initTextTools } from './ui/tools-text.js';
 import { initCalloutTools } from './ui/tools-callout.js';
 import { initStampTools, placeImages } from './ui/tools-stamp.js';
@@ -25,6 +27,7 @@ import { fileKind } from './ui/image-import-lib.js';
 import { initImageEdit } from './ui/imgedit.js';
 import { initMarkupTools } from './ui/tools-markup.js';
 import { initComments } from './ui/comments.js';
+import { initMeasurements } from './ui/measurements.js';
 import { initSignatures } from './ui/signatures.js';
 import { initSign } from './ui/sign.js';
 import { initForms } from './ui/forms.js';
@@ -39,6 +42,7 @@ import { initExports } from './ui/exports.js';
 import { initCompress } from './ui/compress.js';
 import { initOcr } from './ui/ocr.js';
 import { initCompareRevisions } from './ui/comparerev.js';
+import { initMeasureScale } from './ui/measure-scale.js';
 import { initCopyText, copySelection } from './ui/copytext.js';
 import { initTextMenu } from './ui/text-menu.js';
 import { initHandTool } from './ui/tools-hand.js';
@@ -833,12 +837,15 @@ export const app = { state, bus, viewer, dropHint, clearDrop, insertDroppedFiles
 window.ashStudio = app;
 initAnnotations();
 initShapeTools();
+initMeasureTools(); // Measure: distance / perimeter / area
+initMeasureSnap(); // their object snapping
 initTextTools(app);
 initCalloutTools(app);
 initStampTools(app);
 initImageEdit();
 initMarkupTools(app);
 initComments();
+initMeasurements(); // Measurements sidebar tab: list, totals, CSV export
 initSignatures(app);
 initSign(app);
 app.annotations = annotations;
@@ -850,6 +857,7 @@ initExports(app); // File > Export to Excel, Export page as image
 initCompress(app); // File > Reduce file size
 initOcr(app); // Tools > Recognize text (OCR)
 initCompareRevisions(app); // Tools > Compare revisions…, Differences sidebar tab
+initMeasureScale(app); // Tools > Set measure scale…
 initAdvancedSearch(app);
 initCopyText(app);
 initTextMenu();

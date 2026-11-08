@@ -3,7 +3,7 @@
 // the same code as flattenObjects (annotate.js) on a scratch page, then copied in as Form XObjects.
 import {
   PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFNumber, PDFString, PDFHexString, PDFStream,
-  PDFRawStream, PDFObjectCopier, decodePDFRawStream, rgb,
+  PDFRawStream, PDFObjectCopier, PDFBool, decodePDFRawStream, rgb,
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError, ContentMap, bytesKey } from './internal.js';
@@ -14,18 +14,19 @@ import { cloudArc } from './cloud.js';
 import { stampShape } from './stamps.js';
 import { runsOf, normalizeRuns, isImageRun, OBJ_CHAR } from './richtext.js';
 import { toRichContents, richFromRC } from './richxhtml.js';
+import { measureDict, scaleFromMeasureDict, measurePoints, viewportDict, viewportFromDict, viewportAt, UNITS } from './measure.js';
 
 const N = (s) => PDFName.of(s);
 const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
 const num = (v, d) => (Number.isFinite(v) ? v : d);
 
 const SUBTYPE = {
-  rect: 'Square', cloud: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine',
+  rect: 'Square', cloud: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine', polygon: 'Polygon',
   text: 'FreeText', callout: 'FreeText', stamp: 'Stamp', image: 'Stamp', apStamp: 'Stamp', highlight: 'Highlight',
   note: 'Text', underline: 'Underline', strikeout: 'StrikeOut', squiggly: 'Squiggly', textHighlight: 'Highlight',
   redactMark: 'Redact', // a mark only (§12.5.6.23): the content goes when the app applies redaction
 };
-const MARKUP = new Set(['Square', 'Circle', 'Line', 'Ink', 'PolyLine', 'FreeText', 'Stamp', 'Highlight', 'Text', 'Underline', 'StrikeOut', 'Squiggly', 'Redact']);
+const MARKUP = new Set(['Square', 'Circle', 'Line', 'Ink', 'PolyLine', 'Polygon', 'FreeText', 'Stamp', 'Highlight', 'Text', 'Underline', 'StrikeOut', 'Squiggly', 'Redact']);
 const MARKUP_TYPE = { Underline: 'underline', StrikeOut: 'strikeout', Squiggly: 'squiggly' };
 const STATUS = { accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled', completed: 'Completed', none: 'None' };
 const REDACT_STROKE = '#d62828';
@@ -151,6 +152,7 @@ const hasStroke = (o, d) => parseColor(o.stroke, d) !== null;
 
 /** Visible bounding box of the appearance, plus the inner box (for /RD) where relevant. */
 function layout(o) {
+  if (o.measure) return { bbox: union(layout({ ...o, measure: undefined }).bbox, grow(measureLabel(o), 1)) };
   const sw = num(o.strokeWidth, o.type === 'ink' || o.type === 'polyline' ? 2 : 1);
   switch (o.type) {
     case 'rect':
@@ -168,6 +170,7 @@ function layout(o) {
     }
     case 'ink':
     case 'polyline':
+    case 'polygon':
       return { bbox: boxOfPoints(inkPaths(o).flat(), sw / 2 + 2) };
     case 'text':
     case 'callout': {
@@ -209,9 +212,194 @@ function shift(o, dx, dy) {
   return s;
 }
 
+// ---------------------------------------------------------------- measurements (§12.9)
+
+const MEASURE_KINDS = ['distance', 'perimeter', 'area'];
+const MEASURE_TYPES = ['line', 'arrow', 'polyline', 'polygon'];
+const DIMENSION_IT = { Line: 'LineDimension', PolyLine: 'PolyLineDimension', Polygon: 'PolygonDimension' };
+const MEASURE_FONT = 9;
+const PDF_NAME_KEYS = new Set(['Type', 'Subtype', 'F']); // in measure.js plain data every other string is a text string
+
+/** The points a measurement object measures (visible space, points). */
+const measuredPoints = (o) => (o.type === 'line' || o.type === 'arrow' ? [[o.x1, o.y1], [o.x2, o.y2]] : o.points);
+
+/** A measurement object's value and caption, from its geometry and scale (a polygon's perimeter is closed). */
+function measureValue(o) {
+  const m = measurePoints(o.measure.kind, measuredPoints(o), o.measure.scale, o.type === 'polygon');
+  return { value: m.value, label: m.text };
+}
+
+/**
+ * The caption of a measurement as a text object: centred on a line's midpoint, a polyline's middle
+ * vertex or the average of a polygon's vertices, on white (inline, as /CP /Inline places it).
+ */
+function measureLabel(o) {
+  const { label } = measureValue(o);
+  const pts = measuredPoints(o);
+  let c;
+  if (o.type === 'polygon') c = [0, 1].map((k) => pts.reduce((s, p) => s + p[k], 0) / pts.length);
+  else if (pts.length === 2) c = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
+  else c = pts[Math.floor(pts.length / 2)];
+  const t = { type: 'text', text: label, font: 'Helvetica', fontSize: MEASURE_FONT, lineHeight: 1.2, color: o.stroke ?? '#000000', fill: '#ffffff' };
+  const pad = textInset(t);
+  const m = layoutRich(t, 1e4);
+  const w = m.width + 2 * pad + 1;
+  const h = m.height + 2 * pad;
+  return { ...t, x: c[0] - w / 2, y: c[1] - h / 2, w, h };
+}
+
+/** measure.js plain data -> PDF objects (Type / Subtype / F as names, other strings as text strings). */
+function plainToPdf(ctx, v, key) {
+  if (Array.isArray(v)) return ctx.obj(v.map((x) => plainToPdf(ctx, x)));
+  if (v && typeof v === 'object') {
+    const d = ctx.obj({});
+    for (const [k, x] of Object.entries(v)) if (x !== undefined) d.set(N(k), plainToPdf(ctx, x, k));
+    return d;
+  }
+  if (typeof v === 'string') return PDF_NAME_KEYS.has(key) ? N(v) : text(v);
+  return ctx.obj(v);
+}
+
+/** PDF objects -> plain data (names and strings as JS strings), refs resolved. */
+function pdfToPlain(ctx, v, depth = 0) {
+  v = ctx.lookup(v);
+  if (depth > 8) return undefined;
+  if (v instanceof PDFDict) {
+    const o = {};
+    for (const [k, x] of v.entries()) o[k.decodeText()] = pdfToPlain(ctx, x, depth + 1);
+    return o;
+  }
+  if (v instanceof PDFArray) return v.asArray().map((x) => pdfToPlain(ctx, x, depth + 1));
+  if (v instanceof PDFName) return v.decodeText();
+  if (v instanceof PDFString || v instanceof PDFHexString) return v.decodeText();
+  if (v instanceof PDFNumber) return v.asNumber();
+  if (v instanceof PDFBool) return v.asBoolean();
+  return undefined;
+}
+
+/** The §12.9 entries of a measurement object: /IT, /Measure, and for a line /Cap (+ /LL). */
+function measureEntries(ctx, o) {
+  const sub = SUBTYPE[o.type];
+  const e = { IT: N(DIMENSION_IT[sub]), Measure: plainToPdf(ctx, measureDict(o.measure.scale)) };
+  if (sub === 'Line') {
+    e.Cap = true;
+    if (Number.isFinite(o.measure.leader)) e.LL = r4(o.measure.leader);
+  }
+  return e;
+}
+
+/** A measurement read from a Line / PolyLine / Polygon with a usable rectilinear /Measure (else null). */
+function readMeasure(doc, dict, o, subtype, extra) {
+  const md = dict.lookup(N('Measure'));
+  const scale = md instanceof PDFDict ? scaleFromMeasureDict(pdfToPlain(doc.context, md)) : null;
+  if (!scale) return null;
+  const kind = MEASURE_KINDS.includes(extra.measure?.kind) ? extra.measure.kind : { Line: 'distance', PolyLine: 'perimeter', Polygon: 'area' }[subtype];
+  if (kind === 'area' && o.type !== 'polygon') return null;
+  const m = { kind, scale };
+  const ll = dict.lookup(N('LL'));
+  if (ll instanceof PDFNumber) m.leader = ll.asNumber();
+  return Object.assign(m, measureValue({ ...o, measure: m }));
+}
+
+/** A page's /VP viewports (pdf-lib PDFDocument) as [{ bbox (PDF user space), name?, scale? }]. */
+export function readViewports(doc, pageIndex) {
+  const vp = doc.getPage(pageIndex).node.lookup(N('VP'));
+  if (!(vp instanceof PDFArray)) return [];
+  return vp.asArray().map((x) => {
+    try {
+      return viewportFromDict(pdfToPlain(doc.context, x));
+    } catch {
+      return null; // a hostile entry gives no scale rather than failing the page
+    }
+  }).filter(Boolean);
+}
+
+/** Our page-scale viewport's /Name: the one writeAnnotations({ viewports }) replaces. */
+export const OWN_VIEWPORT = 'ASH';
+/** Whether a /VP array element (dict or ref) is our viewport. */
+const isOwnViewport = (ctx, x) => {
+  const d = ctx.lookup(x);
+  return d instanceof PDFDict && readText(d, 'Name') === OWN_VIEWPORT;
+};
+
+/** A page's visible area (/CropBox) in PDF user space as [x1 y1 x2 y2]. */
+function cropOf(page) {
+  const c = page.getCropBox();
+  return [c.x, c.y, c.x + c.width, c.y + c.height];
+}
+
+/** Whether a /VP element's /BBox covers (nearly) the whole rectangle r: its overlap with r is at least 95%
+ *  of r's area, so a sheet viewport drawn a little inside the page edge still counts; false when unreadable. */
+const coversBox = (ctx, x, r) => {
+  try {
+    const b = ctx.lookup(ctx.lookup(x)?.get?.(N('BBox')));
+    if (!(b instanceof PDFArray) || b.size() !== 4) return false;
+    const n = b.asArray().map((v) => ctx.lookup(v)?.asNumber?.());
+    if (!n.every(Number.isFinite)) return false;
+    const [x1, x2] = [Math.min(n[0], n[2]), Math.max(n[0], n[2])], [y1, y2] = [Math.min(n[1], n[3]), Math.max(n[1], n[3])];
+    const w = Math.min(x2, r[2]) - Math.max(x1, r[0]), h = Math.min(y2, r[3]) - Math.max(y1, r[1]);
+    const area = (r[2] - r[0]) * (r[3] - r[1]);
+    return w > 0 && h > 0 && area > 0 && w * h >= 0.95 * area;
+  } catch { return false; }
+};
+
+/**
+ * Set page scales: for each { page, scale|null }, our viewport (/Name OWN_VIEWPORT) goes and a scale
+ * adds one of ours over the visible area. ISO 32000 §12.9.1: viewers take the LAST /VP entry whose BBox
+ * holds the point, so ours goes right after the last other-app viewport that covers the whole visible
+ * area (our scale then wins over theirs everywhere) but before any smaller ones after it (details drawn
+ * at their own scale stay in force where they lie). Every other /VP element is kept exactly as it is (the
+ * same dict or ref); an empty /VP is removed.
+ */
+function setPageScales(doc, list) {
+  const pages = doc.getPages();
+  const ctx = doc.context;
+  for (const { page, scale } of list) {
+    if (!Number.isInteger(page) || page < 0 || page >= pages.length) throw new RangeError(`viewports: no page ${page}`);
+    const node = pages[page].node;
+    const vp = node.lookup(N('VP'));
+    const all = vp instanceof PDFArray ? vp.asArray() : [];
+    const foreign = all.filter((x) => !isOwnViewport(ctx, x));
+    if (!scale && foreign.length === all.length) continue; // nothing of ours to clear
+    const items = [...foreign];
+    if (scale) {
+      const crop = cropOf(pages[page]);
+      let at = 0;
+      foreign.forEach((x, i) => { if (coversBox(ctx, x, crop)) at = i + 1; });
+      items.splice(at, 0, plainToPdf(ctx, viewportDict({ bbox: crop, name: OWN_VIEWPORT, scale })));
+    }
+    if (items.length) node.set(N('VP'), ctx.obj(items));
+    else node.delete(N('VP'));
+  }
+}
+
+/**
+ * The scale a page's /VP gives the page: our viewport (wherever it is in /VP, ahead of the §12.9.1
+ * last-match rule), else the one at the visible area's centre,
+ * else the one covering the largest area; null when no viewport has a scale.
+ */
+export function pageScale(doc, pageIndex) {
+  const vps = readViewports(doc, pageIndex).filter((v) => v.scale);
+  if (!vps.length) return null;
+  const c = cropOf(doc.getPage(pageIndex));
+  const own = vps.find((v) => v.name === OWN_VIEWPORT);
+  const at = own ?? viewportAt(vps, [(c[0] + c[2]) / 2, (c[1] + c[3]) / 2]);
+  if (at) return at.scale;
+  const size = (b) => (b[2] - b[0]) * (b[3] - b[1]);
+  return vps.reduce((a, v) => (size(v.bbox) > size(a.bbox) ? v : a)).scale;
+}
+
+/** Replace a page's /VP with `vps` (as readViewports returns them); none removes it. Edits `doc` in place. */
+export function writeViewports(doc, pageIndex, vps) {
+  const node = doc.getPage(pageIndex).node;
+  if (!vps?.length) node.delete(N('VP'));
+  else node.set(N('VP'), plainToPdf(doc.context, vps.map(viewportDict)));
+}
+
 // ---------------------------------------------------------------- appearance streams
 
 function toFlattenObjects(o, page) {
+  if (o.measure) return [...toFlattenObjects({ ...o, measure: undefined }, page), { ...measureLabel(o), page, opacity: 1 }];
   if (o.type === 'ink' || o.type === 'polyline') return inkPaths(o).map((points) => ({ ...o, page, type: 'ink', points, paths: undefined }));
   // Appearance of a redaction mark: its outline only (never a filled box: printing must not black out).
   if (o.type === 'redactMark') return [{ type: 'rect', page, x: o.x + 0.5, y: o.y + 0.5, w: Math.max(o.w - 1, 0), h: Math.max(o.h - 1, 0), stroke: REDACT_STROKE, strokeWidth: 1, fill: null }];
@@ -365,12 +553,14 @@ function typeEntries(o, g, lay) {
       pick('headSize');
       break;
     case 'ink':
-    case 'polyline': {
+    case 'polyline':
+    case 'polygon': {
       strokeColor = parseColor(o.stroke, '#000000') || rgb(0, 0, 0);
       width = sw;
       const paths = inkPaths(o).map((p) => p.flatMap(([x, y]) => visToPdf(g, x, y)).map(r4));
       if (o.type === 'ink') e.InkList = paths;
       else e.Vertices = paths[0];
+      if (o.type === 'polygon' && parseColor(o.fill, null)) e.IC = colorArr(parseColor(o.fill, null));
       pick('smooth');
       break;
     }
@@ -486,10 +676,21 @@ function validate(o, pageCount) {
   } else if (o.type === 'apStamp' && !(o.ap instanceof Uint8Array)) {
     throw new TypeError(`apStamp object ${o.id} needs ap (its appearance as a one-page PDF)`);
   }
-  const need = o.type === 'line' || o.type === 'arrow' ? ['x1', 'y1', 'x2', 'y2'] : ['ink', 'polyline', 'note'].includes(o.type) || o.quads ? [] : ['x', 'y', 'w', 'h'];
+  const need = o.type === 'line' || o.type === 'arrow' ? ['x1', 'y1', 'x2', 'y2'] : ['ink', 'polyline', 'polygon', 'note'].includes(o.type) || o.quads ? [] : ['x', 'y', 'w', 'h'];
   for (const k of need) if (!Number.isFinite(o[k])) throw new TypeError(`${o.type} object ${o.id} needs numeric ${k}`);
   if ((o.type === 'ink' || o.type === 'polyline') && !inkPaths(o).every((p) => Array.isArray(p) && p.length >= 2)) {
     throw new TypeError(`${o.type} object ${o.id} needs at least 2 points`);
+  }
+  if (o.type === 'polygon' && !(Array.isArray(o.points) && o.points.length >= 3 && o.points.every((p) => Array.isArray(p) && p.length >= 2 && p.every(Number.isFinite)))) {
+    throw new TypeError(`polygon object ${o.id} needs at least 3 points`);
+  }
+  if (o.measure != null) {
+    const m = o.measure;
+    if (!MEASURE_TYPES.includes(o.type)) throw new TypeError(`${o.type} object ${o.id} cannot carry a measurement`);
+    if (!MEASURE_KINDS.includes(m.kind) || !(m.scale?.ratio > 0) || !Number.isFinite(m.scale.ratio) || !UNITS.includes(m.scale.unit)) {
+      throw new TypeError(`${o.type} object ${o.id} needs measure: { kind: ${MEASURE_KINDS.join(' | ')}, scale: { ratio > 0, unit: ${UNITS.join(' | ')} } }`);
+    }
+    if (m.kind === 'area' && o.type !== 'polygon') throw new TypeError(`${o.type} object ${o.id}: only a polygon measures an area`);
   }
 }
 
@@ -671,8 +872,8 @@ function collectGarbage(doc) {
  * Write overlay objects as real PDF annotations. `add`/`update` are overlay objects, `remove`
  * annotation ids. Annotations not mentioned are left exactly as they are.
  */
-export async function writeAnnotations(pdfBytes, { add = [], update = [], remove = [] } = {}, { author, now } = {}) {
-  for (const [k, v] of Object.entries({ add, update, remove })) if (!Array.isArray(v)) throw new TypeError(`${k} must be an array`);
+export async function writeAnnotations(pdfBytes, { add = [], update = [], remove = [], viewports = [] } = {}, { author, now } = {}) {
+  for (const [k, v] of Object.entries({ add, update, remove, viewports })) if (!Array.isArray(v)) throw new TypeError(`${k} must be an array`);
   const doc = await loadPdf(pdfBytes);
   // New objects are numbered from the file's /Size: pdf-lib does not register object streams and
   // cross-reference streams, so its own count can hand out their numbers, and an incremental
@@ -745,10 +946,15 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     const page = pages[o.page];
     const who = o.author ?? author ?? '';
     const { entries, extra } = typeEntries(o, g, lay);
+    if (o.measure != null) {
+      Object.assign(entries, measureEntries(doc.context, o));
+      extra.measure = { kind: o.measure.kind };
+      if (o.note !== undefined && o.note !== null) extra.note = String(o.note); // /Contents carries the caption
+    }
     // Signature / image-stamp identity: the library item id, the custom stamp id and the block id, so Apply
     // signature / Apply stamp still work after reopening.
     for (const k of ['sig', 'stampImg', 'group']) if (typeof o[k] === 'string' && o[k]) extra[k] = o[k];
-    const contents = o.type === 'text' || o.type === 'callout' ? (hasImageRun(o) ? String(o.text ?? '').replace(OBJ_RE, '') : String(o.text ?? '')) :(o.note ?? (o.type === 'stamp' ? o.text : undefined));
+    const contents = o.measure != null ? measureValue(o).label : o.type === 'text' || o.type === 'callout' ? (hasImageRun(o) ? String(o.text ?? '').replace(OBJ_RE, '') : String(o.text ?? '')) :(o.note ?? (o.type === 'stamp' ? o.text : undefined));
     const opacity = o.type === 'highlight' ? Math.min(Math.max(num(o.opacity, 0.4), 0), 0.5) : Math.min(Math.max(num(o.opacity, 1), 0), 1);
     const rect = visRectToPdf(g, lay.bbox).map(r4);
     const dict = {
@@ -845,6 +1051,7 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
       if (en.irt && t.dropped.has(refKey(en.irt))) en.dict.set(N('IRT'), t.byId.get(t.dropped.get(refKey(en.irt))) ?? t.ref);
     }
   }
+  if (viewports.length) setPageScales(doc, viewports);
   if (touched) collectGarbage(doc);
   return saveEdited(doc);
 }
@@ -1144,7 +1351,8 @@ function toObject(doc, en, g) {
       break;
     }
     case 'Ink':
-    case 'PolyLine': {
+    case 'PolyLine':
+    case 'Polygon': {
       let paths;
       if (en.subtype === 'Ink') {
         const list = dict.lookup(N('InkList'));
@@ -1160,6 +1368,11 @@ function toObject(doc, en, g) {
         return pts;
       }).filter((p) => p.length >= 2);
       if (!paths.length) throw new Error('no ink path');
+      if (en.subtype === 'Polygon') {
+        if (paths[0].length < 3) throw new Error('polygon with fewer than 3 vertices');
+        Object.assign(o, { type: 'polygon', points: paths[0], stroke: C ?? '#000000', fill: IC, strokeWidth: width });
+        break;
+      }
       Object.assign(o, { type: en.subtype === 'Ink' ? 'ink' : 'polyline', points: paths[0], stroke: C ?? '#000000', strokeWidth: width });
       if (paths.length > 1) o.paths = paths;
       if (extra.smooth !== undefined) o.smooth = extra.smooth;
@@ -1276,10 +1489,16 @@ function toObject(doc, en, g) {
     default:
       throw new Error('unsupported subtype');
   }
+  if (DIMENSION_IT[en.subtype]) {
+    const m = readMeasure(doc, dict, o, en.subtype, extra);
+    if (m) o.measure = m;
+  }
   if (dash) o.dash = dash;
   for (const k of ['sig', 'stampImg', 'group']) if (typeof extra[k] === 'string' && extra[k]) o[k] = extra[k];
   o.opacity = ca instanceof PDFNumber ? ca.asNumber() : 1;
-  if (contents !== undefined && o.type !== 'text' && o.type !== 'callout' && !(o.type === 'stamp' && contents === o.text)) o.note = contents;
+  if (o.measure) {
+    if (typeof extra.note === 'string') o.note = extra.note; // /Contents is the caption
+  } else if (contents !== undefined && o.type !== 'text' && o.type !== 'callout' && !(o.type === 'stamp' && contents === o.text)) o.note = contents;
   const author = readText(dict, 'T');
   if (author !== undefined) o.author = author;
   const created = readDate(dict, 'CreationDate');
@@ -1294,7 +1513,7 @@ function toObject(doc, en, g) {
  * Read markup annotations as overlay objects; everything else is listed in `skipped`.
  * Replies and review state are grouped onto their parent object.
  */
-export async function readAnnotations(pdfBytes) {
+export async function readAnnotations(pdfBytes, { scales = false } = {}) {
   const doc = await loadPdf(pdfBytes);
   const pages = doc.getPages();
   const sc = scan(doc);
@@ -1336,5 +1555,5 @@ export async function readAnnotations(pdfBytes) {
     const reason = { readonly: 'read-only annotation (kept as it is in the file)', group: 'grouped annotation (RT /Group)', reply: 'reply not shown on its markup (state, or to an unsupported annotation)', xreply: 'reply that is not a Text annotation' }[en.kind];
     skip(en, reason ?? 'not a supported markup type');
   }
-  return { objects, skipped };
+  return scales ? { objects, skipped, scales: pages.map((_, i) => pageScale(doc, i)) } : { objects, skipped };
 }

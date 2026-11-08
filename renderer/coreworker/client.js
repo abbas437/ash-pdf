@@ -64,8 +64,8 @@ async function call(method, bytes, ...rest) {
 }
 
 export const coreWorker = {
-  /** readAnnotations(bytes) -> { objects, skipped } (src/core/annots.js). */
-  readAnnotations: (bytes) => call('readAnnotations', bytes),
+  /** readAnnotations(bytes, { scales }?) -> { objects, skipped, scales? } (src/core/annots.js). */
+  readAnnotations: (bytes, opts) => call('readAnnotations', bytes, opts),
   /** writeAnnotations(bytes, { add, update, remove }, opts) -> Uint8Array (src/core/annots.js). */
   writeAnnotations: (bytes, edits, opts) => call('writeAnnotations', bytes, edits, opts),
   detectSignatures: (bytes) => call('detectSignatures', bytes),

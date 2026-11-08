@@ -9,7 +9,7 @@ export const DEFAULT_GROUPS = Object.freeze([
   ['pages', 'Pages', ['pages']],
   ['view', 'View', ['split']],
   ['edit', 'Edit', ['text', 'textedit', 'image', 'image-edit', 'whiteout', 'redact', 'forms']],
-  ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes']],
+  ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes', 'measure']],
   ['sign', 'Stamp and sign', ['stamp', 'sign']],
 ].map((g) => Object.freeze([g[0], g[1], Object.freeze(g[2])])));
 
@@ -19,6 +19,16 @@ export const ALWAYS_SHOWN = Object.freeze(['select']);
 export const NEVER_AUTO_COMPACT = 'navigate';
 /** Group that receives ids not listed in any group. */
 export const FALLBACK_GROUP = 'edit';
+
+/** Ids of earlier versions and the id that replaced them (the three measure buttons became one). */
+const RENAMED = Object.freeze({ 'measure-distance': 'measure', 'measure-perimeter': 'measure', 'measure-area': 'measure' });
+const renamed = (a) => a.map((id) => RENAMED[id] ?? id);
+// Hidden ids: an old id hides its replacement only when every id it replaced was hidden (hiding Perimeter
+// alone must not hide Distance and Area).
+const renamedHidden = (a) => {
+  const gone = (to) => Object.keys(RENAMED).filter((id) => RENAMED[id] === to).every((id) => a.includes(id));
+  return a.filter((id) => !(id in RENAMED) || gone(RENAMED[id])).map((id) => RENAMED[id] ?? id);
+};
 
 const GROUP_KEYS = DEFAULT_GROUPS.map((g) => g[0]);
 const KNOWN = new Map(DEFAULT_GROUPS.flatMap(([g, , ids]) => ids.map((id, i) => [id, { group: g, rank: i }])));
@@ -41,8 +51,8 @@ const strings = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string'
 
 /**
  * A stored layout (object or JSON text) made safe: unknown groups and ids are dropped, each id is
- * placed once, Select is never hidden, and groups or ids missing from it (new in a later version)
- * appear in their default place. Anything unreadable gives the default layout.
+ * placed once, Select is never hidden, renamed ids take their new id, and groups or ids missing from
+ * it (new in a later version) appear in their default place. Anything unreadable gives the default layout.
  */
 export function cleanLayout(raw) {
   let v = raw;
@@ -60,13 +70,13 @@ export function cleanLayout(raw) {
   const order = {};
   for (const g of groupOrder) {
     order[g] = [];
-    for (const id of strings(src[g])) if (KNOWN.has(id) && !placed.has(id)) { placed.add(id); order[g].push(id); }
+    for (const id of renamed(strings(src[g]))) if (KNOWN.has(id) && !placed.has(id)) { placed.add(id); order[g].push(id); }
   }
   for (const id of DEFAULT_SEQ) if (!placed.has(id)) insertDefault(order, id);
   return {
     groupOrder,
     order,
-    hidden: uniq(strings(v.hidden).filter((id) => KNOWN.has(id) && !ALWAYS_SHOWN.includes(id))),
+    hidden: uniq(renamedHidden(strings(v.hidden)).filter((id) => KNOWN.has(id) && !ALWAYS_SHOWN.includes(id))),
     compact: uniq(strings(v.compact).filter((g) => GROUP_KEYS.includes(g))),
   };
 }
