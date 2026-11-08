@@ -10,6 +10,11 @@ keywords: whats new, release notes, changes, version, updates, 0.2.15, 0.2.14, 0
 
 The most recent additions, newest first. Versions up to 0.2.10 are tagged in the project history. Changes after that are grouped by release as far as the history shows.
 
+## Version 0.2.23
+
+- **Measure distances and areas.** Set the drawing scale (presets such as 1:50, imperial scales, or **Calibrate…** from a known dimension), then measure with **Measure distance**, **Measure perimeter** and **Measure area**. Points snap to the ends of lines in the drawing. The **Measurements** list shows totals and exports to CSV. Scales and measurements are saved in the PDF in the standard form other PDF programs read. See [Measure](#topic:measure).
+- **Polygon markups** made in other PDF programs now open and can be edited.
+
 ## Version 0.2.22
 
 - **Compare revisions.** **Tools ▸ Compare revisions…** compares two revisions page by page and opens a new PDF with removed ink in red, added ink in green and each change boxed, plus a **Differences** list you can copy or export to CSV. See [Compare revisions](#topic:compare-revisions).

@@ -38,6 +38,30 @@ also the starting scale of documents that have none.
 > Measurements keep the scale they were made with. Changing the page scale later applies to new
 > measurements only, so earlier ones still show their original values.
 
+## Measure
+
+The three measure tools are in the toolbar after the shapes: **Measure distance**, **Measure
+perimeter** and **Measure area**. Their options bar shows the page scale; click it to open the scale
+dialog.
+
+- **Distance**: click the two ends, or press, drag and release.
+- **Perimeter** and **Area**: click each corner in turn. The running value follows the pointer.
+  Double-click or press **Enter** to finish, **Backspace** removes the last point, and **Esc** cancels.
+  Area closes the shape for you and needs at least three points.
+- Hold **Shift** to keep a segment horizontal, vertical or at 45°.
+- **Snapping**: near the end of a line drawn in the PDF, a small square appears and the point snaps
+  exactly to that end. Hold **Alt** to place a point freely.
+
+Each tool remembers its own colour and line width (distance red, perimeter blue, area green to
+start). A measurement is a markup like any other: select it to move it, drag a corner to change it
+(the value updates), add a comment to label it, or delete it. **Ctrl+Z** undoes each step.
+
+## The Measurements list
+
+Open **Measurements** in the sidebar to see every measurement in the document by page, with its
+value, scale and comment, and the totals for each kind. Click a row to go to that measurement.
+**Export CSV…** saves the list for Excel: page, kind, value at full precision, unit, scale and comment.
+
 ## The scale is saved in the PDF
 
 The page scale is saved in the PDF as a standard measurement viewport, so other PDF programs can use
