@@ -18,6 +18,7 @@ import { initToolbarCustomize } from './ui/toolbar-custom.js';
 import { initSearch, search } from './ui/search.js';
 import { initAnnotations, annotations } from './ui/annotations.js';
 import { initShapeTools } from './ui/tools-shapes.js';
+import { initMeasureTools } from './ui/tools-measure.js';
 import { initTextTools } from './ui/tools-text.js';
 import { initCalloutTools } from './ui/tools-callout.js';
 import { initStampTools, placeImages } from './ui/tools-stamp.js';
@@ -834,6 +835,7 @@ export const app = { state, bus, viewer, dropHint, clearDrop, insertDroppedFiles
 window.ashStudio = app;
 initAnnotations();
 initShapeTools();
+initMeasureTools(); // Measure distance / perimeter / area
 initTextTools(app);
 initCalloutTools(app);
 initStampTools(app);

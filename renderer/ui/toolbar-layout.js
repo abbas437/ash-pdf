@@ -9,7 +9,7 @@ export const DEFAULT_GROUPS = Object.freeze([
   ['pages', 'Pages', ['pages']],
   ['view', 'View', ['split']],
   ['edit', 'Edit', ['text', 'textedit', 'image', 'image-edit', 'whiteout', 'redact', 'forms']],
-  ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes']],
+  ['comment', 'Comment', ['highlight', 'text-highlight', 'underline', 'strikeout', 'squiggly', 'note', 'callout', 'markup', 'draw', 'shapes', 'measure-distance', 'measure-perimeter', 'measure-area']],
   ['sign', 'Stamp and sign', ['stamp', 'sign']],
 ].map((g) => Object.freeze([g[0], g[1], Object.freeze(g[2])])));
 

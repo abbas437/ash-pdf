@@ -37,7 +37,7 @@ test('hidden, reorder, move to another group and group order are kept', () => {
 test('moves past the ends do nothing; the input layout is never changed', () => {
   const d = defaultLayout();
   assert.deepEqual(moveItem(d, 'select', -1), d);
-  assert.deepEqual(moveItem(d, 'shapes', 1), d);
+  assert.deepEqual(moveItem(d, 'measure-area', 1), d);
   assert.deepEqual(moveGroup(d, 'navigate', -1), d);
   assert.deepEqual(moveGroup(d, 'sign', 1), d);
   setHidden(d, 'hand', true);
@@ -74,7 +74,14 @@ test('a tool new in a later version appears in its default place', () => {
   // Reversed order is kept; squiggly goes after strikeout (its default predecessor).
   const c = l.order.comment;
   assert.equal(c.indexOf('squiggly'), c.indexOf('strikeout') + 1);
-  assert.equal(c[0], 'shapes');
+  assert.equal(c[0], 'measure-area');
+});
+
+test('a layout saved before the measure tools gets them after Shapes', () => {
+  const old = defaultLayout();
+  old.order.comment = old.order.comment.filter((id) => !id.startsWith('measure-'));
+  const c = cleanLayout(old).order.comment;
+  assert.deepEqual(c.slice(c.indexOf('shapes')), ['shapes', 'measure-distance', 'measure-perimeter', 'measure-area']);
 });
 
 test('Select can never be hidden', () => {

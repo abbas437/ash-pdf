@@ -216,6 +216,97 @@ try {
   await ev('an.undo(tab);');
   check(JSON.stringify(await scale0()) === JSON.stringify(calibrated), `undo: ${JSON.stringify(await scale0())}`);
 
+  // ---------------------------------------------------------------- measure tools
+  step = 'measure tools: 1:100 mm on page 1';
+  await ev(`const { scaleFromDrawingScale } = await import('/src/core/measure.js');
+    an.select(tab, []); an.setMeasureScale(tab, 0, scaleFromDrawingScale(100, 'mm'), 'preset'); app.state.toolStyle.color = '#123456'; app.setTool('select');`);
+  const MM = 100 * (25.4 / 72); // mm per page point at 1:100
+  const objCount = () => ev('return tab.objects.length;');
+  const lastObj = () => ev('return tab.objects[tab.objects.length - 1];');
+  const setTool = (id) => ev('app.setTool(arg);', id);
+  const at = (x, y) => toClient(x, y);
+
+  step = 'Distance: two clicks 100 pt apart';
+  await setTool('measure-distance');
+  check((await ev('return app.state.toolStyle.color;')) === '#d32f2f', 'Distance colour swapped in');
+  let n0 = await objCount();
+  await page.mouse.click(...await at(100, 400));
+  await page.mouse.move(...await at(150, 400), { steps: 3 });
+  check(await ev('return !!v.getOverlaySvg(tab, 0).querySelector(".ann-measure-label text");'), 'preview has a label');
+  await page.mouse.click(...await at(200, 400));
+  let o = await lastObj();
+  check((await objCount()) === n0 + 1 && o.type === 'line' && o.measure?.kind === 'distance', `distance object: ${JSON.stringify(o)}`);
+  near(o.measure?.value, 100 * MM, 'distance value 100 pt at 1:100 mm', 0.05);
+
+  step = 'Distance: press, drag, release; under 1 pt ignored';
+  await drag(await at(100, 450), await at(160, 450));
+  o = await lastObj();
+  near(o.measure?.value, 60 * MM, 'dragged distance', 0.05);
+  n0 = await objCount();
+  await page.mouse.click(...await at(300, 450));
+  await page.mouse.click(...await at(300.4, 450));
+  check((await objCount()) === n0, 'a distance under 1 pt adds nothing');
+
+  step = 'Area: 4-corner rectangle, Enter';
+  await setTool('measure-area');
+  check((await ev('return app.state.toolStyle.color;')) === '#2e7d32', 'Area colour swapped in');
+  n0 = await objCount();
+  for (const [x, y] of [[100, 500], [300, 500], [300, 600], [100, 600]]) await page.mouse.click(...await at(x, y));
+  await page.keyboard.press('Enter');
+  o = await lastObj();
+  check((await objCount()) === n0 + 1 && o.type === 'polygon' && o.points.length === 4 && o.measure?.kind === 'area', `area object: ${JSON.stringify(o)}`);
+  near(o.measure?.value, 200 * MM * 100 * MM, 'area 200 x 100 pt at 1:100 mm (mm²)', 200 * MM * 100 * MM * 1e-4);
+
+  step = 'Esc mid-polygon adds nothing';
+  n0 = await objCount();
+  const u2 = await ev('return tab.undo.length;');
+  for (const [x, y] of [[350, 500], [450, 500], [450, 600]]) await page.mouse.click(...await at(x, y));
+  await page.keyboard.press('Escape');
+  check((await objCount()) === n0 && (await ev('return tab.undo.length;')) === u2, 'Esc cancels the polygon');
+  check(!(await ev('return v.getOverlaySvg(tab, 0).querySelector(".ann-preview *");')), 'no preview after Esc');
+
+  step = 'Perimeter: 3 clicks, Backspace, 1 click, double-click';
+  await setTool('measure-perimeter');
+  n0 = await objCount();
+  for (const [x, y] of [[100, 150], [200, 150], [250, 200]]) await page.mouse.click(...await at(x, y));
+  await page.keyboard.press('Backspace');
+  await page.mouse.click(...await at(200, 250));
+  await page.waitForTimeout(500); // the double-click is a separate gesture on the last vertex
+  await page.mouse.dblclick(...await at(200, 250));
+  await page.waitForTimeout(100);
+  o = await lastObj();
+  check((await objCount()) === n0 + 1 && o.type === 'polyline' && o.points.length === 3, `perimeter object: ${JSON.stringify(o)}`);
+  near(o.measure?.value, 200 * MM, 'perimeter 100 + 100 pt at 1:100 mm', 0.05);
+  await page.mouse.move(...await at(300, 260), { steps: 3 });
+  check(!(await ev('return v.getOverlaySvg(tab, 0).querySelector(".ann-preview *");')), 'the double-click started no new measurement');
+
+  step = 'Perimeter: double-click elsewhere adds that vertex once';
+  n0 = await objCount();
+  await page.mouse.click(...await at(350, 150));
+  await page.mouse.dblclick(...await at(450, 150));
+  await page.waitForTimeout(100);
+  o = await lastObj();
+  check((await objCount()) === n0 + 1 && o.points.length === 2, `double-click finish: ${JSON.stringify(o.points)}`);
+
+  step = 'Shift snaps a near-horizontal segment flat';
+  await setTool('measure-distance');
+  await page.mouse.click(...await at(100, 300));
+  await page.keyboard.down('Shift');
+  await page.mouse.click(...await at(200, 306));
+  await page.keyboard.up('Shift');
+  o = await lastObj();
+  check(o.type === 'line' && Math.abs(o.y2 - 300) < 1e-6 && Math.abs(o.y1 - 300) < 1e-6, `Shift: ${JSON.stringify([o.x1, o.y1, o.x2, o.y2])}`);
+
+  step = 'Undo removes the last measurement';
+  n0 = await objCount();
+  const lastId = o.id;
+  await ev('an.undo(tab);');
+  check((await objCount()) === n0 - 1 && !(await ev('return tab.objects.some((x) => x.id === arg);', lastId)), 'undo removes it');
+
+  step = 'leaving the tool restores the shared colour';
+  await ev('an.select(tab, []); app.setTool("select");');
+  check((await ev('return app.state.toolStyle.color;')) === '#123456', `shared colour: ${await ev('return app.state.toolStyle.color;')}`);
+
   if (problems.length) throw new Error(problems.join('\n'));
   console.log('MEASURE OK');
 } catch (err) {
