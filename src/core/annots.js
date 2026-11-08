@@ -328,11 +328,25 @@ function cropOf(page) {
   return [c.x, c.y, c.x + c.width, c.y + c.height];
 }
 
+/** Whether a /VP element's /BBox covers the whole rectangle r (within 0.5 pt); false when unreadable. */
+const coversBox = (ctx, x, r) => {
+  try {
+    const b = ctx.lookup(ctx.lookup(x)?.get?.(N('BBox')));
+    if (!(b instanceof PDFArray) || b.size() !== 4) return false;
+    const n = b.asArray().map((v) => ctx.lookup(v)?.asNumber?.());
+    if (!n.every(Number.isFinite)) return false;
+    const [x1, x2] = [Math.min(n[0], n[2]), Math.max(n[0], n[2])], [y1, y2] = [Math.min(n[1], n[3]), Math.max(n[1], n[3])];
+    return x1 <= r[0] + 0.5 && y1 <= r[1] + 0.5 && x2 >= r[2] - 0.5 && y2 >= r[3] - 0.5;
+  } catch { return false; }
+};
+
 /**
  * Set page scales: for each { page, scale|null }, our viewport (/Name OWN_VIEWPORT) goes and a scale
- * adds one of ours over the visible area, FIRST (readers taking the first match use it; under §12.9.1's
- * last-match rule another app's viewports, e.g. details at their own scale, stay in force where they lie).
- * Every other /VP element is kept exactly as it is (the same dict or ref); an empty /VP is removed.
+ * adds one of ours over the visible area. ISO 32000 §12.9.1: viewers take the LAST /VP entry whose BBox
+ * holds the point, so ours goes right after the last other-app viewport that covers the whole visible
+ * area (our scale then wins over theirs everywhere) but before any smaller ones after it (details drawn
+ * at their own scale stay in force where they lie). Every other /VP element is kept exactly as it is (the
+ * same dict or ref); an empty /VP is removed.
  */
 function setPageScales(doc, list) {
   const pages = doc.getPages();
@@ -344,7 +358,13 @@ function setPageScales(doc, list) {
     const all = vp instanceof PDFArray ? vp.asArray() : [];
     const foreign = all.filter((x) => !isOwnViewport(ctx, x));
     if (!scale && foreign.length === all.length) continue; // nothing of ours to clear
-    const items = scale ? [plainToPdf(ctx, viewportDict({ bbox: cropOf(pages[page]), name: OWN_VIEWPORT, scale })), ...foreign] : foreign;
+    const items = [...foreign];
+    if (scale) {
+      const crop = cropOf(pages[page]);
+      let at = 0;
+      foreign.forEach((x, i) => { if (coversBox(ctx, x, crop)) at = i + 1; });
+      items.splice(at, 0, plainToPdf(ctx, viewportDict({ bbox: crop, name: OWN_VIEWPORT, scale })));
+    }
     if (items.length) node.set(N('VP'), ctx.obj(items));
     else node.delete(N('VP'));
   }

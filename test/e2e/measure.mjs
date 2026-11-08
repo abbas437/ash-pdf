@@ -135,7 +135,7 @@ try {
     return { scales: r.scales.map((s) => s && s.label + ' ' + s.unit), vps: core.readViewports(doc, 0).map((v) => v.name),
       label: r.objects.find((o) => o.id === m.id)?.measure?.label };`);
   check(back.scales.join() === '1:100 m,1:100 m', `scales read back: ${back.scales}`);
-  check(back.vps.join() === 'ASH,Detail A', `our /VP first, the foreign partial one kept: ${back.vps}`);
+  check(back.vps.join() === 'Sheet,ASH,Detail A', `our /VP after the foreign whole-page one, the foreign detail kept last: ${back.vps}`);
   check(back.label === '2000 mm', `measurement keeps its own 1:50 scale: ${back.label}`);
 
   // ---- the scale dialog (renderer/ui/measure-scale.js)

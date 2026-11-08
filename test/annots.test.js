@@ -677,12 +677,13 @@ describe('polygons and measurements (§12.9)', () => {
     const S100 = scaleFromDrawingScale(100, 'm');
     const out = await writeAnnotations(src, { viewports: [{ page: 0, scale: S100 }, { page: 1, scale: S100 }] });
     const d2 = await PDFDocument.load(out);
-    assert.deepEqual(readViewports(d2, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:100'], ['Sheet', '1:50'], ['Detail A', '1:5']], 'ours first, foreign viewports kept');
+    assert.deepEqual(readViewports(d2, 0).map((v) => [v.name, v.scale.label]), [['Sheet', '1:50'], ['ASH', '1:100'], ['Detail A', '1:5']], 'ours after the foreign whole-page one, before the detail; foreign viewports kept');
+    { const v = readViewports(d2, 0); assert.equal(viewportAt(v, [100, 600]).name, 'ASH', '§12.9.1 last match: ours wins over the foreign whole-page scale'); assert.equal(viewportAt(v, [400, 100]).name, 'Detail A', 'the detail keeps its own scale'); }
     r = await readAnnotations(out, { scales: true });
     assert.deepEqual(r.scales.map((s) => [s.label, s.unit]), [['1:100', 'm'], ['1:100', 'm']]);
     const again = await writeAnnotations(out, { viewports: [{ page: 0, scale: S50 }, { page: 1, scale: null }] });
     const d3 = await PDFDocument.load(again);
-    assert.deepEqual(readViewports(d3, 0).map((v) => [v.name, v.scale.label]), [['ASH', '1:50'], ['Sheet', '1:50'], ['Detail A', '1:5']], 'ours replaced, not added');
+    assert.deepEqual(readViewports(d3, 0).map((v) => [v.name, v.scale.label]), [['Sheet', '1:50'], ['ASH', '1:50'], ['Detail A', '1:5']], 'ours replaced, not added');
     assert.deepEqual(readViewports(d3, 1), []);
     assert.equal(d3.getPage(1).node.get(PDFName.of('VP')), undefined, 'an emptied /VP is removed');
     assert.deepEqual(Object.keys(await readAnnotations(again)), ['objects', 'skipped'], 'scales only on request');
@@ -757,8 +758,8 @@ describe('polygons and measurements (§12.9)', () => {
     const nameOf = (e) => e.dict.lookup(PDFName.of('Name')).decodeText();
     const before = (await vpOf(src)).map((e) => e.dict.toString());
     const set = await vpOf(await writeAnnotations(src, { viewports: [{ page: 0, scale: S50 }] }));
-    assert.deepEqual(set.map(nameOf), ['ASH', 'Map', 'Detail'], 'ours first, both foreign kept in order');
-    assert.deepEqual(set.slice(1).map((e) => e.dict.toString()), before, 'foreign dicts unchanged');
+    assert.deepEqual(set.map(nameOf), ['Map', 'ASH', 'Detail'], 'ours after the whole-page map, before the detail; both foreign kept in order');
+    assert.deepEqual([set[0], set[2]].map((e) => e.dict.toString()), before, 'foreign dicts unchanged');
     assert.ok(set[2].raw instanceof PDFRef, 'an indirect foreign entry stays a reference');
     const setBytes = await writeAnnotations(src, { viewports: [{ page: 0, scale: S50 }] });
     assert.equal((await readAnnotations(setBytes, { scales: true })).scales[0].label, '1:50', 'our viewport is the page scale');
