@@ -13,7 +13,7 @@ import { annotations } from './annotations.js';
 import { KIND_LABELS, measurementRows, measurementTotals, measurementsCsv } from './measurements-lib.js';
 
 const TAB = 'measurements';
-const EMPTY = 'No measurements yet. Use Distance, Perimeter or Area in the toolbar.';
+const EMPTY = 'No measurements yet. Use Measure in the toolbar.';
 
 export function initMeasurements() {
   addIcon('ruler', '<path d="M3 12h18M3 8.25v7.5M21 8.25v7.5M6 12l2.25-1.8M6 12l2.25 1.8M18 12l-2.25-1.8M18 12l-2.25 1.8"/>');
