@@ -26,6 +26,7 @@ import { fileKind } from './ui/image-import-lib.js';
 import { initImageEdit } from './ui/imgedit.js';
 import { initMarkupTools } from './ui/tools-markup.js';
 import { initComments } from './ui/comments.js';
+import { initMeasurements } from './ui/measurements.js';
 import { initSignatures } from './ui/signatures.js';
 import { initSign } from './ui/sign.js';
 import { initForms } from './ui/forms.js';
@@ -842,6 +843,7 @@ initStampTools(app);
 initImageEdit();
 initMarkupTools(app);
 initComments();
+initMeasurements(); // Measurements sidebar tab: list, totals, CSV export
 initSignatures(app);
 initSign(app);
 app.annotations = annotations;
