@@ -53,7 +53,8 @@ describe('measuring', () => {
     const m = measurePoints('distance', [[0, 0], [72, 0]], s);
     near(m.value, 1270, 1e-9, 'distance');
     assert.equal(m.text, '1270 mm');
-    near(measurePoints('perimeter', sq, s).value, 140 * s.ratio, 1e-9, 'perimeter closes');
+    near(measurePoints('perimeter', sq, s).value, 100 * s.ratio, 1e-9, 'open perimeter (polyline)');
+    near(measurePoints('perimeter', sq, s, true).value, 140 * s.ratio, 1e-9, 'closed perimeter (polygon)');
     const sm = scaleFromDrawingScale(100, 'm');
     const a = measurePoints('area', [[0, 0], [72, 0], [72, 72], [0, 72]], sm);
     near(a.value, 2.54 * 2.54, 1e-12, '1 in square at 1:100 = 2.54 m square');

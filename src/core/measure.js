@@ -78,9 +78,12 @@ export function toReal(valuePt, scale, kind = 'distance') {
   return kind === 'area' ? valuePt * scale.ratio * scale.ratio : valuePt * scale.ratio;
 }
 
-/** kind 'distance' | 'perimeter' | 'area' of `points` with `scale`: { value, unit, text }. */
-export function measurePoints(kind, points, scale) {
-  const pt = kind === 'area' ? area(points) : kind === 'perimeter' ? perimeter(points, true) : distance(points);
+/**
+ * kind 'distance' | 'perimeter' | 'area' of `points` with `scale`: { value, unit, text }. A perimeter
+ * is the open path's length (Acrobat's PolyLineDimension) unless `closed` (a polygon).
+ */
+export function measurePoints(kind, points, scale, closed = false) {
+  const pt = kind === 'area' ? area(points) : kind === 'perimeter' ? perimeter(points, closed) : distance(points);
   const value = toReal(pt, scale, kind === 'area' ? 'area' : 'distance');
   return { value, unit: scale.unit, text: formatScaled(value, scale, kind) };
 }

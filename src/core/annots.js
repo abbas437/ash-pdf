@@ -3,7 +3,7 @@
 // the same code as flattenObjects (annotate.js) on a scratch page, then copied in as Form XObjects.
 import {
   PDFDocument, PDFName, PDFDict, PDFArray, PDFRef, PDFNumber, PDFString, PDFHexString, PDFStream,
-  PDFRawStream, PDFObjectCopier, decodePDFRawStream, rgb,
+  PDFRawStream, PDFObjectCopier, PDFBool, decodePDFRawStream, rgb,
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
 import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError, ContentMap, bytesKey } from './internal.js';
@@ -14,18 +14,19 @@ import { cloudArc } from './cloud.js';
 import { stampShape } from './stamps.js';
 import { runsOf, normalizeRuns, isImageRun, OBJ_CHAR } from './richtext.js';
 import { toRichContents, richFromRC } from './richxhtml.js';
+import { measureDict, scaleFromMeasureDict, measurePoints, viewportDict, viewportFromDict, UNITS } from './measure.js';
 
 const N = (s) => PDFName.of(s);
 const r4 = (n) => Math.round(n * 1e4) / 1e4 + 0;
 const num = (v, d) => (Number.isFinite(v) ? v : d);
 
 const SUBTYPE = {
-  rect: 'Square', cloud: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine',
+  rect: 'Square', cloud: 'Square', ellipse: 'Circle', line: 'Line', arrow: 'Line', ink: 'Ink', polyline: 'PolyLine', polygon: 'Polygon',
   text: 'FreeText', callout: 'FreeText', stamp: 'Stamp', image: 'Stamp', apStamp: 'Stamp', highlight: 'Highlight',
   note: 'Text', underline: 'Underline', strikeout: 'StrikeOut', squiggly: 'Squiggly', textHighlight: 'Highlight',
   redactMark: 'Redact', // a mark only (§12.5.6.23): the content goes when the app applies redaction
 };
-const MARKUP = new Set(['Square', 'Circle', 'Line', 'Ink', 'PolyLine', 'FreeText', 'Stamp', 'Highlight', 'Text', 'Underline', 'StrikeOut', 'Squiggly', 'Redact']);
+const MARKUP = new Set(['Square', 'Circle', 'Line', 'Ink', 'PolyLine', 'Polygon', 'FreeText', 'Stamp', 'Highlight', 'Text', 'Underline', 'StrikeOut', 'Squiggly', 'Redact']);
 const MARKUP_TYPE = { Underline: 'underline', StrikeOut: 'strikeout', Squiggly: 'squiggly' };
 const STATUS = { accepted: 'Accepted', rejected: 'Rejected', cancelled: 'Cancelled', completed: 'Completed', none: 'None' };
 const REDACT_STROKE = '#d62828';
@@ -151,6 +152,7 @@ const hasStroke = (o, d) => parseColor(o.stroke, d) !== null;
 
 /** Visible bounding box of the appearance, plus the inner box (for /RD) where relevant. */
 function layout(o) {
+  if (o.measure) return { bbox: union(layout({ ...o, measure: undefined }).bbox, grow(measureLabel(o), 1)) };
   const sw = num(o.strokeWidth, o.type === 'ink' || o.type === 'polyline' ? 2 : 1);
   switch (o.type) {
     case 'rect':
@@ -168,6 +170,7 @@ function layout(o) {
     }
     case 'ink':
     case 'polyline':
+    case 'polygon':
       return { bbox: boxOfPoints(inkPaths(o).flat(), sw / 2 + 2) };
     case 'text':
     case 'callout': {
@@ -209,9 +212,113 @@ function shift(o, dx, dy) {
   return s;
 }
 
+// ---------------------------------------------------------------- measurements (§12.9)
+
+const MEASURE_KINDS = ['distance', 'perimeter', 'area'];
+const MEASURE_TYPES = ['line', 'arrow', 'polyline', 'polygon'];
+const DIMENSION_IT = { Line: 'LineDimension', PolyLine: 'PolyLineDimension', Polygon: 'PolygonDimension' };
+const MEASURE_FONT = 9;
+const PDF_NAME_KEYS = new Set(['Type', 'Subtype', 'F']); // in measure.js plain data every other string is a text string
+
+/** The points a measurement object measures (visible space, points). */
+const measuredPoints = (o) => (o.type === 'line' || o.type === 'arrow' ? [[o.x1, o.y1], [o.x2, o.y2]] : o.points);
+
+/** A measurement object's value and caption, from its geometry and scale (a polygon's perimeter is closed). */
+function measureValue(o) {
+  const m = measurePoints(o.measure.kind, measuredPoints(o), o.measure.scale, o.type === 'polygon');
+  return { value: m.value, label: m.text };
+}
+
+/**
+ * The caption of a measurement as a text object: centred on a line's midpoint, a polyline's middle
+ * vertex or the average of a polygon's vertices, on white (inline, as /CP /Inline places it).
+ */
+function measureLabel(o) {
+  const { label } = measureValue(o);
+  const pts = measuredPoints(o);
+  let c;
+  if (o.type === 'polygon') c = [0, 1].map((k) => pts.reduce((s, p) => s + p[k], 0) / pts.length);
+  else if (pts.length === 2) c = [(pts[0][0] + pts[1][0]) / 2, (pts[0][1] + pts[1][1]) / 2];
+  else c = pts[Math.floor(pts.length / 2)];
+  const t = { type: 'text', text: label, font: 'Helvetica', fontSize: MEASURE_FONT, lineHeight: 1.2, color: o.stroke ?? '#000000', fill: '#ffffff' };
+  const pad = textInset(t);
+  const m = layoutRich(t, 1e4);
+  const w = m.width + 2 * pad + 1;
+  const h = m.height + 2 * pad;
+  return { ...t, x: c[0] - w / 2, y: c[1] - h / 2, w, h };
+}
+
+/** measure.js plain data -> PDF objects (Type / Subtype / F as names, other strings as text strings). */
+function plainToPdf(ctx, v, key) {
+  if (Array.isArray(v)) return ctx.obj(v.map((x) => plainToPdf(ctx, x)));
+  if (v && typeof v === 'object') {
+    const d = ctx.obj({});
+    for (const [k, x] of Object.entries(v)) if (x !== undefined) d.set(N(k), plainToPdf(ctx, x, k));
+    return d;
+  }
+  if (typeof v === 'string') return PDF_NAME_KEYS.has(key) ? N(v) : text(v);
+  return ctx.obj(v);
+}
+
+/** PDF objects -> plain data (names and strings as JS strings), refs resolved. */
+function pdfToPlain(ctx, v, depth = 0) {
+  v = ctx.lookup(v);
+  if (depth > 8) return undefined;
+  if (v instanceof PDFDict) {
+    const o = {};
+    for (const [k, x] of v.entries()) o[k.decodeText()] = pdfToPlain(ctx, x, depth + 1);
+    return o;
+  }
+  if (v instanceof PDFArray) return v.asArray().map((x) => pdfToPlain(ctx, x, depth + 1));
+  if (v instanceof PDFName) return v.decodeText();
+  if (v instanceof PDFString || v instanceof PDFHexString) return v.decodeText();
+  if (v instanceof PDFNumber) return v.asNumber();
+  if (v instanceof PDFBool) return v.asBoolean();
+  return undefined;
+}
+
+/** The §12.9 entries of a measurement object: /IT, /Measure, and for a line /Cap (+ /LL). */
+function measureEntries(ctx, o) {
+  const sub = SUBTYPE[o.type];
+  const e = { IT: N(DIMENSION_IT[sub]), Measure: plainToPdf(ctx, measureDict(o.measure.scale)) };
+  if (sub === 'Line') {
+    e.Cap = true;
+    if (Number.isFinite(o.measure.leader)) e.LL = r4(o.measure.leader);
+  }
+  return e;
+}
+
+/** A measurement read from a Line / PolyLine / Polygon with a usable rectilinear /Measure (else null). */
+function readMeasure(doc, dict, o, subtype, extra) {
+  const md = dict.lookup(N('Measure'));
+  const scale = md instanceof PDFDict ? scaleFromMeasureDict(pdfToPlain(doc.context, md)) : null;
+  if (!scale) return null;
+  const kind = MEASURE_KINDS.includes(extra.measure?.kind) ? extra.measure.kind : { Line: 'distance', PolyLine: 'perimeter', Polygon: 'area' }[subtype];
+  if (kind === 'area' && o.type !== 'polygon') return null;
+  const m = { kind, scale };
+  const ll = dict.lookup(N('LL'));
+  if (ll instanceof PDFNumber) m.leader = ll.asNumber();
+  return Object.assign(m, measureValue({ ...o, measure: m }));
+}
+
+/** A page's /VP viewports (pdf-lib PDFDocument) as [{ bbox (PDF user space), name?, scale? }]. */
+export function readViewports(doc, pageIndex) {
+  const vp = doc.getPage(pageIndex).node.lookup(N('VP'));
+  if (!(vp instanceof PDFArray)) return [];
+  return vp.asArray().map((x) => viewportFromDict(pdfToPlain(doc.context, x))).filter(Boolean);
+}
+
+/** Replace a page's /VP with `vps` (as readViewports returns them); none removes it. Edits `doc` in place. */
+export function writeViewports(doc, pageIndex, vps) {
+  const node = doc.getPage(pageIndex).node;
+  if (!vps?.length) node.delete(N('VP'));
+  else node.set(N('VP'), plainToPdf(doc.context, vps.map(viewportDict)));
+}
+
 // ---------------------------------------------------------------- appearance streams
 
 function toFlattenObjects(o, page) {
+  if (o.measure) return [...toFlattenObjects({ ...o, measure: undefined }, page), { ...measureLabel(o), page, opacity: 1 }];
   if (o.type === 'ink' || o.type === 'polyline') return inkPaths(o).map((points) => ({ ...o, page, type: 'ink', points, paths: undefined }));
   // Appearance of a redaction mark: its outline only (never a filled box: printing must not black out).
   if (o.type === 'redactMark') return [{ type: 'rect', page, x: o.x + 0.5, y: o.y + 0.5, w: Math.max(o.w - 1, 0), h: Math.max(o.h - 1, 0), stroke: REDACT_STROKE, strokeWidth: 1, fill: null }];
@@ -365,12 +472,14 @@ function typeEntries(o, g, lay) {
       pick('headSize');
       break;
     case 'ink':
-    case 'polyline': {
+    case 'polyline':
+    case 'polygon': {
       strokeColor = parseColor(o.stroke, '#000000') || rgb(0, 0, 0);
       width = sw;
       const paths = inkPaths(o).map((p) => p.flatMap(([x, y]) => visToPdf(g, x, y)).map(r4));
       if (o.type === 'ink') e.InkList = paths;
       else e.Vertices = paths[0];
+      if (o.type === 'polygon' && parseColor(o.fill, null)) e.IC = colorArr(parseColor(o.fill, null));
       pick('smooth');
       break;
     }
@@ -486,10 +595,21 @@ function validate(o, pageCount) {
   } else if (o.type === 'apStamp' && !(o.ap instanceof Uint8Array)) {
     throw new TypeError(`apStamp object ${o.id} needs ap (its appearance as a one-page PDF)`);
   }
-  const need = o.type === 'line' || o.type === 'arrow' ? ['x1', 'y1', 'x2', 'y2'] : ['ink', 'polyline', 'note'].includes(o.type) || o.quads ? [] : ['x', 'y', 'w', 'h'];
+  const need = o.type === 'line' || o.type === 'arrow' ? ['x1', 'y1', 'x2', 'y2'] : ['ink', 'polyline', 'polygon', 'note'].includes(o.type) || o.quads ? [] : ['x', 'y', 'w', 'h'];
   for (const k of need) if (!Number.isFinite(o[k])) throw new TypeError(`${o.type} object ${o.id} needs numeric ${k}`);
   if ((o.type === 'ink' || o.type === 'polyline') && !inkPaths(o).every((p) => Array.isArray(p) && p.length >= 2)) {
     throw new TypeError(`${o.type} object ${o.id} needs at least 2 points`);
+  }
+  if (o.type === 'polygon' && !(Array.isArray(o.points) && o.points.length >= 3 && o.points.every((p) => Array.isArray(p) && p.length >= 2 && p.every(Number.isFinite)))) {
+    throw new TypeError(`polygon object ${o.id} needs at least 3 points`);
+  }
+  if (o.measure != null) {
+    const m = o.measure;
+    if (!MEASURE_TYPES.includes(o.type)) throw new TypeError(`${o.type} object ${o.id} cannot carry a measurement`);
+    if (!MEASURE_KINDS.includes(m.kind) || !(m.scale?.ratio > 0) || !Number.isFinite(m.scale.ratio) || !UNITS.includes(m.scale.unit)) {
+      throw new TypeError(`${o.type} object ${o.id} needs measure: { kind: ${MEASURE_KINDS.join(' | ')}, scale: { ratio > 0, unit: ${UNITS.join(' | ')} } }`);
+    }
+    if (m.kind === 'area' && o.type !== 'polygon') throw new TypeError(`${o.type} object ${o.id}: only a polygon measures an area`);
   }
 }
 
@@ -745,10 +865,15 @@ export async function writeAnnotations(pdfBytes, { add = [], update = [], remove
     const page = pages[o.page];
     const who = o.author ?? author ?? '';
     const { entries, extra } = typeEntries(o, g, lay);
+    if (o.measure != null) {
+      Object.assign(entries, measureEntries(doc.context, o));
+      extra.measure = { kind: o.measure.kind };
+      if (o.note !== undefined && o.note !== null) extra.note = String(o.note); // /Contents carries the caption
+    }
     // Signature / image-stamp identity: the library item id, the custom stamp id and the block id, so Apply
     // signature / Apply stamp still work after reopening.
     for (const k of ['sig', 'stampImg', 'group']) if (typeof o[k] === 'string' && o[k]) extra[k] = o[k];
-    const contents = o.type === 'text' || o.type === 'callout' ? (hasImageRun(o) ? String(o.text ?? '').replace(OBJ_RE, '') : String(o.text ?? '')) :(o.note ?? (o.type === 'stamp' ? o.text : undefined));
+    const contents = o.measure != null ? measureValue(o).label : o.type === 'text' || o.type === 'callout' ? (hasImageRun(o) ? String(o.text ?? '').replace(OBJ_RE, '') : String(o.text ?? '')) :(o.note ?? (o.type === 'stamp' ? o.text : undefined));
     const opacity = o.type === 'highlight' ? Math.min(Math.max(num(o.opacity, 0.4), 0), 0.5) : Math.min(Math.max(num(o.opacity, 1), 0), 1);
     const rect = visRectToPdf(g, lay.bbox).map(r4);
     const dict = {
@@ -1144,7 +1269,8 @@ function toObject(doc, en, g) {
       break;
     }
     case 'Ink':
-    case 'PolyLine': {
+    case 'PolyLine':
+    case 'Polygon': {
       let paths;
       if (en.subtype === 'Ink') {
         const list = dict.lookup(N('InkList'));
@@ -1160,6 +1286,11 @@ function toObject(doc, en, g) {
         return pts;
       }).filter((p) => p.length >= 2);
       if (!paths.length) throw new Error('no ink path');
+      if (en.subtype === 'Polygon') {
+        if (paths[0].length < 3) throw new Error('polygon with fewer than 3 vertices');
+        Object.assign(o, { type: 'polygon', points: paths[0], stroke: C ?? '#000000', fill: IC, strokeWidth: width });
+        break;
+      }
       Object.assign(o, { type: en.subtype === 'Ink' ? 'ink' : 'polyline', points: paths[0], stroke: C ?? '#000000', strokeWidth: width });
       if (paths.length > 1) o.paths = paths;
       if (extra.smooth !== undefined) o.smooth = extra.smooth;
@@ -1276,10 +1407,16 @@ function toObject(doc, en, g) {
     default:
       throw new Error('unsupported subtype');
   }
+  if (DIMENSION_IT[en.subtype]) {
+    const m = readMeasure(doc, dict, o, en.subtype, extra);
+    if (m) o.measure = m;
+  }
   if (dash) o.dash = dash;
   for (const k of ['sig', 'stampImg', 'group']) if (typeof extra[k] === 'string' && extra[k]) o[k] = extra[k];
   o.opacity = ca instanceof PDFNumber ? ca.asNumber() : 1;
-  if (contents !== undefined && o.type !== 'text' && o.type !== 'callout' && !(o.type === 'stamp' && contents === o.text)) o.note = contents;
+  if (o.measure) {
+    if (typeof extra.note === 'string') o.note = extra.note; // /Contents is the caption
+  } else if (contents !== undefined && o.type !== 'text' && o.type !== 'callout' && !(o.type === 'stamp' && contents === o.text)) o.note = contents;
   const author = readText(dict, 'T');
   if (author !== undefined) o.author = author;
   const created = readDate(dict, 'CreationDate');

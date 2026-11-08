@@ -687,6 +687,25 @@ class PagePainter {
         this.page.pushOperators(popGraphicsState());
         break;
       }
+      case 'polygon': { // closed: stroke + optional fill
+        const pts = o.points;
+        if (!Array.isArray(pts) || pts.length < 3) throw new TypeError(`polygon object ${o.id ?? ''} needs at least 3 points`);
+        const stroke = parseColor(o.stroke, '#000000');
+        const fill = parseColor(o.fill, null);
+        const sw = num(o.strokeWidth, 1);
+        const opacity = opacityOf(o.opacity);
+        this.page.pushOperators(pushGraphicsState(), setLineJoin(LineJoinStyle.Round));
+        this.svg(`${pts.map((p, i) => `${i ? 'L' : 'M'} ${f(p[0])} ${f(p[1])}`).join(' ')} Z`, {
+          color: fill || undefined,
+          opacity,
+          borderColor: stroke || undefined,
+          borderWidth: stroke ? sw : 0,
+          borderDashArray: dashArray(o.dash, sw),
+          borderOpacity: opacity,
+        });
+        this.page.pushOperators(popGraphicsState());
+        break;
+      }
       case 'highlight': {
         requireBox(o);
         this.rectShape(o, {
@@ -796,7 +815,7 @@ class PagePainter {
 }
 
 /** Every overlay object type flattenObjects (and so writeAnnotations' appearances) can draw. */
-export const KNOWN_TYPES = new Set(['text', 'rect', 'ellipse', 'cloud', 'line', 'arrow', 'polyline', 'ink', 'highlight', 'whiteout', 'image', 'callout', 'stamp',
+export const KNOWN_TYPES = new Set(['text', 'rect', 'ellipse', 'cloud', 'line', 'arrow', 'polyline', 'polygon', 'ink', 'highlight', 'whiteout', 'image', 'callout', 'stamp',
   'apStamp', 'note', ...TEXT_MARKUPS]);
 
 /**
