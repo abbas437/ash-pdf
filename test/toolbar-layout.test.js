@@ -91,7 +91,8 @@ test('a layout saved with the three measure buttons keeps one Measure in their p
   const l = cleanLayout(old);
   assert.deepEqual(l.order.comment.filter((id) => id.startsWith('measure')), ['measure']);
   assert.equal(l.order.comment[0], 'measure');
-  assert.deepEqual(l.hidden, ['measure']);
+  assert.deepEqual(l.hidden, [], 'hiding one old measure button does not hide all of Measure');
+  assert.deepEqual(cleanLayout({ ...old, hidden: ['measure-area', 'measure-distance', 'measure-perimeter'] }).hidden, ['measure'], 'all three hidden hides Measure');
   assert.equal(Object.values(l.order).flat().length, DEFAULT_GROUPS.flatMap((g) => g[2]).length);
 });
 

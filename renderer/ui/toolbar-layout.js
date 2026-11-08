@@ -23,6 +23,12 @@ export const FALLBACK_GROUP = 'edit';
 /** Ids of earlier versions and the id that replaced them (the three measure buttons became one). */
 const RENAMED = Object.freeze({ 'measure-distance': 'measure', 'measure-perimeter': 'measure', 'measure-area': 'measure' });
 const renamed = (a) => a.map((id) => RENAMED[id] ?? id);
+// Hidden ids: an old id hides its replacement only when every id it replaced was hidden (hiding Perimeter
+// alone must not hide Distance and Area).
+const renamedHidden = (a) => {
+  const gone = (to) => Object.keys(RENAMED).filter((id) => RENAMED[id] === to).every((id) => a.includes(id));
+  return a.filter((id) => !(id in RENAMED) || gone(RENAMED[id])).map((id) => RENAMED[id] ?? id);
+};
 
 const GROUP_KEYS = DEFAULT_GROUPS.map((g) => g[0]);
 const KNOWN = new Map(DEFAULT_GROUPS.flatMap(([g, , ids]) => ids.map((id, i) => [id, { group: g, rank: i }])));
@@ -70,7 +76,7 @@ export function cleanLayout(raw) {
   return {
     groupOrder,
     order,
-    hidden: uniq(renamed(strings(v.hidden)).filter((id) => KNOWN.has(id) && !ALWAYS_SHOWN.includes(id))),
+    hidden: uniq(renamedHidden(strings(v.hidden)).filter((id) => KNOWN.has(id) && !ALWAYS_SHOWN.includes(id))),
     compact: uniq(strings(v.compact).filter((g) => GROUP_KEYS.includes(g))),
   };
 }

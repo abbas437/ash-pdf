@@ -328,7 +328,8 @@ function cropOf(page) {
   return [c.x, c.y, c.x + c.width, c.y + c.height];
 }
 
-/** Whether a /VP element's /BBox covers the whole rectangle r (within 0.5 pt); false when unreadable. */
+/** Whether a /VP element's /BBox covers (nearly) the whole rectangle r: its overlap with r is at least 95%
+ *  of r's area, so a sheet viewport drawn a little inside the page edge still counts; false when unreadable. */
 const coversBox = (ctx, x, r) => {
   try {
     const b = ctx.lookup(ctx.lookup(x)?.get?.(N('BBox')));
@@ -336,7 +337,9 @@ const coversBox = (ctx, x, r) => {
     const n = b.asArray().map((v) => ctx.lookup(v)?.asNumber?.());
     if (!n.every(Number.isFinite)) return false;
     const [x1, x2] = [Math.min(n[0], n[2]), Math.max(n[0], n[2])], [y1, y2] = [Math.min(n[1], n[3]), Math.max(n[1], n[3])];
-    return x1 <= r[0] + 0.5 && y1 <= r[1] + 0.5 && x2 >= r[2] - 0.5 && y2 >= r[3] - 0.5;
+    const w = Math.min(x2, r[2]) - Math.max(x1, r[0]), h = Math.min(y2, r[3]) - Math.max(y1, r[1]);
+    const area = (r[2] - r[0]) * (r[3] - r[1]);
+    return w > 0 && h > 0 && area > 0 && w * h >= 0.95 * area;
   } catch { return false; }
 };
 

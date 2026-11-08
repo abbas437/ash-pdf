@@ -60,7 +60,7 @@ import { stable, changedKeys } from './objdiff-lib.js';
 import { canGroup, canUngroup, groupPatches, ungroupPatches, soleGroup, groupResizeBox, scaleMember } from './grouping-lib.js';
 import { withValue, labelBox, tickSegments, pointInPolygon, AREA_FILL_OPACITY } from './measure-lib.js';
 import { signedSaveMode } from './save-lib.js';
-import { scaleFromDrawingScale } from '../../src/core/measure.js';
+import { scaleFromDrawingScale, MIN_RATIO, MAX_RATIO, MM_PER } from '../../src/core/measure.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const MAX_HISTORY = 200;
@@ -1186,7 +1186,7 @@ let inited = false;
 export function initAnnotations() {
   if (inited) return annotations;
   inited = true;
-  window.api?.settingsGet?.(LAST_SCALE_KEY)?.then?.((v) => { if (v?.ratio > 0 && v.unit) lastScale ??= v; }, () => {});
+  window.api?.settingsGet?.(LAST_SCALE_KEY)?.then?.((v) => { if (v?.ratio >= MIN_RATIO && v.ratio <= MAX_RATIO && Object.hasOwn(MM_PER, v.unit)) lastScale ??= v; }, () => {});
   registerBuiltins();
   placeHook();
   viewer.setViewBytes(viewBytes);

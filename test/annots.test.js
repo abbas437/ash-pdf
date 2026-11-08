@@ -770,6 +770,19 @@ describe('polygons and measurements (§12.9)', () => {
     assert.deepEqual(untouched.map((e) => e.dict.toString()), before, 'clearing with none of ours keeps the rest');
   });
 
+  test('our viewport goes after a foreign sheet viewport whose BBox is reversed, indirect and a little inside the page', async () => {
+    const doc = await PDFDocument.load(await makePdf(1));
+    const ctx = doc.context;
+    const rl = (name, bbox, r) => ctx.obj({ Type: 'Viewport', BBox: bbox, Name: PDFString.of(name),
+      Measure: ctx.obj({ Type: 'Measure', Subtype: 'RL', R: PDFString.of(r), X: [nfm(ctx, 'mm', 25.4 / 72 * 50, 'D', 10)], D: [nfm(ctx, 'mm', 1, 'D', 10)], A: [nfm(ctx, 'sq mm', 1, 'D', 1)] }) });
+    const sheet = rl('Sheet', ctx.register(ctx.obj([600, 785, 6, 4])), '1:50'); // reversed corners, indirect, a few points inside the page (96% of it)
+    const detail = rl('Detail', [300, 50, 600, 300], '1:5');
+    doc.getPage(0).node.set(PDFName.of('VP'), ctx.obj([sheet, detail]));
+    const out = await writeAnnotations(await doc.save(), { viewports: [{ page: 0, scale: scaleFromDrawingScale(100, 'mm') }] });
+    const d = await PDFDocument.load(out);
+    assert.deepEqual(readViewports(d, 0).map((v) => v.name), ['Sheet', 'ASH', 'Detail']);
+  });
+
   test('appearances render in pdf.js: filled polygon and a measured line with its caption', async () => {
     const add = [
       { id: 'pg', page: 0, type: 'polygon', points: [[40, 40], [200, 40], [200, 200], [40, 200]], stroke: '#0000ff', fill: '#00ff00', strokeWidth: 2, opacity: 1 },
