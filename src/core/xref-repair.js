@@ -7,19 +7,26 @@
 // pdf-lib showed, and on save wrote back, the old data.
 //
 // repairFromXref walks the xref chain from the last startxref (classic tables and xref streams,
-// /Prev and hybrid /XRefStm; the newest section wins), finds object streams the xref does not
-// reference, and for every object such a stale stream holds that pdf-lib took from it (it sits
-// after the xref's location for that object), re-parses the object from where the xref says and
-// assigns it. Anything unexpected (no/garbled startxref, offsets out of range, /Prev loop, a
-// stream that does not parse, an encrypted file) leaves the document exactly as pdf-lib loaded it.
+// /Prev and hybrid /XRefStm; the newest section wins), finds stale copies in object streams (every
+// member of a stream the xref does not reference, and members of a referenced one that the xref
+// places elsewhere), and for every object pdf-lib took from such a copy (it sits after the xref's
+// location for that object), re-parses the object from where the xref says and assigns it.
+// Anything unexpected (no/garbled startxref, offsets out of range, /Prev loop, a stream that does
+// not parse, an encrypted file, implausible sizes or amounts of work) leaves the document exactly
+// as pdf-lib loaded it.
 // Pure ES module: imports only from 'pdf-lib'.
 import { PDFObjectParser, PDFObjectStreamParser, PDFRawStream, PDFDict, PDFArray, PDFName, PDFNumber, PDFRef, decodePDFRawStream } from 'pdf-lib';
 
 const N = (s) => PDFName.of(s);
 const MAX_SECTIONS = 4096;
+const MAX_ENTRIES = 10_000_000; // per xref section: beyond it the repair gives up
+const MAX_MARKERS = 100_000; // `/ObjStm` tokens in the file: beyond it the repair gives up
+const LOOK_BACK = 256; // bytes from an `/ObjStm` token back to its `N G obj` header
 const enc = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0));
 const STARTXREF = enc('startxref');
 const OBJSTM = enc('/ObjStm');
+const STREAM = enc('stream');
+const END = enc('end');
 
 class Inconsistent extends Error {}
 function check(cond, msg) {
@@ -39,11 +46,55 @@ function matchAt(bytes, at, pat) {
   return true;
 }
 
-/** Offsets of every `/ObjStm` name token in the file. */
-function objStmMarkers(bytes) {
+const isDigit = (b) => b >= 0x30 && b <= 0x39;
+
+/**
+ * The `N G obj` header whose dictionary holds the name token at `pos`, as {offset, num, gen}, or
+ * null. Looks back at most LOOK_BACK bytes, in place; a `stream`/`endstream`/`endobj` keyword in
+ * between means the token is not in an object's dictionary (content stream data, say).
+ */
+function headerBefore(bytes, pos) {
+  const lo = Math.max(0, pos - LOOK_BACK);
+  for (let j = pos - 3; j >= lo; j--) {
+    if (bytes[j] === 0x73 && matchAt(bytes, j, STREAM)) return null;
+    if (bytes[j] !== 0x6f || bytes[j + 1] !== 0x62 || bytes[j + 2] !== 0x6a || !isDelim(bytes[j + 3])) continue;
+    if (j >= 3 && matchAt(bytes, j - 3, END)) return null; // endobj
+    // backwards: whitespace, generation digits, whitespace, object number digits, a delimiter
+    let k = j - 1;
+    const ws = () => {
+      const from = k;
+      while (k >= 0 && isWs(bytes[k])) k--;
+      return k < from;
+    };
+    const digits = () => {
+      const to = k;
+      while (k >= 0 && to - k < 10 && isDigit(bytes[k])) k--;
+      return to > k ? Number(String.fromCharCode(...bytes.subarray(k + 1, to + 1))) : null;
+    };
+    if (!ws()) continue;
+    const gen = digits();
+    if (gen === null || !ws()) continue;
+    const num = digits();
+    if (num === null || (k >= 0 && !isDelim(bytes[k]))) continue;
+    return { offset: k + 1, num, gen };
+  }
+  return null;
+}
+
+/**
+ * The distinct `N G obj` headers of objects whose dictionary holds an `/ObjStm` name token, in file
+ * order: one pass over the bytes, a bounded look-back per token. null when there are more than
+ * MAX_MARKERS tokens (a hostile file: not worth repairing).
+ */
+function objStmHeaders(bytes) {
   const out = [];
-  for (let i = bytes.indexOf(0x2f); i !== -1; i = bytes.indexOf(0x2f, i + 1)) {
-    if (matchAt(bytes, i, OBJSTM) && isDelim(bytes[i + OBJSTM.length])) out.push(i);
+  let markers = 0;
+  const last = bytes.length - OBJSTM.length;
+  for (let i = 0; i <= last; i++) {
+    if (bytes[i] !== 0x2f || bytes[i + 1] !== 0x4f || !matchAt(bytes, i, OBJSTM) || !isDelim(bytes[i + OBJSTM.length])) continue;
+    if (++markers > MAX_MARKERS) return null;
+    const h = headerBefore(bytes, i);
+    if (h && h.offset !== out[out.length - 1]?.offset) out.push(h);
   }
   return out;
 }
@@ -81,13 +132,16 @@ function makeReader(bytes, context) {
     p.skipWhitespaceAndComments();
     return p.parseObject();
   };
-  return { indirectAt, objectAt };
+  return { indirectAt, objectAt, pos: () => p.bytes.offset() };
 }
 
 const num = (dict, key) => {
   const v = dict.lookup(N(key));
   return v instanceof PDFNumber ? v.asNumber() : undefined;
 };
+
+/** A subsection's first object number and entry count are sane (checked before any is summed or looped over). */
+const validRun = (start, count) => Number.isSafeInteger(start) && Number.isSafeInteger(count) && start >= 0 && count >= 0 && Number.isSafeInteger(start + count);
 
 /** Entries of a classic `xref` table at `off`, plus its trailer dict. */
 function classicSection(bytes, off, reader) {
@@ -101,7 +155,7 @@ function classicSection(bytes, off, reader) {
   while (i < tok.length) {
     const start = Number(tok[i]);
     const count = Number(tok[i + 1]);
-    check(Number.isInteger(start) && Number.isInteger(count) && start >= 0 && count >= 0, 'bad subsection');
+    check(validRun(start, count) && entries.length + count <= MAX_ENTRIES && i + 2 + 3 * count <= tok.length, 'bad subsection');
     i += 2;
     for (let k = 0; k < count; k++, i += 3) {
       const [a, g, kind] = [Number(tok[i]), Number(tok[i + 1]), tok[i + 2]];
@@ -177,8 +231,14 @@ function streamSection(bytes, off, reader) {
     check(Number.isInteger(size), 'no /Size');
     subs.push([0, size]);
   }
-  const row = w[0] + w[1] + w[2];
-  check(subs.reduce((s, [, c]) => s + c, 0) * row <= data.length, 'xref stream too short');
+  const row = w[0] + w[1] + w[2]; // > 0: w[1] > 0
+  const maxRows = Math.min(Math.floor(data.length / row), MAX_ENTRIES);
+  let total = 0;
+  for (const [start, count] of subs) {
+    check(validRun(start, count), 'bad /Index');
+    total += count;
+    check(total <= maxRows, 'xref stream too short');
+  }
   const field = (at, width) => {
     let v = 0;
     for (let k = 0; k < width; k++) v = v * 256 + data[at + k];
@@ -187,14 +247,14 @@ function streamSection(bytes, off, reader) {
   const entries = [];
   let at = 0;
   for (const [start, count] of subs) {
-    check(Number.isInteger(start) && Number.isInteger(count) && start >= 0 && count >= 0, 'bad /Index');
     for (let k = 0; k < count; k++, at += row) {
       const type = w[0] ? field(at, w[0]) : 1;
       const a = field(at + w[0], w[1]);
       const b = field(at + w[0] + w[1], w[2]);
-      if (type === 0) entries.push({ n: start + k, type: 0 });
-      else if (type === 1 || type === 2) entries.push({ n: start + k, type, a, b });
-      // other types are null references (ISO 32000-1, 7.5.8.3): no entry
+      if (type === 1 || type === 2) entries.push({ n: start + k, type, a, b });
+      // 0 is free; other types are null references (ISO 32000-1, 7.5.8.3): committed like a free
+      // entry, so an older section's entry for the number does not win
+      else entries.push({ n: start + k, type: 0 });
     }
   }
   return { entries, trailer: dict };
@@ -239,19 +299,6 @@ function readXref(bytes, reader) {
   return { map, encrypted };
 }
 
-/** Offset of the `N G obj` header enclosing the name at `pos`, with N and G, or null. */
-function headerBefore(bytes, pos) {
-  const from = Math.max(0, pos - 4096);
-  const text = latin1(bytes, from, pos);
-  const re = /(\d+)\s+(\d+)\s+obj\b/g;
-  let m;
-  let last = null;
-  while ((m = re.exec(text))) last = m;
-  if (!last) return null;
-  if (/\bendobj\b/.test(text.slice(last.index))) return null;
-  return { offset: from + last.index, num: Number(last[1]), gen: Number(last[2]) };
-}
-
 /**
  * repairFromXref(doc, bytes) -> number of objects re-assigned (0 when nothing differed or the
  * xref could not be trusted). Call right after PDFDocument.load on the same bytes.
@@ -260,8 +307,8 @@ export function repairFromXref(doc, bytes) {
   try {
     if (bytes instanceof ArrayBuffer) bytes = new Uint8Array(bytes);
     if (!(bytes instanceof Uint8Array)) return 0;
-    const markers = objStmMarkers(bytes);
-    if (!markers.length) return 0; // no object stream at all: nothing can clash
+    const headers = objStmHeaders(bytes);
+    if (!headers?.length) return 0; // no object stream at all: nothing can clash (or a hostile file)
     const context = doc.context;
     const reader = makeReader(bytes, context);
     const { map, encrypted } = readXref(bytes, reader);
@@ -273,17 +320,15 @@ export function repairFromXref(doc, bytes) {
       check(s && s.type === 1, 'object stream not in xref');
       live.set(e.a, s.a);
     }
-    if (markers.length <= live.size) return 0; // every object stream in the file is a live one
-    const liveOffsets = new Set(live.values());
 
-    // Every object number held by an unreferenced object stream, with the furthest such stream.
+    // Every object number held by an object stream at a place other than the xref's, with the
+    // furthest such stream. A live stream can hold stale copies too, beside its live members.
     const staleAt = new Map();
-    const headers = new Set();
-    for (const pos of markers) {
-      const h = headerBefore(bytes, pos);
-      if (!h || headers.has(h.offset)) continue;
-      headers.add(h.offset);
-      if (liveOffsets.has(h.offset)) continue;
+    // Parsing work over all candidate headers: a legitimate file parses each byte about once; fake
+    // headers packed into stream data could each make the parser scan far ahead.
+    const budget = 4 * bytes.length + 65536;
+    let spent = 0;
+    for (const h of headers) {
       let members;
       try {
         const { obj } = reader.indirectAt(h.offset);
@@ -291,8 +336,16 @@ export function repairFromXref(doc, bytes) {
         members = PDFObjectStreamParser.forStream(obj).parseOffsetsAndObjectNumbers();
       } catch {
         continue; // pdf-lib could not have taken objects from it either
+      } finally {
+        spent += Math.max(0, reader.pos() - h.offset);
+        check(spent <= budget, 'too much parsing');
       }
-      for (const { objectNumber } of members) staleAt.set(objectNumber, Math.max(staleAt.get(objectNumber) ?? -1, h.offset));
+      const isLive = live.get(h.num) === h.offset;
+      members.forEach(({ objectNumber: n }, index) => {
+        const e = map.get(n);
+        if (isLive && e?.type === 2 && e.a === h.num && e.b === index) return; // the xref's copy
+        staleAt.set(n, Math.max(staleAt.get(n) ?? -1, h.offset));
+      });
     }
 
     // Objects pdf-lib took from a stale stream: the stale copy sits after the xref's location.
