@@ -10,6 +10,10 @@ keywords: whats new, release notes, changes, version, updates, 0.2.15, 0.2.14, 0
 
 The most recent additions, newest first. Versions up to 0.2.10 are tagged in the project history. Changes after that are grouped by release as far as the history shows.
 
+## Version 0.2.24
+
+- **Forms and markups always show a file's current values.** Some PDFs that were filled in and saved many times keep old copies of their fields inside the file. Other viewers show the current values, but PDF Studio could show, and on saving write back, an old copy. It now follows the file's own index of current values, as other PDF programs do.
+
 ## Version 0.2.23
 
 - **Measure distances and areas.** Set the drawing scale (presets such as 1:50, imperial scales, or **Calibrate…** from a known dimension), then measure with **Measure**: **Distance**, **Perimeter** or **Area**. Points snap to the ends of lines in the drawing. The **Measurements** list shows totals and exports to CSV. Scales and measurements are saved in the PDF in the standard form other PDF programs read. See [Measure](#topic:measure).
