@@ -3,8 +3,9 @@
 // /Rotate, OCRs the canvas, and hands the word boxes (device pixels) to addTextLayer, which writes them as
 // invisible text (render mode 3) in PDF user space so the page becomes searchable, selectable and copyable
 // while its visible content stays unchanged.
-import { PDFDocument, StandardFonts, TextRenderingMode, pushGraphicsState, popGraphicsState, beginText, endText,
+import { StandardFonts, TextRenderingMode, pushGraphicsState, popGraphicsState, beginText, endText,
   setFontAndSize, setTextRenderingMode, setCharacterSqueeze, setTextMatrix, showText } from 'pdf-lib';
+import { loadPdfDoc } from './internal.js';
 
 /**
  * Device pixel (px, py) of a page rendered by pdf.js (viewport with the page's rotation, offset 0) → PDF user space.
@@ -51,7 +52,7 @@ function encodable(font, text) {
  * Returns the new PDF bytes. Pages without words are left untouched.
  */
 export async function addTextLayer(bytes, pages) {
-  const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+  const doc = await loadPdfDoc(bytes, { updateMetadata: false });
   const font = await doc.embedFont(StandardFonts.Helvetica);
   for (const { index, geom, words } of pages) {
     const list = (words ?? []).filter((w) => w.text?.trim());

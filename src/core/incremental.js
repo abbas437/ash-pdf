@@ -2,7 +2,8 @@
 // xref section and a trailer whose /Prev points at the original one, so the original bytes stay an
 // exact prefix of the output and a digital signature over them (/ByteRange) still covers the same
 // bytes. Pure ES module: imports only from 'pdf-lib'.
-import { PDFDocument, PDFDict, PDFArray, PDFName, PDFNumber, PDFRef, PDFStream } from 'pdf-lib';
+import { PDFDict, PDFArray, PDFName, PDFNumber, PDFRef, PDFStream } from 'pdf-lib';
+import { loadPdfDoc } from './internal.js';
 
 const N = (s) => PDFName.of(s);
 const latin1 = (s) => Uint8Array.from(s, (c) => c.charCodeAt(0) & 0xff);
@@ -20,7 +21,7 @@ function sameBytes(a, b) {
 }
 
 // ignoreEncryption: an encrypted original loads (and is then refused) instead of throwing.
-const load = (bytes) => PDFDocument.load(bytes.slice(), { updateMetadata: false, throwOnInvalidObject: false, ignoreEncryption: true });
+const load = (bytes) => loadPdfDoc(bytes.slice(), { updateMetadata: false, throwOnInvalidObject: false, ignoreEncryption: true });
 
 /** Offset after the last `startxref` keyword (the original's xref position), or null. */
 function lastStartXref(bytes) {

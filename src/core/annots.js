@@ -6,7 +6,7 @@ import {
   PDFRawStream, PDFObjectCopier, PDFBool, decodePDFRawStream, rgb,
   pushGraphicsState, popGraphicsState, concatTransformationMatrix, drawObject,
 } from 'pdf-lib';
-import { loadPdf, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError, ContentMap, bytesKey } from './internal.js';
+import { loadPdf, loadPdfDoc, saveEdited, pageGeometry, pdfToVisible, visibleUpMatrix, parseColor, coreError, ContentMap, bytesKey } from './internal.js';
 import { flattenObjects, layoutRich, standardFontName, textInset, DEFAULT_COLOR } from './annotate.js';
 import { calloutArrowHead } from './arrowhead.js';
 import { trailerSize } from './incremental.js';
@@ -435,7 +435,7 @@ async function buildAppearances(doc, items) {
   });
   let bytes = await tmp.save();
   if (flat.length) bytes = await flattenObjects(bytes, flat);
-  const src = await PDFDocument.load(bytes);
+  const src = await loadPdfDoc(bytes);
   const copier = PDFObjectCopier.for(src.context, doc.context);
   return items.map(({ bbox, g }, i) => {
     const { Contents, Resources } = src.getPage(i).node.normalizedEntries();

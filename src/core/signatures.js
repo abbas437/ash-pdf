@@ -1,7 +1,8 @@
 // Digital-signature detection. ASH PDF Studio saves by rewriting the whole file with pdf-lib (no
 // incremental update), which invalidates any existing signature and drops earlier revisions, so the
 // shell asks before overwriting a signed file. Pure ES module: imports only from 'pdf-lib'.
-import { PDFDocument, PDFDict, PDFArray, PDFName, PDFNumber, PDFRef } from 'pdf-lib';
+import { PDFDict, PDFArray, PDFName, PDFNumber, PDFRef } from 'pdf-lib';
+import { loadPdfDoc } from './internal.js';
 
 const N = (s) => PDFName.of(s);
 const SIG = N('Sig');
@@ -20,7 +21,7 @@ export async function detectSignatures(bytes) {
     if (bytes instanceof ArrayBuffer) bytes = new Uint8Array(bytes);
     if (!(bytes instanceof Uint8Array)) return { signed: false, fields: 0 };
     try {
-      return structural(await PDFDocument.load(bytes.slice(), { ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false }));
+      return structural(await loadPdfDoc(bytes.slice(), { ignoreEncryption: true, updateMetadata: false, throwOnInvalidObject: false }));
     } catch {
       return rawScan(bytes);
     }

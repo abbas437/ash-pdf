@@ -1,6 +1,7 @@
 // Shared helpers for the ASH PDF Studio core library.
 // Pure ES module: imports only from 'pdf-lib' so it runs in Node and in the renderer.
 import { PDFDocument, EncryptedPDFError, rgb } from 'pdf-lib';
+import { repairFromXref } from './xref-repair.js';
 
 export const PRODUCER = 'ASH PDF Studio';
 
@@ -19,6 +20,18 @@ function assertBytes(bytes, label = 'bytes') {
 }
 
 /**
+ * Every pdf-lib load of a user's PDF goes through here: PDFDocument.load, then repairFromXref so the
+ * objects match what the cross-reference data says (pdf-lib alone lets a stale object stream that
+ * sits later in the file win). `opts` are PDFDocument.load's; metadata is updated after the repair.
+ */
+export async function loadPdfDoc(bytes, opts = {}) {
+  const doc = await PDFDocument.load(bytes, { ...opts, updateMetadata: false });
+  repairFromXref(doc, bytes);
+  if (opts.updateMetadata !== false) doc.updateInfoDict();
+  return doc;
+}
+
+/**
  * Load a PDF without touching the caller's bytes (pdf-lib only reads them; we
  * still copy so later caller mutations cannot affect a lazily parsed doc).
  * Encrypted input -> Error{code:'ENCRYPTED'} unless `allowEncrypted` is set
@@ -29,7 +42,7 @@ export async function loadPdf(bytes, { password, allowEncrypted = false } = {}) 
   const copy = bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes.slice(0));
   let doc;
   try {
-    doc = await PDFDocument.load(copy, { updateMetadata: false, ignoreEncryption: allowEncrypted });
+    doc = await loadPdfDoc(copy, { updateMetadata: false, ignoreEncryption: allowEncrypted });
   } catch (e) {
     if (e instanceof EncryptedPDFError || /encrypted/i.test(String(e && e.message))) {
       throw coreError(
