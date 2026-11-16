@@ -26,7 +26,7 @@ function assertBytes(bytes, label = 'bytes') {
  */
 export async function loadPdfDoc(bytes, opts = {}) {
   const doc = await PDFDocument.load(bytes, { ...opts, updateMetadata: false });
-  repairFromXref(doc, bytes);
+  await repairFromXref(doc, bytes);
   if (opts.updateMetadata !== false) doc.updateInfoDict();
   return doc;
 }

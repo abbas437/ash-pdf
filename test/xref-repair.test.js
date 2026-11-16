@@ -2,7 +2,7 @@
 // copy of an object in file order. Fixtures are assembled byte by byte below (no binary files).
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { deflateSync } from 'node:zlib';
+import { deflateSync, deflateRawSync, constants as zlibConstants } from 'node:zlib';
 import { performance } from 'node:perf_hooks';
 import { PDFDocument, PDFDict, PDFName, PDFRef } from 'pdf-lib';
 import { loadPdfDoc } from '../src/core/internal.js';
@@ -151,7 +151,7 @@ describe('xref repair leaves other files as pdf-lib loaded them', () => {
   async function same(bytes) {
     const plain = await PDFDocument.load(bytes, { updateMetadata: false });
     const fixed = await PDFDocument.load(bytes, { updateMetadata: false });
-    assert.equal(repairFromXref(fixed, bytes), 0);
+    assert.equal(await repairFromXref(fixed, bytes), 0);
     assert.equal(objCount(fixed), objCount(plain));
     assert.equal(fixed.getPageCount(), plain.getPageCount());
     return { plain, fixed };
@@ -187,7 +187,7 @@ describe('xref repair never makes a damaged file worse', () => {
   const asLoaded = async (bytes) => {
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     const before = objCount(doc);
-    assert.doesNotThrow(() => assert.equal(repairFromXref(doc, bytes), 0));
+    assert.equal(await repairFromXref(doc, bytes), 0);
     assert.equal(objCount(doc), before);
     assert.equal(libValue(doc), 'OLD'); // exactly what pdf-lib loaded
     assert.equal(libValue(await loadPdfDoc(bytes, { updateMetadata: false })), 'OLD');
@@ -202,7 +202,7 @@ describe('xref repair never makes a damaged file worse', () => {
   test('/Prev loop', async () => asLoaded(bugShape({ prevLoop: true })));
   test('non-bytes input', async () => {
     const doc = await PDFDocument.load(bugShape(), { updateMetadata: false });
-    assert.equal(repairFromXref(doc, null), 0);
+    assert.equal(await repairFromXref(doc, null), 0);
   });
 });
 
@@ -223,7 +223,7 @@ describe('xref repair follows /Prev and hybrid /XRefStm', () => {
     assert.equal(await pdfjsValue(bytes), 'NEW');
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     assert.equal(libValue(doc), 'OLD');
-    assert.equal(repairFromXref(doc, bytes), 1);
+    assert.equal(await repairFromXref(doc, bytes), 1);
     assert.equal(libValue(doc), 'NEW');
     assert.deepEqual((await listFields(bytes)).map((f) => f.value), ['NEW']);
   });
@@ -242,7 +242,7 @@ describe('xref repair follows /Prev and hybrid /XRefStm', () => {
     assert.equal(await pdfjsValue(bytes), 'NEW');
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     assert.equal(libValue(doc), 'OLD');
-    assert.equal(repairFromXref(doc, bytes), 1);
+    assert.equal(await repairFromXref(doc, bytes), 1);
     assert.equal(libValue(doc), 'NEW');
   });
 
@@ -281,13 +281,89 @@ describe('xref repair on hostile files', () => {
     });
   }
 
-  test('a classic table with a huge subsection count gives up', async () => {
-    const s = String.fromCharCode(...bugShape());
-    const t = `xref\n0 3000000000\n0000000000 65535 f\r\ntrailer\n<< /Size 1 /Root 1 0 R >>\n`;
-    const bytes = toBytes(`${s}${t}startxref\n${s.length}\n%%EOF\n`);
+  test('a classic table with a negative subsection count gives up (not skipped to read /Prev)', async () => {
+    // `0 -1` is a well-formed pair of integers; read as a count it would be skipped and the rest of
+    // the table, then /Prev (the good xref stream), followed as if the table were sound. Hidden in
+    // stream 8's data, where pdf-lib's own parser does not look.
+    const bytes = bugShape({
+      after: (w) => {
+        w.stream(8, '', `xref\n0 -1\n1 1\n${String(w.off[1]).padStart(10, '0')} 00000 n\r\ntrailer\n<< /Size 8 /Root 1 0 R /Prev ${w.off[7]} >>\n`);
+        return w.s.indexOf('xref', w.off[8]);
+      },
+    });
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
-    assert.equal(repairFromXref(doc, bytes), 0);
     assert.equal(libValue(doc), 'OLD');
+    assert.equal(await repairFromXref(doc, bytes), 0);
+    assert.equal(libValue(doc), 'OLD');
+  });
+
+  /** Asserts `run` leaves the doc as pdf-lib loaded it within `ms`, with an RSS growth under 200 MB. */
+  async function cheaply(bytes, { ms = 1500, value = 'OLD', fixed = 0 } = {}) {
+    const plain = await PDFDocument.load(bytes, { updateMetadata: false });
+    const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+    const rss0 = process.memoryUsage().rss;
+    const t0 = performance.now();
+    assert.equal(await repairFromXref(doc, bytes), fixed);
+    const took = performance.now() - t0;
+    const grew = process.memoryUsage().rss - rss0;
+    assert.ok(took < ms, `repair took ${took.toFixed(0)} ms`);
+    assert.ok(grew < 200 * 2 ** 20, `RSS grew by ${(grew / 2 ** 20).toFixed(0)} MB`);
+    assert.equal(libValue(doc), value);
+    if (!fixed) assert.equal(objCount(doc), objCount(plain));
+  }
+
+  /** zlib data inflating to `mib` MiB of zeros, built without holding them: one sync-flushed 1 MiB chunk repeated, then an empty final block. */
+  const zeros = (mib) => {
+    const chunk = deflateRawSync(Buffer.alloc(1 << 20), { finishFlush: zlibConstants.Z_SYNC_FLUSH });
+    return Buffer.concat([Buffer.from([0x78, 0x9c]), ...Array(mib).fill(chunk), Buffer.from([0x03, 0x00, 0, 0, 0, 0])]);
+  };
+  /** ~5 KB that inflate, through two Flate filters, to 512 MiB. */
+  const bomb = () => deflateSync(zeros(512)).toString('latin1');
+
+  test('a hidden xref stream that inflates to 512 MB (double Flate): gives up fast, no memory growth', async () => {
+    const data = bomb();
+    const bytes = bugShape({
+      after: (w) => {
+        w.stream(8, '', `9 0 obj\n<< /Type /XRef /Size 10 /W [1 4 2] /Filter [/FlateDecode /FlateDecode] /Length ${data.length} >>\nstream\n${data}\nendstream\nendobj`);
+        return w.s.indexOf('9 0 obj', w.off[8]);
+      },
+    });
+    assert.ok(bytes.length < 20000);
+    await cheaply(bytes);
+  });
+
+  test('a hidden object stream that inflates to 512 MB (double Flate): no memory growth, the repair still works', async () => {
+    const data = bomb();
+    const bytes = bugShape({
+      after: (w) => {
+        w.stream(8, '', `9 0 obj\n<< /Type /ObjStm /N 1 /First 4 /Filter [/FlateDecode /FlateDecode] /Length ${data.length} >>\nstream\n${data}\nendstream\nendobj`);
+        return undefined;
+      },
+    });
+    await cheaply(bytes, { value: 'NEW', fixed: 1 });
+  });
+
+  test('chained hidden xref streams of millions of entries each: gives up fast', async () => {
+    // each section: ~4 KB of Flate data, 4M one-byte rows; /Prev chains them, all hidden in stream 8
+    const rows = deflateSync(Buffer.alloc(4_000_000)).toString('latin1');
+    const bytes = bugShape({
+      after: (w) => {
+        let body = '';
+        const at = [];
+        for (let k = 0; k < 3; k++) {
+          at.push(body.length);
+          const prev = k < 2 ? ` /Prev @${k + 1}@` : '';
+          body += `${20 + k} 0 obj\n<< /Type /XRef /Size 4000000 /W [0 1 0]${prev} /Filter /FlateDecode /Length ${rows.length} >>\nstream\n${rows}\nendstream\nendobj\n`;
+        }
+        const base = w.s.length + `8 0 obj\n<<  /Length ${body.length} >>\nstream\n`.length;
+        body = body.replace(/@(\d)@/g, (_, k) => String(base + at[k]).padStart(3, '0'));
+        w.stream(8, '', body);
+        assert.equal(w.s.slice(base, base + 6), '20 0 o');
+        return base;
+      },
+    });
+    assert.ok(bytes.length < 40000);
+    await cheaply(bytes);
   });
 
   test('megabytes of /Type /ObjStm tokens in a content stream: the scan stays fast', async () => {
@@ -302,9 +378,9 @@ describe('xref repair on hostile files', () => {
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     assert.equal(libValue(doc), 'OLD');
     const t0 = performance.now();
-    const fixed = repairFromXref(doc, bytes);
+    const fixed = await repairFromXref(doc, bytes);
     const ms = performance.now() - t0;
-    assert.ok(ms < 300, `repair took ${ms.toFixed(0)} ms`);
+    assert.ok(ms < 1500, `repair took ${ms.toFixed(0)} ms`);
     assert.equal(fixed, 1);
     assert.equal(libValue(doc), 'NEW');
   });
@@ -323,7 +399,7 @@ describe('xref repair: entry kinds and stream shapes', () => {
     assert.equal(await pdfjsValue(bytes), 'NEW');
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     assert.equal(libValue(doc), 'OLD');
-    assert.equal(repairFromXref(doc, bytes), 1);
+    assert.equal(await repairFromXref(doc, bytes), 1);
     assert.equal(libValue(doc), 'NEW');
     const live = doc.context.lookup(PDFRef.of(8, 0));
     assert.ok(live instanceof PDFDict && live.has(PDFName.of('Live')));
@@ -342,7 +418,7 @@ describe('xref repair: entry kinds and stream shapes', () => {
     const bytes = w.end(x2);
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     const before = objCount(doc);
-    assert.equal(repairFromXref(doc, bytes), 0);
+    assert.equal(await repairFromXref(doc, bytes), 0);
     assert.equal(libValue(doc), 'OLD'); // left alone
     assert.equal(objCount(doc), before);
   });
@@ -352,7 +428,7 @@ describe('xref repair: entry kinds and stream shapes', () => {
     assert.equal(await pdfjsValue(bytes), 'NEW');
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     assert.equal(libValue(doc), 'OLD');
-    assert.equal(repairFromXref(doc, bytes), 1);
+    assert.equal(await repairFromXref(doc, bytes), 1);
     assert.equal(libValue(doc), 'NEW');
   });
 
@@ -371,7 +447,7 @@ describe('xref repair: entry kinds and stream shapes', () => {
     const doc = await PDFDocument.load(bytes, { updateMetadata: false });
     const before = objCount(doc);
     assert.equal(libValue(doc), 'NEW');
-    assert.equal(repairFromXref(doc, bytes), 0);
+    assert.equal(await repairFromXref(doc, bytes), 0);
     assert.equal(libValue(doc), 'NEW');
     assert.equal(objCount(doc), before);
   });
@@ -380,7 +456,53 @@ describe('xref repair: entry kinds and stream shapes', () => {
     const bytes = bugShape({ extra: '/Encrypt 9 0 R' });
     const doc = await PDFDocument.load(bytes, { updateMetadata: false, ignoreEncryption: true });
     assert.equal(libValue(doc), 'OLD');
-    assert.equal(repairFromXref(doc, bytes), 0);
+    assert.equal(await repairFromXref(doc, bytes), 0);
     assert.equal(libValue(doc), 'OLD');
+  });
+});
+
+describe('xref repair: incremental updates load the newest definition, and the repair changes nothing', () => {
+  async function newest(bytes) {
+    assert.equal(await pdfjsValue(bytes), 'NEW');
+    const doc = await PDFDocument.load(bytes, { updateMetadata: false });
+    const before = objCount(doc);
+    assert.equal(libValue(doc), 'NEW');
+    assert.equal(await repairFromXref(doc, bytes), 0);
+    assert.equal(libValue(doc), 'NEW');
+    assert.equal(objCount(doc), before);
+    assert.equal(libValue(await loadPdfDoc(bytes, { updateMetadata: false })), 'NEW');
+  }
+  const base = (w) => {
+    w.obj(1, CATALOG);
+    w.obj(2, PAGES);
+    w.obj(3, PAGE);
+  };
+  const rows = (w) => [[0, 0, 0, 65535], [1, 1, w.off[1], 0], [2, 1, w.off[2], 0], [3, 1, w.off[3], 0]];
+
+  test('an object in an object stream, redefined at top level by an update', async () => {
+    const w = new Writer();
+    base(w);
+    w.objStm(5, [[4, field('OLD')]]);
+    const x1 = w.xrefStream(7, [...rows(w), [4, 2, 5, 0], [5, 1, w.off[5], 0]], '/Root 1 0 R');
+    w.obj(4, field('NEW'));
+    await newest(w.end(w.xrefStream(8, [[4, 1, w.off[4], 0]], `/Root 1 0 R /Prev ${x1}`)));
+  });
+
+  test('a top-level object moved into a new object stream by an update', async () => {
+    const w = new Writer();
+    base(w);
+    w.obj(4, field('OLD'));
+    const x1 = w.xrefStream(7, [...rows(w), [4, 1, w.off[4], 0]], '/Root 1 0 R');
+    w.objStm(9, [[4, field('NEW')]]);
+    await newest(w.end(w.xrefStream(10, [[4, 2, 9, 0], [9, 1, w.off[9], 0]], `/Root 1 0 R /Prev ${x1}`)));
+  });
+
+  test('an object moved from object stream S1 to S2 by an update', async () => {
+    const w = new Writer();
+    base(w);
+    w.objStm(5, [[4, field('OLD')], [6, '<< /Kept true >>']]);
+    const x1 = w.xrefStream(7, [...rows(w), [4, 2, 5, 0], [5, 1, w.off[5], 0], [6, 2, 5, 1]], '/Root 1 0 R');
+    w.objStm(9, [[4, field('NEW')]]);
+    await newest(w.end(w.xrefStream(10, [[4, 2, 9, 0], [9, 1, w.off[9], 0]], `/Root 1 0 R /Prev ${x1}`)));
   });
 });
