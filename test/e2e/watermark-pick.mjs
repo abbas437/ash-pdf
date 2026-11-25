@@ -3,13 +3,15 @@
 // playwright-core, served over HTTP with the browser shim (same pattern as watermark-remove.mjs; run
 // `node scripts/vendor.js` first). The fixture is a 3-page PDF with an unmarked "SAMPLE WM" drawn as two
 // text objects in the same place on every page, a second copy elsewhere on page 2 and different body text
-// on each page. Prints "WATERMARK PICK OK".
+// on each page; pages 1–3 also have a red stamp frame (a stroked rectangle), and page 4 has instead a
+// rectangle with the same segment count, a little narrower, at nearly the same place (a title-block cell),
+// which must survive picking the frame. Prints "WATERMARK PICK OK".
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument, StandardFonts } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm' };
@@ -28,21 +30,24 @@ const eq = (a, b, msg) => check(JSON.stringify(a) === JSON.stringify(b), `${msg}
 
 // Fixture: "SAMPLE" and "WM" as two text objects at (X, Y) on every page; page 2 also at (X, Y_OFF).
 const SIZE = 48, X = 150, Y = 600, Y_OFF = 480;
-const BODY = ['Body text one', 'Body text two', 'Body text three'];
+const BODY = ['Body text one', 'Body text two', 'Body text three', 'Body text four'];
+// Stamp frame on pages 1–3; on page 4 a cell 10 pt narrower, 2 pt to the right (within the old 2% rule).
+const FRAME = { x: 420, y: 420, width: 150, height: 50 }, CELL = { x: 422, y: 420, width: 140, height: 50 };
 const doc = await PDFDocument.create();
 const font = await doc.embedFont(StandardFonts.Helvetica);
 const W_SAMPLE = font.widthOfTextAtSize('SAMPLE', SIZE), X_WM = X + font.widthOfTextAtSize('SAMPLE ', SIZE);
 const drawWm = (pg, y) => { pg.drawText('SAMPLE', { x: X, y, size: SIZE, font }); pg.drawText('WM', { x: X_WM, y, size: SIZE, font }); };
-for (let i = 0; i < 3; i++) {
+for (let i = 0; i < 4; i++) {
   const pg = doc.addPage([612, 792]);
   pg.drawText(BODY[i], { x: 72, y: 100, size: 14, font });
-  drawWm(pg, Y);
+  if (i < 3) drawWm(pg, Y);
   if (i === 1) drawWm(pg, Y_OFF);
+  pg.drawRectangle({ ...(i < 3 ? FRAME : CELL), borderWidth: 2, borderColor: rgb(1, 0, 0) });
 }
 const fixture = Buffer.from(await doc.save());
 // Click targets (PDF points): the middle of each part, and empty space.
 const SAMPLE_AT = [X + W_SAMPLE / 2, Y + SIZE * 0.35], WM_AT = [X_WM + 20, Y + SIZE * 0.35], EMPTY_AT = [500, 400];
-const SAMPLE_OFF_AT = [X + W_SAMPLE / 2, Y_OFF + SIZE * 0.35];
+const SAMPLE_OFF_AT = [X + W_SAMPLE / 2, Y_OFF + SIZE * 0.35], FRAME_AT = [FRAME.x + 20, FRAME.y + 25];
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
 let step = 'start';
@@ -60,6 +65,10 @@ try {
   const sampleAt = (pages, i, y) => pages[i].some((x) => x.str.includes('SAMPLE') && Math.abs(x.y - y) < 2);
   const bodyKept = (pages) => BODY.every((b, i) => pages[i].some((x) => x.str.includes(b)));
   const bytes = () => ev('return Array.from(tab.bytes);');
+  // Bounds of the path objects on each page (PDFium), rounded.
+  const paths = () => ev(`const { pdfium } = await import('/renderer/pdfium/client.js'), id = await pdfium.open(tab.bytes), out = [];
+    try { for (let i = 0; i < tab.numPages; i++) out.push((await pdfium.pageObjects(id, i)).objects.filter((o) => o.type === 'path').map((o) => o.bbox.map(Math.round))); }
+    finally { await pdfium.close(id); } return out;`);
   const waitUndo = (n) => page.waitForFunction((k) => { const a = window.ashStudio, t = a.state.tabs.find((x) => x.id === a.state.activeId); return (t.bytesUndo?.length ?? 0) === k && t.pdfDoc; }, n, { timeout: 10_000 });
   const menu = async (id) => {
     await page.click('.menu-btn:text-is("Document")');
@@ -94,7 +103,7 @@ try {
   step = 'boot';
   await page.goto(`${base}/renderer/index.html`, { waitUntil: 'load' });
   await page.waitForFunction(() => document.body.dataset.ready === 'true', null, { timeout: 10_000 });
-  await open('sample.pdf', fixture, 3);
+  await open('sample.pdf', fixture, 4);
   let t = await items();
   check([0, 1, 2].every((i) => sampleAt(t, i, Y)) && sampleAt(t, 1, Y_OFF) && bodyKept(t), `fixture: ${JSON.stringify(t)}`);
 
@@ -109,7 +118,8 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForSelector('.wm-pick-dialog');
   check(!(await page.$('.wm-pick-hint')) && !(await outlines()), 'picking ended: hint and outlines gone');
-  eq(await page.textContent('.wm-pick-dialog .wm-pick-found'), 'Found on 3 of 3 pages (6 objects)', 'summary');
+  eq(await page.textContent('.wm-pick-dialog .wm-pick-found'), 'Found on 3 of 4 pages (6 objects)', 'summary');
+  eq(await page.textContent('.wm-pick-dialog .wm-pick-pages'), 'Pages 1–3', 'matched pages listed');
   check((await page.textContent('.wm-pick-dialog')).includes('Only remove watermarks you are entitled to remove'), 'entitlement line shown');
   check(!(await page.$('.wm-pick-dialog .wm-signed')), 'no signature warning on an unsigned document');
 
@@ -139,9 +149,41 @@ try {
   await page.keyboard.press('Enter');
   await page.waitForSelector('.wm-pick-dialog');
   eq(await page.textContent('.wm-pick-dialog .wm-pick-found'), 'Found only on this page (1 object)', 'off-position copy found only on page 2');
+  eq(await page.textContent('.wm-pick-dialog .wm-pick-pages'), 'Page 2', 'the one page listed');
   await page.keyboard.press('Escape');
   await page.waitForSelector('.wm-pick-dialog', { state: 'detached', timeout: 5000 });
   check(JSON.stringify(await bytes()) === JSON.stringify(before), 'Esc in the confirm dialog: document unchanged');
+
+  step = 'pick the stamp frame: the title-block cell on page 4 is not a match';
+  const pathsBefore = await paths();
+  eq(pathsBefore.map((p) => p.length), [1, 1, 1, 1], 'one rectangle per page');
+  await showPage(0);
+  await startPick();
+  await click(0, FRAME_AT);
+  await page.waitForFunction(() => document.querySelectorAll('.wm-pick-outline').length === 1, null, { timeout: 5000 });
+  await page.keyboard.press('Enter');
+  await page.waitForSelector('.wm-pick-dialog');
+  eq(await page.textContent('.wm-pick-dialog .wm-pick-found'), 'Found on 3 of 4 pages (3 objects)', 'frame summary');
+  eq(await page.textContent('.wm-pick-dialog .wm-pick-pages'), 'Pages 1–3', 'frame pages listed: not page 4');
+  step = 'show next match';
+  const shownPage = () => ev('return tab.currentPage;');
+  for (const [k, want] of [[0, 0], [1, 1], [2, 2], [3, 0]]) {
+    await page.click('.wm-pick-dialog .wm-pick-next');
+    await page.waitForFunction((i) => { const a = window.ashStudio; return a.state.tabs.find((x) => x.id === a.state.activeId).currentPage === i; }, want, { timeout: 5000 });
+    eq(await page.textContent('.wm-pick-dialog .wm-pick-at'), `Page ${want + 1} (${want + 1} of 3)`, `next match ${k + 1}`);
+    eq(await outlines(), 1, `one outline on page ${want + 1}`);
+    eq(await ev('return v.getPageEl(tab, arg).querySelectorAll(".wm-pick-outline").length;', want), 1, `outline drawn on page ${want + 1}`);
+    eq(await shownPage(), want, 'shown page');
+  }
+  await page.click('.wm-pick-dialog [data-value="ok"]');
+  await page.waitForSelector('.wm-pick-dialog', { state: 'detached', timeout: 10_000 });
+  await waitUndo(1);
+  check(!(await outlines()), 'dialog closed: match outlines gone');
+  const pathsAfter = await paths();
+  eq(pathsAfter, [[], [], [], pathsBefore[3]], 'frames removed from pages 1–3; the cell on page 4 survives');
+  t = await items();
+  check([0, 1, 2].every((i) => sampleAt(t, i, Y)) && bodyKept(t), `text kept: ${JSON.stringify(t)}`);
+  await ev('await pt.undo(tab);'); await waitUndo(0);
 
   step = 'empty space clears; Esc while picking changes nothing';
   await showPage(0);

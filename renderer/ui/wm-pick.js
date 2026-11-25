@@ -3,13 +3,15 @@
 // (Shift+click adds parts), Enter finds the same objects in the same place on every page
 // (wm-pick-lib.js findMatches) and, after a confirm, removes them as one undo step (pdfium wmpick.js).
 // Esc cancels at any point and leaves the document unchanged. Picking follows measure-scale.js pickLine.
+// Text with no Unicode mapping and a form covering most of the page can't be picked (wm-pick-lib refusal).
+// The confirm dialog lists the matched pages, and Show next match outlines the matches page by page.
 import { bus } from '../bus.js';
 import { h } from './dom.js';
 import { showDialog, toast } from './dialogs.js';
 import { viewer } from './viewer.js';
 import { runOp } from './pagetools.js';
 import { pdfium } from '../pdfium/client.js';
-import { findMatches, objectAt, summary } from './wm-pick-lib.js';
+import { findMatches, objectAt, pageList, refusal, summary } from './wm-pick-lib.js';
 import { ENTITLED } from './pagemarks.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -31,12 +33,8 @@ async function listPage(bytes, i) {
   try { return await pdfium.pageObjects(id, i); } finally { await pdfium.close(id).catch(() => {}); }
 }
 
-/**
- * Click-to-pick on page `pageIndex` of `tab`. Resolves the picked objects (as listed by pageObjects),
- * or null on Esc, a click outside the pages or a tab switch.
- */
-function pickObjects(tab, pageIndex, objects) {
-  const scrollEl = viewer.getScrollEl(tab);
+/** A dashed-outline layer over page `pageIndex` of `tab`: { paint(objects), remove() }. */
+function outlineLayer(tab, pageIndex) {
   const pe = viewer.getPageEl(tab, pageIndex);
   const vp1 = tab.pages[pageIndex].getViewport({ scale: 1 });
   const { width, height } = viewer.pageSize(tab, pageIndex);
@@ -46,21 +44,36 @@ function pickObjects(tab, pageIndex, objects) {
   svg.setAttribute('preserveAspectRatio', 'none');
   const ref = viewer.getOverlaySvg(tab, pageIndex);
   if (ref) { svg.style.width = ref.style.width; svg.style.height = ref.style.height; if (ref.dataset.viewRotation) svg.dataset.viewRotation = ref.dataset.viewRotation; }
+  else { svg.style.width = '100%'; svg.style.height = '100%'; }
   pe.append(svg);
-  const hint = h('div.vx-snap-hint.wm-pick-hint', { role: 'status' }, HINT);
-  document.body.append(hint);
-  scrollEl.classList.add('vx-snapping');
-  let picked = [];
-  const paint = () => {
-    svg.replaceChildren(...picked.map((o) => {
+  return {
+    paint: (objects) => svg.replaceChildren(...objects.map((o) => {
       const [l, b, r, t] = o.bbox, q = o.quad ?? [l, b, r, b, r, t, l, t];
       const pts = [0, 2, 4, 6].map((k) => vp1.convertToViewportPoint(q[k], q[k + 1]).map((v) => v.toFixed(2)).join(','));
       const poly = document.createElementNS(SVG_NS, 'polygon');
       poly.setAttribute('class', 'wm-pick-outline');
       poly.setAttribute('points', pts.join(' '));
       return poly;
-    }));
-    hint.textContent = picked.length ? `${plural(picked.length, 'object')} picked. ${HINT}` : HINT;
+    })),
+    remove: () => svg.remove(),
+  };
+}
+
+/**
+ * Click-to-pick on page `pageIndex` of `tab` ({ width, height, objects } as listed by pageObjects). Resolves
+ * the picked objects, or null on Esc, a click outside the pages or a tab switch.
+ */
+function pickObjects(tab, pageIndex, { width, height, objects }) {
+  const scrollEl = viewer.getScrollEl(tab);
+  const pe = viewer.getPageEl(tab, pageIndex);
+  const layer = outlineLayer(tab, pageIndex);
+  const hint = h('div.vx-snap-hint.wm-pick-hint', { role: 'status' }, HINT);
+  document.body.append(hint);
+  scrollEl.classList.add('vx-snapping');
+  let picked = [];
+  const paint = (why) => {
+    layer.paint(picked);
+    hint.textContent = why ? `${why}. ${HINT}` : picked.length ? `${plural(picked.length, 'object')} picked. ${HINT}` : HINT;
   };
   return new Promise((resolve) => {
     const stop = (e) => { e.preventDefault(); e.stopPropagation(); };
@@ -74,6 +87,8 @@ function pickObjects(tab, pageIndex, objects) {
         const [x, y] = viewer.getViewport(tab, pageIndex).convertToPdfPoint(e.clientX - r.left, e.clientY - r.top);
         hit = objectAt(objects, x, y);
       }
+      const why = hit && refusal(hit, { width, height });
+      if (why) { paint(why); return; }                              // refused: the choice stays as it was
       if (!hit) picked = [];                                       // empty space (or another page) clears
       else if (!e.shiftKey) picked = [hit];
       else if (!picked.includes(hit)) picked = [...picked, hit];
@@ -94,7 +109,7 @@ function pickObjects(tab, pageIndex, objects) {
       window.removeEventListener('pointerup', onUp, opts);
       window.removeEventListener('keydown', onKey, opts);
       offTab();
-      svg.remove();
+      layer.remove();
       hint.remove();
       scrollEl.classList.remove('vx-snapping');
       resolve(result);
@@ -106,20 +121,36 @@ function pickObjects(tab, pageIndex, objects) {
 export async function pickWatermark(tab) {
   if (!tab || tab.readOnly) return false;
   const pageIndex = tab.currentPage ?? 0;
-  const { objects } = await listPage(tab.bytes, pageIndex);
-  const picked = await pickObjects(tab, pageIndex, objects);
+  const picked = await pickObjects(tab, pageIndex, await listPage(tab.bytes, pageIndex));
   if (!picked) return false;
-  const found = findMatches(picked, await listPages(tab.bytes));
+  const all = await listPages(tab.bytes);
+  const found = findMatches(picked, all);
   let signed = false;
   try { signed = (await (await import('../../src/core/signatures.js')).detectSignatures(tab.bytes)).signed; } catch { /* not decisive: no extra warning */ }
+  // Show next match: each matched page in turn, its matched objects outlined (behind the dialog).
+  let shown = -1, layer = null;
+  const at = h('span.wm-pick-at', { role: 'status' });
+  const next = h('button.btn.wm-pick-next', { type: 'button' }, 'Show next match');
+  next.addEventListener('click', () => {
+    shown = (shown + 1) % found.pages.length;
+    const { pageIndex: i, ids } = found.pages[shown], objs = ids.map((id) => all[i].objects.find((o) => o.id === id));
+    viewer.scrollToPage(tab, i, { userY: Math.max(...objs.map((o) => o.bbox[3])) + 36 });
+    layer?.remove();
+    layer = outlineLayer(tab, i);
+    layer.paint(objs);
+    at.textContent = `Page ${i + 1} (${shown + 1} of ${found.pages.length})`;
+  });
   const body = h('div.pt-form.wm-form', {},
     h('p.wm-pick-found', {}, summary(found, tab.numPages ?? tab.pages.length)),
+    found.pages.length ? h('p.wm-pick-pages', {}, pageList(found.pages.map((p) => p.pageIndex))) : null,
+    found.pages.length ? h('p.wm-pick-show', {}, next, ' ', at) : null,
     h('p.pt-hint.wm-note', {}, ENTITLED),
     signed ? h('p.rd-warn.wm-signed', {}, 'Signatures in this document will become invalid.') : null);
   const v = await showDialog({
     title: 'Remove watermark', body, className: 'pt-dialog wm-pick-dialog', initialFocus: '.btn.primary',
     buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Remove', value: 'ok', primary: true }],
   });
+  layer?.remove();
   if (v !== 'ok') return false;
   let removed = 0;
   const ok = await runOp(tab, 'Remove watermark', async (bytes, n) => {
