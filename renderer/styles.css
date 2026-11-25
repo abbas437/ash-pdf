@@ -519,6 +519,7 @@ body.callout-tool .viewer-host .page { cursor: crosshair; }
 .pm-preview { display: flex; flex-direction: column; align-items: center; gap: 6px; width: 312px; flex: none; }
 .pm-canvas-wrap { display: grid; place-items: center; width: 312px; height: 392px; background: var(--viewer-bg); border: 1px solid var(--line); border-radius: 6px; }
 .pm-canvas { max-width: 300px; max-height: 380px; background: #fff; box-shadow: var(--page-shadow); }
+.wm-form { min-width: min(420px, 85vw); }
 
 /* ---- layers tab and print dialog (ui/viewextras.js) ---- */
 .vx-layer-actions { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--line); }

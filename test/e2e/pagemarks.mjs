@@ -128,6 +128,8 @@ try {
 
   step = 'remove watermark';
   await menu('marks-remove-watermark');
+  await page.waitForSelector('.wm-dialog');
+  await page.click('.wm-dialog .dialog-buttons .btn.primary');
   await waitUndo(4);
   t = await texts();
   check(t.every((s) => !s.includes('DRAFT COPY')) && t[1].includes('Page 2 of 3'), `after removing the watermark: ${JSON.stringify(t)}`);
