@@ -6,6 +6,7 @@ import { encodeError, encodeResult } from './protocol.js';
 import { redactDocument } from './redact.js';
 import { pageImages, transformImage, deleteImage, replaceImage } from './imgedit.js';
 import { editLine, textLines } from './textedit.js';
+import { pageObjects, removeObjects } from './wmpick.js';
 
 const OBJ_TEXT = 1, FPDF_INCREMENTAL = 1;
 let m = null;
@@ -112,6 +113,13 @@ const methods = {
     else if (op.remove) deleteImage(m, doc, pageIndex, id);
     else if (op.replace) replaceImage(m, doc, pageIndex, id, op.replace);
     else throw new Error('pdfium: editImage needs transform, remove or replace');
+    return methods.save(docId, { incremental: false });
+  },
+  /** Top-level page objects with their descriptions for picking a repeated mark (wmpick.js). */
+  pageObjects(docId, pageIndex) { return pageObjects(m, getDoc(docId).doc, pageIndex); },
+  /** Remove page objects (wmpick.js), then a FULL save: returns the new bytes. list: [{ pageIndex, ids }]. */
+  removeObjects(docId, list) {
+    removeObjects(m, getDoc(docId).doc, list);
     return methods.save(docId, { incremental: false });
   },
   /** Visual lines of original text on a page (textedit.js). */
