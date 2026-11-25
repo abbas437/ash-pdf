@@ -50,7 +50,18 @@ To remove a watermark, choose **Document ▸ Remove watermark…**. PDF Studio l
 - **Watermark from another program**: one added by Acrobat, Word or another program that marks it as a watermark, with the number of pages.
 - **Watermark annotations**: watermarks stored as annotations, with how many there are.
 
-Untick any you want to keep and choose **Remove**. Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks. A watermark that is part of a scanned image, or drawn as ordinary page content, isn't found. If the document is signed, removing a watermark changes the page content, so the signatures become invalid.
+Untick any you want to keep and choose **Remove**. Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks. A watermark that is part of a scanned image isn't found. One drawn as ordinary page content isn't found either, but you can pick it on the page (below). If the document is signed, removing a watermark changes the page content, so the signatures become invalid.
+
+### Watermarks drawn as ordinary content
+
+Some programs draw a watermark as ordinary text, an image or shapes, without marking it as a watermark. To remove one, choose **Pick it on the page…** in the **Remove watermark** dialog (it is also offered when no marked watermark is found):
+
+1. Go to a page that shows the watermark.
+2. Click the watermark. The part you clicked is outlined. If the watermark is made of several parts (for example two words), Shift+click each other part to add it. Clicking empty space clears your choice.
+3. Press Enter. PDF Studio looks for the same objects in the same place on every page and tells you how many pages it found them on, or that it found them only on this page.
+4. Choose **Remove**, or **Cancel** to keep them.
+
+Only objects that repeat in the same place are removed: the same text, image or shape elsewhere on a page, and the rest of the page content, are kept. Press Esc at any point to stop without changing the document. Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks.
 
 Removing leaves your other content untouched. Encrypted (read-only) documents cannot be marked.
 

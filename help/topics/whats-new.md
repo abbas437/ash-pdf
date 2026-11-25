@@ -12,7 +12,7 @@ The most recent additions, newest first. Versions up to 0.2.10 are tagged in the
 
 ## Version 0.2.25
 
-- **Remove watermarks made by other programs (Acrobat, Word, …).** **Document ▸ Remove watermark…** lists the PDF Studio watermark, watermarks from other programs and watermark annotations it finds, and removes the ones you tick in one step you can undo. See [Add a watermark or background](#topic:watermark-background).
+- **Remove watermarks made by other programs (Acrobat, Word, …).** **Document ▸ Remove watermark…** lists the PDF Studio watermark, watermarks from other programs and watermark annotations it finds, and removes the ones you tick in one step you can undo. A watermark drawn as ordinary page content can be picked on the page instead (**Pick it on the page…**): PDF Studio removes the same objects wherever they repeat in the same place. See [Add a watermark or background](#topic:watermark-background).
 
 ## Version 0.2.24
 
