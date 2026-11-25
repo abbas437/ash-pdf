@@ -75,6 +75,7 @@ try {
   eq(rows, [[true, 'PDF Studio watermark (3 pages)'], [true, 'Watermark from another program (2 pages)'], [true, 'Watermark annotations (1)']], 'kinds found, all ticked');
   check((await page.textContent('.wm-dialog')).includes("Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks."), 'entitlement line shown');
   check(!(await page.$('.wm-dialog .wm-signed')), 'no signature warning on an unsigned document');
+  eq(await page.textContent('.wm-dialog [data-value="pick"]'), 'Pick it on the page…', 'pick button offered');
 
   step = 'remove all but the annotations';
   await page.uncheck('#wm-annots');
@@ -100,11 +101,16 @@ try {
   for (const w of WATERMARKS) check(!t.includes(w), `redo removes ${w} again: ${t}`);
   for (const w of BODY) check(t.includes(w), `${w} kept after redo: ${t}`);
 
-  step = 'no watermark: toast, no dialog';
+  step = 'no watermark: small dialog with Pick and Close';
   await open('plain.pdf', plain, 1);
   await menu('marks-remove-watermark');
-  await page.waitForSelector(".toast:text-is(\"No watermark found. A watermark that is part of a scanned image or drawn as ordinary content can't be found.\")", { timeout: 5000 });
-  check(!(await page.$('.wm-dialog')), 'no dialog when nothing is found');
+  await page.waitForSelector('.wm-none-dialog', { timeout: 5000 });
+  check(!(await page.$('.wm-dialog')), 'no kinds dialog when nothing is found');
+  eq(await page.textContent('.wm-none-dialog .wm-none'), 'No marked watermark found.', 'nothing-found text');
+  eq(await page.$$eval('.wm-none-dialog .dialog-buttons .btn', (els) => els.map((e) => e.textContent)), ['Pick it on the page…', 'Close'], 'nothing-found buttons');
+  await page.click('.wm-none-dialog [data-value="cancel"]');
+  await page.waitForSelector('.wm-none-dialog', { state: 'detached', timeout: 5000 });
+  check(!(await page.$('.wm-pick-hint')), 'Close does not start picking');
   check((await text()).includes('Plain body'), 'plain document unchanged');
 
   if (problems.length) throw new Error(`page problems:\n${problems.join('\n')}`);

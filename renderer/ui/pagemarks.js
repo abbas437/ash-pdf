@@ -361,8 +361,11 @@ export function removeMarks(tab, kind) {
 // removed from the op's bytes as one undo step. Watermarks are never unsaved overlay objects, so the
 // removal does not need the beforeSave hooks.
 const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
-const NOT_FOUND = "No watermark found. A watermark that is part of a scanned image or drawn as ordinary content can't be found.";
-const ENTITLED = "Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks.";
+export const ENTITLED = "Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks.";
+
+const PICK = { label: 'Pick it on the page…', value: 'pick' };
+// A watermark drawn as ordinary content has no marking to find: the user picks it (ui/wm-pick.js).
+const pick = async (tab) => (await import('./wm-pick.js')).pickWatermark(tab);
 
 /** The dialog; resolves true when watermarks were removed. */
 export async function removeWatermarkDialog(tab = activeTab()) {
@@ -375,7 +378,13 @@ export async function removeWatermarkDialog(tab = activeTab()) {
     ['other', found.other, `Watermark from another program (${plural(found.other.length, 'page')})`],
     ['annots', found.annots.pages, `Watermark annotations (${found.annots.count})`],
   ].filter(([, pages]) => pages.length);
-  if (!kinds.length) { toast(NOT_FOUND, { timeout: 5000 }); return false; }
+  if (!kinds.length) {
+    const v = await showDialog({
+      title: 'Remove watermark', body: h('p.wm-none', {}, 'No marked watermark found.'), className: 'pt-dialog wm-none-dialog', initialFocus: '.btn.primary',
+      buttons: [{ ...PICK, primary: true }, { label: 'Close', value: 'cancel', cancel: true }],
+    });
+    return v === 'pick' ? pick(tab) : false;
+  }
   let signed = false;
   try { signed = (await core.detectSignatures(tab.bytes)).signed; } catch { /* not decisive: no extra warning */ }
   const boxes = new Map(kinds.map(([k]) => [k, h('input', { type: 'checkbox', id: `wm-${k}`, value: k, checked: true })]));
@@ -385,8 +394,9 @@ export async function removeWatermarkDialog(tab = activeTab()) {
     signed ? h('p.rd-warn.wm-signed', {}, 'Signatures in this document will become invalid.') : null);
   const v = await showDialog({
     title: 'Remove watermark', body: form, className: 'pt-dialog wm-dialog', initialFocus: 'input[type="checkbox"]',
-    buttons: [{ label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Remove', value: 'ok', primary: true }],
+    buttons: [PICK, { label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Remove', value: 'ok', primary: true }],
   });
+  if (v === 'pick') return pick(tab);
   if (v !== 'ok') return false;
   const chosen = Object.fromEntries(kinds.map(([k]) => [k, boxes.get(k).checked]));
   const pages = new Set(kinds.filter(([k]) => chosen[k]).flatMap(([, p]) => p));

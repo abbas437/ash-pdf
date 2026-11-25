@@ -823,3 +823,5 @@ body.reading-mode { cursor: default; }
 /* Measure snap marker (ui/measure-snap.js) */
 .measure-snap-marker { position: fixed; width: 8px; height: 8px; box-sizing: border-box; border: 1.5px solid var(--focus); outline: 1px solid rgba(255, 255, 255, 0.8); pointer-events: none; z-index: 50; }
 .ms-cal-line { stroke: var(--focus); stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
+/* Remove watermark > Pick it on the page… (ui/wm-pick.js) */
+.wm-pick-outline { fill: none; stroke: var(--focus); stroke-width: 1.5; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; }
