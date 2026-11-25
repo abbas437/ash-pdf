@@ -3,7 +3,7 @@ id: watermark-background
 title: Add a watermark or background
 section: Document marks
 order: 20
-keywords: watermark, background, confidential, draft, stamp, opacity, rotation, tile, image, colour
+keywords: watermark, remove watermark, acrobat watermark, background, confidential, draft, stamp, opacity, rotation, tile, image, colour
 ---
 
 # Add a watermark or background
@@ -42,6 +42,16 @@ A watermark is text or an image placed on each page, such as CONFIDENTIAL. A bac
 
 Marks are stored as separate layers in the page content, not as objects you can select, so you cannot edit one in place. Open the dialog again and Replace it.
 
-To remove one, choose **Document ▸ Remove watermark** or **Document ▸ Remove background**. Each is enabled only when the document contains that mark. Removing leaves your other content untouched. Encrypted (read-only) documents cannot be marked.
+To remove a background, choose **Document ▸ Remove background**. It is enabled only when the document contains a background added with PDF Studio.
+
+To remove a watermark, choose **Document ▸ Remove watermark…**. PDF Studio looks for three kinds and lists what it finds, each with a tick box (all ticked at first):
+
+- **PDF Studio watermark**: one added with **Watermark…**, with the number of pages that have it.
+- **Watermark from another program**: one added by Acrobat, Word or another program that marks it as a watermark, with the number of pages.
+- **Watermark annotations**: watermarks stored as annotations, with how many there are.
+
+Untick any you want to keep and choose **Remove**. Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks. A watermark that is part of a scanned image, or drawn as ordinary page content, isn't found. If the document is signed, removing a watermark changes the page content, so the signatures become invalid.
+
+Removing leaves your other content untouched. Encrypted (read-only) documents cannot be marked.
 
 Every apply and remove can be reversed in one step ([Undo and redo](#topic:undo-redo)). Remember to save ([Save and print](#topic:save-and-print)).

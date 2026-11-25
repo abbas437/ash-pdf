@@ -10,6 +10,10 @@ keywords: whats new, release notes, changes, version, updates, 0.2.15, 0.2.14, 0
 
 The most recent additions, newest first. Versions up to 0.2.10 are tagged in the project history. Changes after that are grouped by release as far as the history shows.
 
+## Version 0.2.25
+
+- **Remove watermarks made by other programs (Acrobat, Word, …).** **Document ▸ Remove watermark…** lists the PDF Studio watermark, watermarks from other programs and watermark annotations it finds, and removes the ones you tick in one step you can undo. See [Add a watermark or background](#topic:watermark-background).
+
 ## Version 0.2.24
 
 - **Forms and markups always show a file's current values.** Some PDFs that were filled in and saved many times keep old copies of their fields inside the file. Other viewers show the current values, but PDF Studio could show, and on saving write back, an old copy. It now follows the file's own index of current values, as other PDF programs do.
