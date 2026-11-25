@@ -3,6 +3,7 @@ export * from './pdfOps.js';
 export { flattenObjects, measureText, layoutRich, sanitizeText, standardFontName, textInset } from './annotate.js';
 export { listFields, fillFields, flattenForm } from './forms.js';
 export { pageGeometry, pdfToVisible, visibleUpMatrix } from './internal.js';
+export { findWatermarks, removeWatermarks } from './watermarks.js';
 export { addHeaderFooter, addWatermark, addBackground, addBates, removeMarks, listMarks, formatNumber, formatDate, expandTokens, MARK_KINDS } from './pagemarks.js';
 export { detectSignatures, mayBeSigned } from './signatures.js';
 export { appendIncrementalUpdate, docMdpPermission } from './incremental.js';

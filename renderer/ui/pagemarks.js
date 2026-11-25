@@ -354,6 +354,67 @@ export function removeMarks(tab, kind) {
   return runOp(tab, `Remove ${KIND_LABEL[kind]}`, async (bytes, n) => ({ bytes: await (await marks()).removeMarks(bytes, kind), map: identity(n) }));
 }
 
+// ---------------------------------------------------------------- Remove watermark…
+// PDF Studio's own watermark, watermarks from other programs (/Artifact /Subtype /Watermark marked
+// content, Acrobat watermark forms) and /Watermark annotations (core/watermarks.js). Found on the bytes
+// as Save would write them (currentBytes, before the op is queued: inside runOp it would deadlock);
+// removed from the op's bytes as one undo step. Watermarks are never unsaved overlay objects, so the
+// removal does not need the beforeSave hooks.
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+export const ENTITLED = "Only remove watermarks you are entitled to remove, such as your own or your organisation's DRAFT or FOR REVIEW marks.";
+
+const PICK = { label: 'Pick it on the page…', value: 'pick' };
+// A watermark drawn as ordinary content has no marking to find: the user picks it (ui/wm-pick.js).
+const pick = async (tab) => (await import('./wm-pick.js')).pickWatermark(tab);
+
+/** The dialog; resolves true when watermarks were removed. */
+export async function removeWatermarkDialog(tab = activeTab()) {
+  if (!editable(tab)) { if (tab) toast(RO_TIP); return false; }
+  const core = await import('../../src/core/index.js');
+  const { currentBytes } = await import('./office.js');
+  const bytes = await currentBytes(tab);
+  let found;
+  try { found = await core.findWatermarks(bytes); } catch { toast('Could not check this document for watermarks'); return false; }
+  const skipped = found.skipped ? h('p.pt-hint.wm-skipped', {}, `${plural(found.skipped, 'page')} could not be checked.`) : null;
+  const kinds = [
+    ['ash', found.ash, `PDF Studio watermark (${plural(found.ash.length, 'page')})`],
+    ['other', found.other, `Watermark from another program (${plural(found.other.length, 'page')})`],
+    ['annots', found.annots.pages, `Watermark annotations (${found.annots.count})`],
+  ].filter(([, pages]) => pages.length);
+  if (!kinds.length) {
+    const v = await showDialog({
+      title: 'Remove watermark', body: skipped ? h('div', {}, h('p.wm-none', {}, 'No marked watermark found.'), skipped) : h('p.wm-none', {}, 'No marked watermark found.'), className: 'pt-dialog wm-none-dialog', initialFocus: '.btn.primary',
+      buttons: [{ ...PICK, primary: true }, { label: 'Close', value: 'cancel', cancel: true }],
+    });
+    return v === 'pick' ? pick(tab) : false;
+  }
+  let signed = false;
+  try { signed = (await core.detectSignatures(tab.bytes)).signed; } catch { /* not decisive: no extra warning */ }
+  const boxes = new Map(kinds.map(([k]) => [k, h('input', { type: 'checkbox', id: `wm-${k}`, value: k, checked: true })]));
+  const form = h('div.pt-form.wm-form', {},
+    kinds.map(([k, , label]) => h('div.pm-replace.wm-kind', {}, boxes.get(k), h('label', { for: `wm-${k}` }, label))),
+    h('p.pt-hint.wm-note', {}, ENTITLED), skipped,
+    signed ? h('p.rd-warn.wm-signed', {}, 'Signatures in this document will become invalid.') : null);
+  const v = await showDialog({
+    title: 'Remove watermark', body: form, className: 'pt-dialog wm-dialog', initialFocus: 'input[type="checkbox"]',
+    buttons: [PICK, { label: 'Cancel', value: 'cancel', cancel: true }, { label: 'Remove', value: 'ok', primary: true }],
+  });
+  if (v === 'pick') return pick(tab);
+  if (v !== 'ok') return false;
+  const chosen = Object.fromEntries(kinds.map(([k]) => [k, boxes.get(k).checked]));
+  const pages = new Set(kinds.filter(([k]) => chosen[k]).flatMap(([, p]) => p));
+  if (!pages.size) return false;
+  const ok = await runOp(tab, 'Remove watermark', async (opBytes, n) => {
+    const out = await core.removeWatermarks(opBytes, chosen);
+    // Page content rewritten: the old bytes still hold the watermark, so the next save must rewrite the
+    // whole file (as for Apply redactions, ui/redact.js; saveTab clears it after a full save).
+    if (chosen.ash || chosen.other) tab.requiresFullSave = true;
+    return { bytes: out, map: identity(n) };
+  });
+  if (ok) toast(`Removed watermark from ${plural(pages.size, 'page')}`);
+  return ok;
+}
+
 // ---------------------------------------------------------------- init
 /** Register the Document menu. Call before the Help menu is registered so it sits left of Help. */
 export function initPageMarks({ registerMenuItem: M }) {
@@ -370,8 +431,10 @@ export function initPageMarks({ registerMenuItem: M }) {
   item({ id: 'marks-background', label: 'Background…', action: withTab(backgroundDialog) });
   item({ id: 'marks-bates', label: 'Bates Numbering…', action: withTab(batesDialog) });
   M('Document', { separator: true });
-  for (const [kind, label] of [['headerFooter', 'Remove header & footer'], ['watermark', 'Remove watermark'], ['background', 'Remove background'], ['bates', 'Remove Bates numbers']]) {
-    item({ id: `marks-remove-${kind}`, label, action: withTab((t) => removeMarks(t, kind)) }, (t) => has(t, kind));
+  for (const [kind, label] of [['headerFooter', 'Remove header & footer'], ['watermark', 'Remove watermark…'], ['background', 'Remove background'], ['bates', 'Remove Bates numbers']]) {
+    // Remove watermark… finds watermarks on click (other programs' too), so it is on for any editable document.
+    if (kind === 'watermark') item({ id: 'marks-remove-watermark', label, action: withTab(removeWatermarkDialog) });
+    else item({ id: `marks-remove-${kind}`, label, action: withTab((t) => removeMarks(t, kind)) }, (t) => has(t, kind));
   }
-  return { headerFooterDialog, pageNumbersDialog, watermarkDialog, backgroundDialog, batesDialog, removeMarks, refreshMarks };
+  return { headerFooterDialog, pageNumbersDialog, watermarkDialog, backgroundDialog, batesDialog, removeMarks, removeWatermarkDialog, refreshMarks };
 }
