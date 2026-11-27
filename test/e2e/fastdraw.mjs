@@ -27,9 +27,9 @@
 //      editing call (pdfium.pageCount) made meanwhile waits for at most the render in flight; the client queue posts
 //      fewer renders than were asked for (pdfium.stats().renders), and once the page is drawn no request for a page
 //      scrolled past still waits in it.
-//  6f. Fast scroll stopping mid-document (pages S and S+1 visible): the renders posted after the stop follow the
-//      viewer's order (S, S+1, then the off-screen neighbours S+2 and S-1; the first may go to an idle worker before
-//      the others are asked for), and S is drawn within the 6e bound.
+//  6f. Fast scroll stopping mid-document (pages S and S+1 visible) while a render is in flight: the renders posted
+//      after it follow the viewer's order (S, S+1, then the off-screen neighbours S+2 and S-1), and S is drawn within
+//      the 6e bound.
 //  6g. A tab closed while a known-heavy page waits for its eligibility answer opens no PDFium document.
 //  7. Page 2 completes in less than half the time pdf.js alone needs for it (fast draw off, measured first in a
 //     fresh page of the same browser so the two runs share neither memory nor workers).
@@ -471,7 +471,7 @@ try {
       return performance.now() - t0;
     };
     const posts = [], postMessage = Worker.prototype.postMessage; // renders posted to the PDFium worker, in order
-    Worker.prototype.postMessage = function (msg, ...rest) { if (msg?.method === 'renderPage') posts.push(msg.args[1]); return postMessage.call(this, msg, ...rest); };
+    Worker.prototype.postMessage = function (msg, ...rest) { if (msg?.method === 'renderPage') posts.push(msg.args.slice(0, 2)); return postMessage.call(this, msg, ...rest); };
     await app.pdfium.selfTest(); // worker started and warm
     const other = await app.pdfium.open(new Uint8Array(await (await fetch('/__light.pdf')).arrayBuffer()));
     await app.openBytes({ name: 'many.pdf', bytes: new Uint8Array(await (await fetch('/__many.pdf')).arrayBuffer()) });
@@ -488,20 +488,23 @@ try {
     const stop = await drawn(tab, K - 1, t0);
     const s1 = (await app.pdfium.stats()).renders;
     await app.pdfium.close(other);
-    // 6f: from the last page back up to page S at the same pace; pages S and S+1 visible when it stops
-    const S = 5;
+    // 6f: a render in flight (a blocker on another document, posted ahead of everything), meanwhile the view is
+    // re-rendered at the last page and scrolled back up to page S at the same pace; pages S and S+1 visible at the stop
+    const S = 5, blocker = await app.pdfium.open(new Uint8Array(await (await fetch('/__many.pdf')).arrayBuffer()));
+    const blockerPosted = posts.length;
+    const blocked = app.pdfium.renderPage(blocker, 0, { width: 1600, height: 1131, matrix: [1.344, 0, 0, -1.344, 0, 1131] }, { priority: () => [Infinity, 0] });
+    while (!posts.slice(blockerPosted).some(([, p]) => p === 0)) await wait(10);
+    const from = posts.length;
     app.viewer.rerender(tab);
     for (let i = K - 2; i >= S; i--) { app.viewer.scrollToPage(tab, i); await wait(100); }
-    await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame); // the stop's update() has run
     t0 = performance.now();
-    const from = posts.length, mid = await drawn(tab, S, t0);
+    const mid = await drawn(tab, S, t0), blockerDone = !!(await blocked);
     await drawn(tab, S - 1, t0); // the last neighbour
-    const midOrder = posts.slice(from), rank = [S, S + 1, S + 2, S - 1];
-    // the first post may reach an idle worker before the stop's other requests have arrived (they wait for pdf.js's
-    // eligibility answer); every later one is picked from the queue
-    const ranks = midOrder.slice(1).filter((p) => rank.includes(p)).map((p) => rank.indexOf(p));
+    await app.pdfium.close(blocker);
+    const midOrder = posts.slice(from).map(([, p]) => p), rank = [S, S + 1, S + 2, S - 1];
+    const ranks = midOrder.filter((p) => rank.includes(p)).map((p) => rank.indexOf(p));
     return { one: Math.round(one), stop: Math.round(stop), edit: Math.round(await edit), posted: s1.posted - s0.posted, dropped: s1.dropped - s0.dropped,
-      queued: s1.queued, mid: Math.round(mid), midOrder, midInOrder: ranks.every((r, k) => k === 0 || ranks[k - 1] < r) };
+      queued: s1.queued, mid: Math.round(mid), midOrder, blockerDone, midInOrder: midOrder.length >= 4 && ranks.every((r, k) => k === 0 || ranks[k - 1] < r) };
   }, MANY);
   await sp.close();
   check(scroll.stop < 3 * scroll.one, `fast scroll: stopped-on page drawn after ${scroll.stop} ms, one PDFium render takes ${scroll.one} ms (need < 3x) ${JSON.stringify(scroll)}`);
