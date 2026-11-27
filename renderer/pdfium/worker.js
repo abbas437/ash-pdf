@@ -7,10 +7,42 @@ import { redactDocument } from './redact.js';
 import { pageImages, transformImage, deleteImage, replaceImage } from './imgedit.js';
 import { editLine, textLines } from './textedit.js';
 import { pageObjects, removeObjects } from './wmpick.js';
+import { renderPage } from './pagerender.js';
 
-const OBJ_TEXT = 1, FPDF_INCREMENTAL = 1;
+const OBJ_TEXT = 1, OBJ_FORM = 5, FPDF_INCREMENTAL = 1;
 let m = null;
 const docs = new Map(); // docId -> { doc, ptr }
+// The one parsed page renderPage keeps (all documents together: a heavy CAD page can hold ~180 MB of the wasm
+// heap, which never shrinks), so a zoom re-render of the same page does not parse it again.
+let kept = null; // { docId, pageIndex, page } | null
+function dropKept() {
+  if (kept) m.FPDF_ClosePage(kept.page);
+  kept = null;
+}
+// PDFium has built-in substitutes for these when they are not embedded; any other non-embedded font draws
+// nothing here (the wasm build has no system fonts: CJK text vanishes), so such pages stay with pdf.js.
+const STANDARD_14 = new Set(['Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique', 'Times-Roman', 'Times-Bold',
+  'Times-Italic', 'Times-BoldItalic', 'Courier', 'Courier-Bold', 'Courier-Oblique', 'Courier-BoldOblique', 'Symbol', 'ZapfDingbats']);
+/** The BaseFont of the first text object (form XObjects included) whose font is neither embedded nor standard, or null. */
+function missingFont(page) {
+  // The raw wasm exports in the loop: a CAD page has ~1M objects, and the wrapped calls cost ~6x as much (~0.4 s).
+  const X = m.pdfium.wasmExports, fonts = new Set(); // FPDF_FONT handles already looked at
+  const visit = (count, get) => {
+    for (let i = 0; i < count; i++) {
+      const o = get(i), type = X.FPDFPageObj_GetType(o);
+      if (type === OBJ_FORM) { const r = visit(X.FPDFFormObj_CountObjects(o), (k) => X.FPDFFormObj_GetObject(o, k)); if (r) return r; continue; }
+      if (type !== OBJ_TEXT) continue;
+      const font = X.FPDFTextObj_GetFont(o);
+      if (!font || fonts.has(font)) continue;
+      fonts.add(font);
+      if (m.FPDFFont_GetIsEmbedded(font)) continue;
+      const name = readString((p, len) => m.FPDFFont_GetBaseFontName(font, p, len), (p) => m.pdfium.UTF8ToString(p));
+      if (!STANDARD_14.has(name)) return name || '(unnamed)';
+    }
+    return null;
+  };
+  return visit(X.FPDFPage_CountObjects(page), (i) => X.FPDFPage_GetObject(page, i));
+}
 let nextDoc = 1;
 const fonts = new Map(); // substitute font file -> Promise<Uint8Array>, fetched from the app's origin on first use
 const loadFont = (file) => {
@@ -70,11 +102,32 @@ const methods = {
   close(docId) {
     const d = docs.get(docId);
     if (!d) return false;
+    if (kept?.docId === docId) dropKept();
     m.FPDF_CloseDocument(d.doc);
     free(d.ptr);
     docs.delete(docId);
     return true;
   },
+  /**
+   * Draw a page for the viewer (pagerender.js): { width, height, rgba } - opaque RGBA, white background,
+   * annotations off. opts: { width, height, matrix } with matrix = PDF user space -> bitmap pixels (y down).
+   * { ineligible: 'font', font } instead when the page's text uses a font PDFium cannot draw (missingFont);
+   * the page is checked when it is parsed, so a kept page is known to be fine.
+   */
+  renderPage(docId, pageIndex, opts) {
+    const d = getDoc(docId);
+    if (kept?.docId !== docId || kept.pageIndex !== pageIndex) {
+      dropKept();
+      const page = m.FPDF_LoadPage(d.doc, pageIndex);
+      if (!page) throw new Error(`pdfium: cannot load page ${pageIndex}`);
+      const font = missingFont(page);
+      if (font) { m.FPDF_ClosePage(page); return { ineligible: 'font', font }; }
+      kept = { docId, pageIndex, page };
+    }
+    return renderPage(m, kept.page, opts);
+  },
+  /** Diagnostics for tests: open documents and pages kept parsed by renderPage. */
+  stats() { return { docs: docs.size, keptPages: kept ? 1 : 0 }; },
   pageCount(docId) { return m.FPDF_GetPageCount(getDoc(docId).doc); },
   textObjects(docId, pageIndex) {
     const page = m.FPDF_LoadPage(getDoc(docId).doc, pageIndex);

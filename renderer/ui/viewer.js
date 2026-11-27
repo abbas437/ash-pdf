@@ -15,6 +15,7 @@ import { bus } from '../bus.js';
 import { state } from '../state.js';
 import { h } from './dom.js';
 import { askPassword, showExternalLink, showError } from './dialogs.js';
+import { pdfium } from '../pdfium/client.js';
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdf.worker.min.mjs', document.baseURI).href;
 const VENDOR = new URL('./vendor/pdfjs/', document.baseURI).href;
@@ -26,6 +27,10 @@ const PAGE_PAD = 16;          // padding around the page column (px)
 const KEEP_FAR = 4;           // rendered pages kept outside the near range (LRU)
 const MAX_CANVAS_PIXELS = 16_777_216;
 const SVG_NS = 'http://www.w3.org/2000/svg';
+// Heavy pages (CAD sheets with ~1M path segments take pdf.js 20 s+): a page whose pdf.js render is not done
+// within thresholdMs is drawn by PDFium as well (renderer/pdfium, started only then) and the first to finish is
+// shown; from then on that page of that document goes straight to PDFium. Tests may switch it off (enabled).
+const FAST_DRAW = { enabled: true, thresholdMs: 1500 };
 
 let host = null;
 let resizeObs = null;
@@ -79,6 +84,8 @@ export const viewer = {
   pageToClient,
   getTextContent,
   optionalContent,
+  /** Tests: the live set of pages of the tab's document known to be heavy (drawn by PDFium straight away). */
+  fastHeavy: (tab) => fastDocs.get(tab.pdfDoc)?.heavy ?? null,
   rerender: (tab) => { for (const t of withSecondary(tab)) { for (let i = 0; i < t.numPages; i++) release(t, i); schedule(t); } },
   secondary,
   secondaryOf: (tab) => secs.get(tab) ?? null,
@@ -86,6 +93,7 @@ export const viewer = {
   swapViews,
   setShown: (tabs) => { shown.clear(); for (const t of tabs) shown.add(t); },
   refit,
+  fastDraw: FAST_DRAW,
   renderedPages: (tab) => (tab.view ? tab.view.ps.flatMap((p, i) => (p.rendered ? [i] : [])) : []),
 };
 
@@ -237,6 +245,7 @@ async function loadDocument(tab, { showFirst = false } = {}) {
     const meta = await doc.getMetadata().catch(() => null);
     const pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
     const ocConfig = await doc.getOptionalContentConfig().catch(() => null);
+    fastDocs.set(doc, { bytes: data, heavy: new Set(), ineligible: new Set(), id: null, failed: false, closed: false });
     return { doc, meta, pages, ocConfig, encrypted: needed || !!meta?.info?.EncryptFilterName, bytes, view };
   } catch (err) {
     destroyDoc(doc);
@@ -297,7 +306,7 @@ function build(tab) {
     pageEl.append(blendSvg, linkLayer, overlay);
     pagesEl.append(pageEl);
     pageEls.push(pageEl);
-    ps.push({ rendered: false, scale: 0, rotation: -1, task: null, canvas: null, textLayer: null, textLayerDiv: null, linkLayer, overlay, svg, blendSvg, lastUsed: 0 });
+    ps.push({ rendered: false, scale: 0, rotation: -1, task: null, fast: null, canvas: null, textLayer: null, textLayerDiv: null, linkLayer, overlay, svg, blendSvg, lastUsed: 0 });
   }
   if (old) {
     for (let i = 0; i < old.ps.length; i++) old.ps[i].task?.cancel();
@@ -551,6 +560,13 @@ function update(tab) {
   if (last + 1 < tab.numPages) wanted.push(last + 1);
   if (first - 1 >= 0) wanted.push(first - 1);
   const scale = cssScale(tab);
+  // A render waiting on PDFium (one worker, seconds per heavy page) for a page scrolled away or at another scale or
+  // rotation is cancelled, so its request never reaches the worker; renders not started yet are dropped likewise.
+  for (let i = 0; i < v.ps.length; i++) {
+    const ps = v.ps[i];
+    if (ps.fast && (!wanted.includes(i) || ps.fast.scale !== scale || ps.fast.rotation !== totalRotation(tab, i))) { ps.task?.cancel(); ps.task = null; ps.fast = null; }
+  }
+  for (let k = queue.length - 1; k >= 0; k--) if (queue[k].v === v && !wanted.includes(queue[k].i)) queue.splice(k, 1);
   for (const i of wanted) {
     const ps = v.ps[i];
     if (!ps.rendered || ps.scale !== scale || ps.rotation !== totalRotation(tab, i)) enqueue(tab, i);
@@ -577,14 +593,19 @@ function enqueue(tab, i) {
 }
 
 function pump() {
-  while (running < MAX_RUNNING && queue.length) {
-    const job = queue.shift();
+  for (let k = 0; k < queue.length;) {
+    const job = queue[k];
     const tab = holderOf(job.v);
-    if (job.v.destroyed || !tab || !live(tab)) continue;
-    running++;
+    if (job.v.destroyed || !tab || !live(tab)) { queue.splice(k, 1); continue; }
+    // A known-heavy page waits in the PDFium client's own queue (one render at a time): it takes no slot here, so
+    // the newest request (the page scrolled to) reaches that queue while older ones still wait in it.
+    const slot = !fastDoc(tab, job.i)?.heavy.has(job.i);
+    if (slot && running >= MAX_RUNNING) { k++; continue; }
+    queue.splice(k, 1);
+    if (slot) running++;
     renderPage(tab, job.i)
       .catch((err) => reportRenderError(tab, job.i, err))
-      .finally(() => { running--; pump(); });
+      .finally(() => { if (slot) running--; pump(); });
   }
 }
 
@@ -613,27 +634,54 @@ async function renderPage(tab, i) {
   const dpr = window.devicePixelRatio || 1;
   let out = dpr;
   if (vp.width * vp.height * out * out > MAX_CANVAS_PIXELS) out = Math.sqrt(MAX_CANVAS_PIXELS / (vp.width * vp.height));
-  const canvas = h('canvas.page-canvas', { 'aria-hidden': 'true' });
+  let canvas = h('canvas.page-canvas', { 'aria-hidden': 'true' });
   canvas.width = Math.max(1, Math.floor(vp.width * out));
   canvas.height = Math.max(1, Math.floor(vp.height * out));
-  const task = page.render({ canvas, viewport: vp, transform: out !== 1 ? [out, 0, 0, out, 0, 0] : undefined, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
-    ...optionalContent(tab) });
-  ps.task = task;
-  // First render of this page: show the canvas while pdf.js draws into it, so a heavy drawing (CAD plots with
-  // hundreds of thousands of strokes) builds up on screen instead of leaving a blank page until it is complete.
-  // A re-render (zoom, rotation) keeps the old canvas until the new one is finished, as before.
-  const progressive = !ps.canvas;
-  if (progressive) { v.pageEls[i].prepend(canvas); ps.canvas = canvas; }
+  // Heavy page (fast draw): PDFium straight away when this page is known to be heavy, else pdf.js with PDFium
+  // joining the race after FAST_DRAW.thresholdMs. engine = what drew the canvas that ends up shown.
+  const fd = fastFor(tab, i);
+  const matrix = vp.transform.map((x) => x * out); // pdf.js's own mapping: user space -> canvas pixels
+  let engine = 'pdfjs';
+  let progressive = false; // the pdf.js canvas is shown while it draws (first render of the page)
   const dropProgressive = () => { if (progressive && ps.canvas === canvas) { canvas.remove(); ps.canvas = null; } };
-  try {
-    await task.promise;
-  } catch (err) {
-    dropProgressive();
-    freeCanvas(canvas);
-    if (err?.name === 'RenderingCancelledException') return;
-    throw err;
-  } finally {
-    if (ps.task === task) ps.task = null;
+  let drawn = null;
+  // ps.fast: this render's PDFium request, pending (update() cancels it when the page is scrolled away or rescaled)
+  const fast = fd && { ctl: new AbortController(), scale, rotation: vp.rotation, key: ps };
+  const fastDone = () => { fast.ctl.abort(); if (ps.fast === fast) ps.fast = null; };
+  if (fd?.known) {
+    const job = { cancelled: false, cancel() { this.cancelled = true; fast.ctl.abort(); } };
+    ps.task = job; // release() and the queue see a running render
+    ps.fast = fast;
+    drawn = await fd.eligible.then((ok) => (ok ? fastCanvas(fd.f, i, canvas.width, canvas.height, matrix, fast) : null))
+      .catch((err) => { fastFailed(fd.f, err); return null; })
+      .finally(() => { fastDone(); if (ps.task === job) ps.task = null; });
+    if (job.cancelled) { if (drawn) freeCanvas(drawn); freeCanvas(canvas); return; }
+  }
+  if (!drawn) {
+    const task = page.render({ canvas, viewport: vp, transform: out !== 1 ? [out, 0, 0, out, 0, 0] : undefined, annotationMode: pdfjs.AnnotationMode.ENABLE_FORMS,
+      ...optionalContent(tab) });
+    ps.task = task;
+    // First render of this page: show the canvas while pdf.js draws into it, so a heavy drawing (CAD plots with
+    // hundreds of thousands of strokes) builds up on screen instead of leaving a blank page until it is complete.
+    // A re-render (zoom, rotation) keeps the old canvas until the new one is finished, as before.
+    progressive = !ps.canvas;
+    if (progressive) { v.pageEls[i].prepend(canvas); ps.canvas = canvas; }
+    try {
+      drawn = fd ? await raceFast(fd, task, i, canvas, matrix, fast, () => { ps.fast = fast; }).finally(fastDone) : (await task.promise, null);
+    } catch (err) {
+      dropProgressive();
+      freeCanvas(canvas);
+      if (err?.name === 'RenderingCancelledException') return;
+      throw err;
+    } finally {
+      if (ps.task === task) ps.task = null;
+    }
+    if (drawn && ps.canvas === canvas) { canvas.replaceWith(drawn); ps.canvas = drawn; } // PDFium won over the half-drawn canvas
+  }
+  if (drawn) {
+    if (drawn !== canvas) freeCanvas(canvas);
+    canvas = drawn;
+    engine = 'pdfium';
   }
   // Re-resolve the holder after each await: a pane focus swap moves the view to the other one.
   tab = owner.get(v.scrollEl) ?? tab;
@@ -648,6 +696,7 @@ async function renderPage(tab, i) {
   else if (ps.canvas) { ps.canvas.replaceWith(canvas); freeCanvas(ps.canvas); }
   else pageEl.prepend(canvas);
   ps.canvas = canvas;
+  pageEl.dataset.renderer = engine;
 
   // Text layer (selection, copy, search highlights).
   const textContent = await getTextContent(tab, i);
@@ -670,6 +719,87 @@ async function renderPage(tab, i) {
   ps.rotation = vp.rotation;
   pageEl.classList.add('rendered');
   bus.emit('page:rendered', { tab, pageIndex: i, container: pageEl, viewport: vp, scale });
+}
+
+// ---------------------------------------------------------------- fast draw (heavy pages, PDFium)
+// pdf.js document -> { bytes (what pdf.js opened), heavy: Set<page>, ineligible: Set<page> (PDFium lacks a font it
+// needs), id: Promise<docId>|null, failed, closed (closeFast ran: never open it again) }
+const fastDocs = new WeakMap();
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Fast-draw context for a render of page i, or null when PDFium may not draw it: known = heavy already;
+ * eligible = Promise<bool>, asked BEFORE pdf.js starts the page so its worker answers before the long parse.
+ * Not eligible: form fields, links with an appearance and other annotations pdf.js draws (PDFium renders without
+ * annotations), layer visibility changed from the document's default (PDFium cannot apply it), and text in a
+ * font PDFium does not have (the worker answers that when it parses the page: f.ineligible).
+ */
+function fastFor(tab, i) {
+  const f = fastDoc(tab, i);
+  if (!f) return null;
+  const eligible = tab.pages[i].getAnnotations({ intent: 'display' })
+    .then((annots) => annots.every((a) => (a.subtype === 'Link' && !a.hasAppearance) || a.subtype === 'Popup'), () => false);
+  return { f, known: f.heavy.has(i), eligible };
+}
+
+/** The fast-draw entry of tab's document when page i may be drawn by PDFium as far as is known before asking pdf.js (see fastFor), else null. */
+function fastDoc(tab, i) {
+  const f = fastDocs.get(tab.pdfDoc);
+  if (!FAST_DRAW.enabled || !f || f.failed || f.ineligible.has(i)) return null;
+  if (tab.ocConfig && !tab.ocConfig.hasInitialVisibility) return null;
+  return f;
+}
+
+/** pdf.js renders `task`; past the threshold PDFium joins. Resolves null (pdf.js finished first) or PDFium's canvas. */
+async function raceFast(fd, task, i, canvas, matrix, req, joined) {
+  let over = false; // pdf.js finished or was cancelled (page released, tab closed)
+  const pdfjsDone = task.promise.then(() => null).finally(() => { over = true; });
+  pdfjsDone.catch(() => {}); // a cancel below is ours
+  if (await Promise.race([pdfjsDone, delay(FAST_DRAW.thresholdMs).then(() => 'slow')]) !== 'slow') return null;
+  if (!(await fd.eligible) || fd.f.failed || over) return pdfjsDone;
+  fd.f.heavy.add(i);
+  joined();
+  // PDFium's canvas, or pdf.js's outcome when PDFium cannot draw the page
+  const fast = fastCanvas(fd.f, i, canvas.width, canvas.height, matrix, req).then((c) => c ?? pdfjsDone, (err) => { fastFailed(fd.f, err); return pdfjsDone; });
+  const dropLate = () => fast.then((c) => c && freeCanvas(c), () => {});
+  let drawn;
+  try { drawn = await Promise.race([pdfjsDone, fast]); } catch (err) { dropLate(); throw err; } // cancelled: PDFium's canvas is not wanted
+  if (drawn) task.cancel();
+  else dropLate(); // pdf.js won: drop PDFium's late result
+  return drawn;
+}
+
+/**
+ * PDFium's drawing of page i as a new canvas (opens the view bytes in PDFium once per pdf.js document), or null:
+ * the document is closed, or PDFium lacks a font the page uses (then the page is remembered as ineligible).
+ */
+async function fastCanvas(f, i, width, height, matrix, { ctl, key }) {
+  if (f.closed) return null;
+  f.id ??= pdfium.open(f.bytes);
+  const r = await pdfium.renderPage(await f.id, i, { width, height, matrix }, { signal: ctl.signal, key });
+  if (r.ineligible) { f.ineligible.add(i); f.heavy.delete(i); return null; }
+  const { rgba } = r;
+  const c = h('canvas.page-canvas', { 'aria-hidden': 'true' });
+  c.width = width;
+  c.height = height;
+  c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.length), width, height), 0, 0);
+  return c;
+}
+
+/** PDFium could not start or draw: this document stays with pdf.js. */
+function fastFailed(f, err) {
+  if (f.closed || err?.name === 'AbortError') return; // closed under a running render, or not wanted any more: nothing failed
+  console.warn('PDFium could not draw the page; pdf.js draws it', err);
+  f.failed = true;
+}
+
+/** Close the PDFium copy of a pdf.js document that is being destroyed (tab closed, bytes replaced). */
+function closeFast(doc) {
+  const f = doc && fastDocs.get(doc);
+  if (!f) return;
+  fastDocs.delete(doc);
+  f.closed = true;
+  f.id?.then((id) => pdfium.close(id)).catch(() => {});
 }
 
 // Links follow only in the Select and Hand tools; drawing tools draw over them (styles.css: body.links-off).
@@ -740,6 +870,7 @@ function release(tab, i) {
   if (!ps) return;
   ps.task?.cancel();
   ps.task = null;
+  ps.fast = null;
   if (ps.canvas) { freeCanvas(ps.canvas); ps.canvas = null; }
   ps.textLayer?.cancel?.();
   ps.textLayerDiv?.remove();
@@ -750,6 +881,7 @@ function release(tab, i) {
   ps.scale = 0;
   ps.rotation = -1;
   tab.view.pageEls[i].classList.remove('rendered');
+  delete tab.view.pageEls[i].dataset.renderer;
 }
 
 async function getTextContent(tab, i) {
@@ -862,6 +994,7 @@ async function reload(tab) {
 
 // pdf.js 6 has no PDFDocumentProxy.destroy(); the loading task owns the worker transport.
 function destroyDoc(doc) {
+  closeFast(doc);
   doc?.loadingTask?.destroy().catch((err) => console.warn('Could not release the document', err));
 }
 
