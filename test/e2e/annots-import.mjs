@@ -123,7 +123,13 @@ try {
     return n;`, b);
   // The message reads the dialog only when there is one: page.textContent would wait for it (30 s).
   const noDialog = async () => { const d = await page.$('.dialog'); check(!d, `unexpected dialog: ${d && await d.textContent()}`); };
-  const waitRendered = () => page.waitForFunction(() => { const c = document.querySelector('.page[data-page-index="0"] canvas.page-canvas'); return c && c.width > 0; }, null, { timeout: 10_000 });
+  // Page 1 finished at the current zoom: a canvas alone can be the first render's half-drawn one, which is removed
+  // when that render ends at a scale the view no longer has (a zoom set while it drew).
+  const waitRendered = () => page.waitForFunction(() => {
+    const a = window.ashStudio, t = a.state.tabs[0], ps = t?.view?.ps[0];
+    const c = document.querySelector('.page[data-page-index="0"] canvas.page-canvas');
+    return ps?.rendered && !ps.task && ps.scale === a.viewer.scale(t) && c && c.width > 0;
+  }, null, { timeout: 10_000 });
 
   step = 'open';
   await page.goto(`${base}/renderer/index.html`, { waitUntil: 'load' });
