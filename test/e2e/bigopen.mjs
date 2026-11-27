@@ -7,6 +7,8 @@
 //     annotations left in it: nothing drawn twice).
 //  4. Before the swap to the view copy the overlay holds no mirror objects (pdf.js draws the markups then), and
 //     a zoom and scroll position set before the swap are kept by it.
+//  5. A file this big does not wait for the view copy before showing page 1 (the core worker cannot make it
+//     within the wait; waiting only delayed the first page).
 // Prints "BIGOPEN OK". Run `node scripts/vendor.js` first.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -111,8 +113,9 @@ try {
     for (let i = 1; i <= tab.pdfDoc.numPages; i++) shownMarkups += (await (await tab.pdfDoc.getPage(i)).getAnnotations()).filter((a) => /^(Square|Highlight)$/.test(a.subtype)).length;
     const svgObjs = document.querySelectorAll('.page[data-page-index="0"] .overlay-svg [data-obj-id]').length;
     const after = { zoom: tab.zoom, mode: tab.zoomMode, top: tab.view.scrollEl.scrollTop, swapped: tab.pdfDoc !== raw };
-    return { firstInk: firstInk && Math.round(firstInk), reconciled: reconciled && Math.round(reconciled), stall: Math.round(stall), objects: tab.objects.length, shownMarkups, svgObjs, size: bytes.length, preSwapObjects, set, after };
+    return { waited: tab.openWaitedForView, firstInk: firstInk && Math.round(firstInk), reconciled: reconciled && Math.round(reconciled), stall: Math.round(stall), objects: tab.objects.length, shownMarkups, svgObjs, size: bytes.length, preSwapObjects, set, after };
   }, MARKUPS);
+  check(r.waited === false, `a ${(r.size / 1e6).toFixed(1)} MB file waited for the view copy before showing page 1: ${JSON.stringify(r)}`);
   check(r.firstInk != null, `page 1 never showed ink: ${JSON.stringify(r)}`);
   check(r.reconciled != null, `the reconcile never finished (${r.objects}/${MARKUPS} objects): ${JSON.stringify(r)}`);
   check(r.preSwapObjects === 0, `${r.preSwapObjects} overlay objects before the swap, while pdf.js still draws the markups (drawn twice): ${JSON.stringify(r)}`);

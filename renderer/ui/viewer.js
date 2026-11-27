@@ -172,9 +172,15 @@ function stepZoom(z, dir) {
 /** Load tab.bytes with pdf.js, asking for a password if needed. Throws {cancelled:true} on cancel. */
 // Opening shows the view copy when the core worker has it within OPEN_WAIT_MS (small files: as before);
 // otherwise tab.bytes at once (pdf.js draws its markups), swapping to the view copy when it is ready.
+// Files over OPEN_NO_WAIT_BYTES show tab.bytes at once: the core worker cannot read them within the wait,
+// so it only delayed the first page (an 81 MB manual: first ink 2.6 s -> 1.3 s).
 const OPEN_WAIT_MS = 1000;
+const OPEN_NO_WAIT_BYTES = 8 * 1024 * 1024;
 async function openDocument(tab) {
-  const quick = viewBytes && await Promise.race([viewBytes(tab), new Promise((r) => setTimeout(r, OPEN_WAIT_MS, null))]);
+  const wait = viewBytes && tab.bytes.length <= OPEN_NO_WAIT_BYTES;
+  if (viewBytes && !wait) viewBytes(tab).catch(() => {}); // start the copy now; swapToView picks up the same promise
+  const quick = wait && await Promise.race([viewBytes(tab), new Promise((r) => setTimeout(r, OPEN_WAIT_MS, null))]);
+  tab.openWaitedForView = !!wait; // diagnostics (test/e2e/bigopen.mjs)
   const loaded = await loadDocument(tab, { showFirst: !quick });
   commitDocument(tab, loaded);
   if (!quick) swapToView(tab, loaded.bytes);
