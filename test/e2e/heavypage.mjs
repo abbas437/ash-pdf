@@ -5,6 +5,8 @@
 //     while pdf.js is still drawing it (its render task still running).
 //  2. The sidebar thumbnail renders with the main view's annotation mode, so pdf.js parses the page once (one
 //     display intent state on the page) instead of twice in its single worker.
+// Fast draw (PDFium for pages pdf.js has not drawn within 1.5 s, test/e2e/fastdraw.mjs) is switched off here: this
+// 150k-segment page takes pdf.js ~3 s, so either renderer could win the race; this test is about pdf.js drawing.
 // Prints "HEAVYPAGE OK". Run `node scripts/vendor.js` first.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -51,6 +53,7 @@ try {
   page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
   await page.goto(`${base}/renderer/index.html`);
   await page.waitForFunction(() => document.body.dataset.ready === 'true');
+  await page.evaluate(() => { window.ashStudio.viewer.fastDraw.enabled = false; });
 
   step = 'open a heavy page: the canvas shows ink while pdf.js is still drawing';
   const r = await page.evaluate(async () => {
@@ -75,9 +78,10 @@ try {
     }
     await opened;
     const pageEl = document.querySelector('.page[data-page-index="0"]');
-    return { sawCanvasBeforeRendered, inkBeforeRendered, rendered: !!pageEl?.classList.contains('rendered'), canvases: pageEl?.querySelectorAll('canvas.page-canvas').length ?? 0, ms: Math.round(performance.now() - t0) };
+    return { renderer: pageEl?.dataset.renderer, sawCanvasBeforeRendered, inkBeforeRendered, rendered: !!pageEl?.classList.contains('rendered'), canvases: pageEl?.querySelectorAll('canvas.page-canvas').length ?? 0, ms: Math.round(performance.now() - t0) };
   });
   check(r.rendered, `page never rendered: ${JSON.stringify(r)}`);
+  check(r.renderer === 'pdfjs', `page drawn by ${r.renderer} with fast draw off: ${JSON.stringify(r)}`);
   check(r.sawCanvasBeforeRendered && r.inkBeforeRendered, `the page stayed blank until fully drawn: ${JSON.stringify(r)}`);
   check(r.canvases === 1, `expected exactly one page canvas after rendering: ${JSON.stringify(r)}`);
 

@@ -1,0 +1,280 @@
+#!/usr/bin/env node
+// End-to-end test for fast draw: heavy pages drawn by PDFium in the main view (renderer/ui/viewer.js, FAST_DRAW;
+// renderer/pdfium/pagerender.js). A page whose first pdf.js render is not done within 1500 ms is drawn by PDFium
+// as well and the first to finish is shown; later renders of that page go straight to PDFium.
+//  1. A document with light pages only never starts PDFium (no pdfium.wasm request, pdfium.started false).
+//  2. Heavy page 2 (non-integer A3 box with a non-zero origin, 700k segments) ends up drawn by PDFium; light page 1
+//     and heavy page 3 with a form field (not eligible) are drawn by pdf.js.
+//  3. Zooming in re-renders page 2 with PDFium without starting pdf.js on it.
+//  4. PDFium's canvas lines up with pdf.js's drawing of the same page at the same canvas size, unrotated and with
+//     the view rotated 90 degrees: the darkness-weighted centroids of 140 small black squares spread over the page
+//     agree to within MAX_SHIFT px on each axis. At zoom 2.5 the canvas is ~4000 px wide, so a 0.5% scale or offset
+//     error moves the far squares by ~20 px, and a page size truncated to whole points (1190.55 x 841.89 ->
+//     1190 x 841) by ~1.8 px (x) and ~3 px (y) at the far edges. Measured: the renderers differ by a sawtooth of
+//     at most ~0.5 px per axis (one of them snaps filled rectangles to device pixels), antialiasing included.
+//     The metric is checked to reject a 0.5% scale error and a 0.5% offset error in the same run.
+//  5. Page 2 completes in less than half the time pdf.js alone needs for it (fast draw off, measured first in a
+//     fresh page of the same browser so the two runs share neither memory nor workers).
+// Prints "FASTDRAW OK". Run `node scripts/vendor.js` first.
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { extname, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { chromium } from 'playwright-core';
+import { PDFDocument, rgb } from 'pdf-lib';
+
+const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
+const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
+const MAX_SHIFT = 1; // canvas px per axis, largest centroid disagreement accepted (see 4. above)
+const COLS = 14, ROWS = 10;
+
+/** `n` short white strokes (cost for the renderers, no ink), then COLS x ROWS black 3 pt squares. Origin = box corner. */
+function heavyContent(n, [ox, oy, w, h]) {
+  const parts = ['0.2 w 1 1 1 RG'];
+  let seed = 11;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  for (let i = 0; i < n; i++) {
+    const x = ox + 20 + rnd() * (w - 40), y = oy + 20 + rnd() * (h - 40);
+    parts.push(`${x.toFixed(2)} ${y.toFixed(2)} m ${(x + rnd() * 6).toFixed(2)} ${(y + rnd() * 6).toFixed(2)} l S`);
+  }
+  parts.push('0 0 0 rg');
+  for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+    const x = ox + 30.37 + c * ((w - 64) / (COLS - 1)), y = oy + 25.61 + r * ((h - 56) / (ROWS - 1));
+    parts.push(`${x.toFixed(3)} ${y.toFixed(3)} 3 3 re f`);
+  }
+  return parts.join('\n');
+}
+
+async function fastPdf() {
+  const doc = await PDFDocument.create();
+  const p1 = doc.addPage([1190.55, 841.89]); // same width as page 2: fit-width keeps its scale when page 2 becomes current
+  p1.drawRectangle({ x: 72, y: 600, width: 200, height: 100, color: rgb(0.2, 0.3, 0.8) });
+  const p2 = doc.addPage([1190.55, 841.89]);
+  const box2 = [10.25, 15.5, 1190.55, 841.89];
+  p2.setMediaBox(...box2);
+  p2.node.set(doc.context.obj('Contents'), doc.context.register(doc.context.flateStream(heavyContent(700_000, box2))));
+  const p3 = doc.addPage([1190.55, 841.89]);
+  doc.getForm().createTextField('ref').addToPage(p3, { x: 72, y: 760, width: 200, height: 22 });
+  p3.node.set(doc.context.obj('Contents'), doc.context.register(doc.context.flateStream(heavyContent(150_000, [0, 0, 1190.55, 841.89]))));
+  return doc.save();
+}
+async function lightPdf() {
+  const doc = await PDFDocument.create();
+  doc.addPage([595.28, 841.89]).drawRectangle({ x: 72, y: 600, width: 200, height: 100, color: rgb(0.8, 0.3, 0.2) });
+  return doc.save();
+}
+
+const files = { '/__fast.pdf': await fastPdf(), '/__light.pdf': await lightPdf() };
+const server = createServer(async (req, res) => {
+  const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  if (files[pathname]) { res.writeHead(200, { 'content-type': 'application/pdf' }).end(Buffer.from(files[pathname])); return; }
+  const file = resolve(root, '.' + pathname);
+  if (!file.startsWith(root + sep)) { res.writeHead(403).end(); return; }
+  try { res.writeHead(200, { 'content-type': MIME[extname(file)] ?? 'application/octet-stream' }).end(await readFile(file)); } catch { res.writeHead(404).end(); }
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const base = `http://127.0.0.1:${server.address().port}`;
+const check = (cond, msg) => { if (!cond) throw new Error(msg); };
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+const problems = [];
+const wasmRequests = [];
+let step = 'start';
+/** A fresh app page (own renderer process) with the test helpers as window.__fd. */
+async function appPage() {
+  const page = await browser.newPage({ viewport: { width: 1400, height: 1000 } });
+  page.on('pageerror', (e) => problems.push(`pageerror: ${e.message}`));
+  page.on('console', (m) => { if (m.type() === 'error') problems.push(`console: ${m.text()}`); });
+  page.on('request', (r) => { if (/pdfium\.wasm/.test(r.url())) wasmRequests.push(r.url()); });
+  await page.goto(`${base}/renderer/index.html`);
+  await page.waitForFunction(() => document.body.dataset.ready === 'true');
+  await page.evaluate(() => {
+    const app = window.ashStudio;
+    const pageEl = (i) => document.querySelector(`.page[data-page-index="${i}"]`);
+    window.__fd = {
+      tab: (name) => app.state.tabs.find((t) => t.name === name),
+      pageEl,
+      /** Resolve when page i of the active view is rendered and pred(pageEl) holds; ms since t0. */
+      async rendered(i, t0, pred = () => true, timeout = 120_000) {
+        while (performance.now() - t0 < timeout) {
+          const el = pageEl(i);
+          if (el?.classList.contains('rendered') && pred(el)) return performance.now() - t0;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        throw new Error(`page ${i + 1} did not render within ${timeout} ms`);
+      },
+      async open(name) {
+        const bytes = new Uint8Array(await (await fetch('/__fast.pdf')).arrayBuffer());
+        const t0 = performance.now();
+        await app.openBytes({ name, bytes });
+        const tab = window.__fd.tab(name);
+        app.viewer.scrollToPage(tab, 1);
+        const ms = await window.__fd.rendered(1, t0);
+        return { ms: Math.round(ms), renderer: pageEl(1).dataset.renderer };
+      },
+      /** Weighted (darkness) centroids of the black squares: components of the reference, measured in both. */
+      compare(ref, test, { warp = null } = {}) {
+        const W = ref.width, H = ref.height;
+        const dark = (c) => { const d = c.getContext('2d').getImageData(0, 0, W, H).data, o = new Float32Array(W * H); for (let p = 0; p < o.length; p++) o[p] = 255 - (d[4 * p] + d[4 * p + 1] + d[4 * p + 2]) / 3; return o; };
+        const a = dark(ref);
+        let b = dark(test);
+        if (warp) { // nearest-neighbour resample: pixel (x, y) shows what was at warp(x, y) - the metric's self-check
+          const w = new Float32Array(W * H);
+          for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) { const [sx, sy] = warp(x, y).map(Math.round); if (sx >= 0 && sy >= 0 && sx < W && sy < H) w[y * W + x] = b[sy * W + sx]; }
+          b = w;
+        }
+        const seen = new Uint8Array(W * H), comps = [];
+        for (let p = 0; p < W * H; p++) {
+          if (seen[p] || a[p] < 128) continue;
+          let x0 = W, y0 = H, x1 = 0, y1 = 0;
+          const stack = [p]; seen[p] = 1;
+          while (stack.length) {
+            const q = stack.pop(), x = q % W, y = (q - x) / W;
+            x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+            for (const n of [q - 1, q + 1, q - W, q + W]) if (n >= 0 && n < W * H && !seen[n] && a[n] >= 128 && Math.abs((n % W) - x) <= 1) { seen[n] = 1; stack.push(n); }
+          }
+          comps.push({ x0, y0, x1, y1 });
+        }
+        const pad = 40; // < half the square spacing (~87 pt) at the zoom used
+        const centroid = (img, { x0, y0, x1, y1 }) => {
+          let sw = 0, sx = 0, sy = 0;
+          for (let y = Math.max(0, y0 - pad); y <= Math.min(H - 1, y1 + pad); y++) for (let x = Math.max(0, x0 - pad); x <= Math.min(W - 1, x1 + pad); x++) {
+            const v = img[y * W + x]; if (v > 8) { sw += v; sx += v * x; sy += v * y; }
+          }
+          return sw ? [sx / sw, sy / sw] : null;
+        };
+        let max = 0;
+        for (const c of comps) {
+          const p = centroid(a, c), q = centroid(b, c);
+          max = Math.max(max, q ? Math.max(Math.abs(p[0] - q[0]), Math.abs(p[1] - q[1])) : Infinity);
+        }
+        return { squares: comps.length, maxShift: max };
+      },
+      /** pdf.js's drawing of page i at the view's current scale and rotation, the viewer's canvas size. */
+      async pdfjsCanvas(tab, i) {
+        const vp = app.viewer.getViewport(tab, i, app.viewer.scale(tab));
+        let out = window.devicePixelRatio || 1;
+        if (vp.width * vp.height * out * out > 16_777_216) out = Math.sqrt(16_777_216 / (vp.width * vp.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.max(1, Math.floor(vp.width * out));
+        canvas.height = Math.max(1, Math.floor(vp.height * out));
+        await tab.pages[i].render({ canvas, viewport: vp, transform: out !== 1 ? [out, 0, 0, out, 0, 0] : undefined }).promise;
+        return canvas;
+      },
+    };
+  });
+  return page;
+}
+try {
+  step = 'pdf.js alone: page 2 with fast draw off (a fresh page, so memory and workers are not shared)';
+  const slowPage = await appPage();
+  const slow = await slowPage.evaluate(async () => {
+    const fd = window.ashStudio.viewer.fastDraw;
+    if (fd) fd.enabled = false; // (a build without fast draw fails the checks below, not here)
+    return window.__fd.open('slow.pdf');
+  });
+  await slowPage.close();
+  check(slow.renderer === 'pdfjs', `fast draw off, yet page 2 drawn by ${slow.renderer}`);
+  check(wasmRequests.length === 0, `fast draw off, yet pdfium.wasm was requested`);
+
+  const page = await appPage();
+
+  step = 'a document with light pages only never starts PDFium (G5)';
+  await page.evaluate(async () => {
+    const bytes = new Uint8Array(await (await fetch('/__light.pdf')).arrayBuffer());
+    const t0 = performance.now();
+    await window.ashStudio.openBytes({ name: 'light.pdf', bytes });
+    await window.__fd.rendered(0, t0);
+    await new Promise((r) => setTimeout(r, window.ashStudio.viewer.fastDraw.thresholdMs + 500));
+  });
+  check(!(await page.evaluate(() => window.ashStudio.pdfium.started)) && wasmRequests.length === 0, `PDFium started for a light document: ${wasmRequests.join(', ')}`);
+  check(await page.evaluate(() => window.__fd.pageEl(0).dataset.renderer) === 'pdfjs', 'light page not marked data-renderer="pdfjs"');
+  await page.evaluate(() => window.ashStudio.closeTab(window.__fd.tab('light.pdf')));
+
+  step = 'heavy page 2 is drawn by PDFium';
+  const fast = await page.evaluate(() => window.__fd.open('fast.pdf'));
+  check(fast.renderer === 'pdfium', `page 2 drawn by ${fast.renderer}, expected pdfium (${fast.ms} ms)`);
+  check(wasmRequests.length === 1, `expected one pdfium.wasm request, saw ${wasmRequests.length}`);
+
+  step = 'light page 1 and heavy page 3 with a form field are drawn by pdf.js';
+  const others = await page.evaluate(async () => {
+    const tab = window.__fd.tab('fast.pdf');
+    await window.__fd.rendered(0, performance.now());
+    const r1 = window.__fd.pageEl(0).dataset.renderer;
+    window.ashStudio.viewer.scrollToPage(tab, 2);
+    await window.__fd.rendered(2, performance.now());
+    return [r1, window.__fd.pageEl(2).dataset.renderer];
+  });
+  check(others[0] === 'pdfjs' && others[1] === 'pdfjs', `pages 1 and 3 drawn by ${others.join(', ')}, expected pdfjs`);
+
+  step = 'zoom-in re-renders page 2 with PDFium straight away';
+  await page.evaluate(() => window.ashStudio.viewer.scrollToPage(window.__fd.tab('fast.pdf'), 1));
+  await page.evaluate(() => window.__fd.rendered(1, performance.now()));
+  const zoom = await page.evaluate(() => {
+    const tab = window.__fd.tab('fast.pdf'), pg = tab.pages[1], render = pg.render;
+    window.__fd.zoom = { calls: 0, scale: window.ashStudio.viewer.getPageState(tab, 1).scale, t0: performance.now() };
+    pg.render = function (...args) { window.__fd.zoom.calls++; return render.apply(this, args); };
+    window.__fd.zoom.restore = () => { pg.render = render; };
+  });
+  await page.keyboard.press('Control+Equal');
+  const zr = await page.evaluate(async () => {
+    const z = window.__fd.zoom, tab = window.__fd.tab('fast.pdf');
+    const ms = await window.__fd.rendered(1, z.t0, () => window.ashStudio.viewer.getPageState(tab, 1).scale !== z.scale, 60_000);
+    z.restore();
+    return { ms: Math.round(ms), calls: z.calls, renderer: window.__fd.pageEl(1).dataset.renderer };
+  });
+  // no pdf.js render call at all: the race path always starts pdf.js first, so PDFium did not wait for the threshold
+  check(zr.renderer === 'pdfium' && zr.calls === 0, `zoom re-render: ${JSON.stringify(zr)} (expected pdfium and no pdf.js render)`);
+
+  step = 'PDFium lines up with pdf.js (unrotated and rotated 90 degrees)';
+  const align = await page.evaluate(async () => {
+    const app = window.ashStudio, tab = window.__fd.tab('fast.pdf');
+    const results = [];
+    const measure = async (label) => {
+      const el = window.__fd.pageEl(1), shown = el.querySelector('canvas.page-canvas');
+      if (el.dataset.renderer !== 'pdfium') return results.push({ label, renderer: el.dataset.renderer });
+      const ref = await window.__fd.pdfjsCanvas(tab, 1);
+      const size = [shown.width, shown.height, ref.width, ref.height];
+      const r = window.__fd.compare(ref, shown);
+      results.push({ label, size, ...r });
+      return { ref, shown };
+    };
+    let t0 = performance.now();
+    app.viewer.setZoom(tab, 2.5);
+    app.viewer.scrollToPage(tab, 1);
+    await window.__fd.rendered(1, t0, () => Math.abs(app.viewer.getPageState(tab, 1).scale - app.viewer.scale(tab)) < 1e-9 && app.viewer.getPageState(tab, 1).scale > 2);
+    const m = await measure('0deg');
+    if (m?.ref) { // the metric rejects a 0.5% scale error and a 0.5% (of the width) offset error
+      const W = m.ref.width;
+      results.push({ label: 'scale+0.5%', ...window.__fd.compare(m.ref, m.shown, { warp: (x, y) => [x / 1.005, y / 1.005] }) });
+      results.push({ label: 'offset+0.5%', ...window.__fd.compare(m.ref, m.shown, { warp: (x, y) => [x - 0.005 * W, y] }) });
+    }
+    t0 = performance.now();
+    app.viewer.rotateView(tab, 90);
+    app.viewer.scrollToPage(tab, 1);
+    await window.__fd.rendered(1, t0, () => app.viewer.getPageState(tab, 1).rotation === 90);
+    await measure('90deg');
+    return results;
+  });
+  const [a0, sc, off, a90] = align;
+  check(a0.renderer === undefined && a90?.renderer === undefined, `page 2 not drawn by PDFium for the pixel check: ${JSON.stringify(align)}`);
+  for (const a of [a0, a90]) {
+    check(a.size[0] === a.size[2] && a.size[1] === a.size[3], `${a.label}: canvas sizes differ ${a.size}`);
+    check(a.squares === COLS * ROWS, `${a.label}: found ${a.squares} squares in the pdf.js drawing, expected ${COLS * ROWS}`);
+    check(a.maxShift <= MAX_SHIFT, `${a.label}: PDFium and pdf.js disagree by ${a.maxShift.toFixed(2)} px (max ${MAX_SHIFT})`);
+  }
+  check(sc.maxShift > MAX_SHIFT && off.maxShift > MAX_SHIFT, `metric does not reject a 0.5% error: scale ${sc.maxShift}, offset ${off.maxShift}`);
+
+  step = 'page 2 completes in under half the time pdf.js alone needs';
+  check(fast.ms < 0.5 * slow.ms, `page 2 took ${fast.ms} ms with fast draw vs ${slow.ms} ms with pdf.js alone (need < 50%)`);
+
+  check(problems.length === 0, `console/page errors: ${problems.join(' | ')}`);
+  const fmt = (a) => a.maxShift.toFixed(2);
+  console.log(`FASTDRAW OK (page 2: ${fast.ms} ms PDFium vs ${slow.ms} ms pdf.js; zoom ${zr.ms} ms; max centroid shift ${fmt(a0)} px / ${fmt(a90)} px rotated, 0.5% errors give ${fmt(sc)} / ${fmt(off)} px)`);
+} catch (err) {
+  console.error(`fastdraw e2e FAILED at step "${step}": ${err.message}`);
+  process.exitCode = 1;
+} finally {
+  await browser.close();
+  server.close();
+}
+
