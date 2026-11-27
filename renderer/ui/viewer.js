@@ -237,7 +237,7 @@ async function loadDocument(tab, { showFirst = false } = {}) {
     const meta = await doc.getMetadata().catch(() => null);
     const pages = await Promise.all(Array.from({ length: doc.numPages }, (_, i) => doc.getPage(i + 1)));
     const ocConfig = await doc.getOptionalContentConfig().catch(() => null);
-    fastDocs.set(doc, { bytes: data, heavy: new Set(), id: null, failed: false });
+    fastDocs.set(doc, { bytes: data, heavy: new Set(), ineligible: new Set(), id: null, failed: false, closed: false });
     return { doc, meta, pages, ocConfig, encrypted: needed || !!meta?.info?.EncryptFilterName, bytes, view };
   } catch (err) {
     destroyDoc(doc);
@@ -698,42 +698,55 @@ async function renderPage(tab, i) {
 }
 
 // ---------------------------------------------------------------- fast draw (heavy pages, PDFium)
-const fastDocs = new WeakMap(); // pdf.js document -> { bytes (what pdf.js opened), heavy: Set<page>, id: Promise<docId>|null, failed }
+// pdf.js document -> { bytes (what pdf.js opened), heavy: Set<page>, ineligible: Set<page> (PDFium lacks a font it
+// needs), id: Promise<docId>|null, failed, closed (closeFast ran: never open it again) }
+const fastDocs = new WeakMap();
 const delay = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Fast-draw context for a render of page i, or null when PDFium may not draw it: known = heavy already;
  * eligible = Promise<bool>, asked BEFORE pdf.js starts the page so its worker answers before the long parse.
- * Not eligible: form fields or other annotations pdf.js draws (PDFium renders without annotations), and
- * layer visibility changed from the document's default (PDFium cannot apply it).
+ * Not eligible: form fields, links with an appearance and other annotations pdf.js draws (PDFium renders without
+ * annotations), layer visibility changed from the document's default (PDFium cannot apply it), and text in a
+ * font PDFium does not have (the worker answers that when it parses the page: f.ineligible).
  */
 function fastFor(tab, i) {
   const f = fastDocs.get(tab.pdfDoc);
-  if (!FAST_DRAW.enabled || !f || f.failed) return null;
+  if (!FAST_DRAW.enabled || !f || f.failed || f.ineligible.has(i)) return null;
   if (tab.ocConfig && !tab.ocConfig.hasInitialVisibility) return null;
   const eligible = tab.pages[i].getAnnotations({ intent: 'display' })
-    .then((annots) => annots.every((a) => a.subtype === 'Link' || a.subtype === 'Popup'), () => false);
+    .then((annots) => annots.every((a) => (a.subtype === 'Link' && !a.hasAppearance) || a.subtype === 'Popup'), () => false);
   return { f, known: f.heavy.has(i), eligible };
 }
 
 /** pdf.js renders `task`; past the threshold PDFium joins. Resolves null (pdf.js finished first) or PDFium's canvas. */
 async function raceFast(fd, task, i, canvas, matrix) {
-  const pdfjsDone = task.promise.then(() => null);
+  let over = false; // pdf.js finished or was cancelled (page released, tab closed)
+  const pdfjsDone = task.promise.then(() => null).finally(() => { over = true; });
   pdfjsDone.catch(() => {}); // a cancel below is ours
   if (await Promise.race([pdfjsDone, delay(FAST_DRAW.thresholdMs).then(() => 'slow')]) !== 'slow') return null;
-  if (!(await fd.eligible) || fd.f.failed) return pdfjsDone;
+  if (!(await fd.eligible) || fd.f.failed || over) return pdfjsDone;
   fd.f.heavy.add(i);
-  const fast = fastCanvas(fd.f, i, canvas.width, canvas.height, matrix).catch((err) => { fastFailed(fd.f, err); return pdfjsDone; });
-  const drawn = await Promise.race([pdfjsDone, fast]);
+  // PDFium's canvas, or pdf.js's outcome when PDFium cannot draw the page
+  const fast = fastCanvas(fd.f, i, canvas.width, canvas.height, matrix).then((c) => c ?? pdfjsDone, (err) => { fastFailed(fd.f, err); return pdfjsDone; });
+  const dropLate = () => fast.then((c) => c && freeCanvas(c), () => {});
+  let drawn;
+  try { drawn = await Promise.race([pdfjsDone, fast]); } catch (err) { dropLate(); throw err; } // cancelled: PDFium's canvas is not wanted
   if (drawn) task.cancel();
-  else fast.then((c) => c && freeCanvas(c)); // pdf.js won: drop PDFium's late result
+  else dropLate(); // pdf.js won: drop PDFium's late result
   return drawn;
 }
 
-/** PDFium's drawing of page i as a new canvas (opens the view bytes in PDFium once per pdf.js document). */
+/**
+ * PDFium's drawing of page i as a new canvas (opens the view bytes in PDFium once per pdf.js document), or null:
+ * the document is closed, or PDFium lacks a font the page uses (then the page is remembered as ineligible).
+ */
 async function fastCanvas(f, i, width, height, matrix) {
+  if (f.closed) return null;
   f.id ??= pdfium.open(f.bytes);
-  const { rgba } = await pdfium.renderPage(await f.id, i, { width, height, matrix });
+  const r = await pdfium.renderPage(await f.id, i, { width, height, matrix });
+  if (r.ineligible) { f.ineligible.add(i); f.heavy.delete(i); return null; }
+  const { rgba } = r;
   const c = h('canvas.page-canvas', { 'aria-hidden': 'true' });
   c.width = width;
   c.height = height;
@@ -743,6 +756,7 @@ async function fastCanvas(f, i, width, height, matrix) {
 
 /** PDFium could not start or draw: this document stays with pdf.js. */
 function fastFailed(f, err) {
+  if (f.closed) return; // closed under a running render: nothing failed
   console.warn('PDFium could not draw the page; pdf.js draws it', err);
   f.failed = true;
 }
@@ -752,6 +766,7 @@ function closeFast(doc) {
   const f = doc && fastDocs.get(doc);
   if (!f) return;
   fastDocs.delete(doc);
+  f.closed = true;
   f.id?.then((id) => pdfium.close(id)).catch(() => {});
 }
 
@@ -833,6 +848,7 @@ function release(tab, i) {
   ps.scale = 0;
   ps.rotation = -1;
   tab.view.pageEls[i].classList.remove('rendered');
+  delete tab.view.pageEls[i].dataset.renderer;
 }
 
 async function getTextContent(tab, i) {

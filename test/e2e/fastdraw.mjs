@@ -13,7 +13,13 @@
 //     1190 x 841) by ~1.8 px (x) and ~3 px (y) at the far edges. Measured: the renderers differ by a sawtooth of
 //     at most ~0.5 px per axis (one of them snaps filled rectangles to device pixels), antialiasing included.
 //     The metric is checked to reject a 0.5% scale error and a 0.5% offset error in the same run.
-//  5. Page 2 completes in less than half the time pdf.js alone needs for it (fast draw off, measured first in a
+//  5. Eligibility (eligible.pdf, threshold lowered so each heavy page races): text in a non-embedded font that is not
+//     one of the standard 14 (TrueType ArialUnicodeMS on the page and inside a form XObject; Type0 MS-Gothic
+//     UniJIS-UCS2-H) and a Link with an /AP keep pdf.js; a Link without /AP and non-embedded Helvetica go to PDFium.
+//     With two documents drawn, the worker keeps at most one parsed page.
+//  6. A tab closed while its page waits for the eligibility answer leaves no PDFium document open; closing every
+//     tab closes all of them.
+//  7. Page 2 completes in less than half the time pdf.js alone needs for it (fast draw off, measured first in a
 //     fresh page of the same browser so the two runs share neither memory nor workers).
 // Prints "FASTDRAW OK". Run `node scripts/vendor.js` first.
 import { createServer } from 'node:http';
@@ -21,7 +27,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, StandardFonts, rgb } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
@@ -58,13 +64,41 @@ async function fastPdf() {
   p3.node.set(doc.context.obj('Contents'), doc.context.register(doc.context.flateStream(heavyContent(150_000, [0, 0, 1190.55, 841.89]))));
   return doc.save();
 }
+/** Heavy pages that must keep pdf.js (expect 'pdfjs') or may use PDFium ('pdfium'); see 5. above. */
+const ELIGIBLE = [['ArialUnicodeMS text', 'pdfjs'], ['MS-Gothic Type0 text', 'pdfjs'], ['ArialUnicodeMS text in a form XObject', 'pdfjs'],
+  ['Link with /AP', 'pdfjs'], ['Link without /AP', 'pdfium'], ['Helvetica (standard 14) text', 'pdfium']];
+async function eligiblePdf() {
+  const doc = await PDFDocument.create(), ctx = doc.context, size = [841.89, 595.28];
+  const descriptor = (name) => ctx.register(ctx.obj({ Type: 'FontDescriptor', FontName: name, Flags: 32, FontBBox: [-200, -300, 1200, 1000], ItalicAngle: 0, Ascent: 900, Descent: -200, CapHeight: 700, StemV: 80 }));
+  const arial = ctx.register(ctx.obj({ Type: 'Font', Subtype: 'TrueType', BaseFont: 'ArialUnicodeMS', FirstChar: 32, LastChar: 126,
+    Widths: Array(95).fill(600), Encoding: 'WinAnsiEncoding', FontDescriptor: descriptor('ArialUnicodeMS') })); // no FontFile2
+  const gothic = ctx.register(ctx.obj({ Type: 'Font', Subtype: 'Type0', BaseFont: 'MS-Gothic', Encoding: 'UniJIS-UCS2-H', DescendantFonts: [ctx.register(ctx.obj({
+    Type: 'Font', Subtype: 'CIDFontType2', BaseFont: 'MS-Gothic', CIDSystemInfo: { Registry: ctx.obj('(Adobe)'), Ordering: ctx.obj('(Japan1)'), Supplement: 2 }, DW: 1000, FontDescriptor: descriptor('MS-Gothic') }))] }));
+  const helvetica = (await doc.embedFont(StandardFonts.Helvetica)).ref; // pdf-lib never embeds the standard 14
+  const label = '0 0 0 rg BT /F1 28 Tf 200 300 Td (LABEL 4711 ABC) Tj ET';
+  const linkAP = (ap) => ctx.register(ctx.obj({ Type: 'Annot', Subtype: 'Link', Rect: [200, 300, 500, 340], Border: [0, 0, 0], A: { S: 'URI', URI: ctx.obj('(https://example.com/)') },
+    ...(ap ? { AP: { N: ctx.register(ctx.flateStream('0.9 0.1 0.1 rg 0 0 300 40 re f', { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 300, 40] })) } } : {}) }));
+  const pages = [
+    { font: arial, text: label }, { font: gothic, text: '0 0 0 rg BT /F1 28 Tf 200 300 Td <65E5672C8A9E> Tj ET' },
+    { form: ctx.register(ctx.flateStream(label, { Type: 'XObject', Subtype: 'Form', BBox: [0, 0, 841.89, 595.28], Resources: { Font: { F1: arial } } })), text: '/X1 Do' },
+    { annot: linkAP(true) }, { annot: linkAP(false) }, { font: helvetica, text: label },
+  ];
+  for (const { font, form, annot, text = '' } of pages) {
+    const p = doc.addPage(size);
+    if (font) p.node.setFontDictionary(PDFName.of('F1'), font);
+    if (form) p.node.setXObject(PDFName.of('X1'), form);
+    if (annot) p.node.addAnnot(annot);
+    p.node.set(PDFName.of('Contents'), ctx.register(ctx.flateStream(`${heavyContent(150_000, [0, 0, ...size])}\n${text}`)));
+  }
+  return doc.save();
+}
 async function lightPdf() {
   const doc = await PDFDocument.create();
   doc.addPage([595.28, 841.89]).drawRectangle({ x: 72, y: 600, width: 200, height: 100, color: rgb(0.8, 0.3, 0.2) });
   return doc.save();
 }
 
-const files = { '/__fast.pdf': await fastPdf(), '/__light.pdf': await lightPdf() };
+const files = { '/__fast.pdf': await fastPdf(), '/__light.pdf': await lightPdf(), '/__eligible.pdf': await eligiblePdf() };
 const server = createServer(async (req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (files[pathname]) { res.writeHead(200, { 'content-type': 'application/pdf' }).end(Buffer.from(files[pathname])); return; }
@@ -89,14 +123,15 @@ async function appPage() {
   await page.waitForFunction(() => document.body.dataset.ready === 'true');
   await page.evaluate(() => {
     const app = window.ashStudio;
-    const pageEl = (i) => document.querySelector(`.page[data-page-index="${i}"]`);
+    // page i of `tab`'s view (default: the first in the DOM - only one document is open when that is used)
+    const pageEl = (i, tab) => (tab ? tab.view.pageEls[i] : document.querySelector(`.page[data-page-index="${i}"]`));
     window.__fd = {
       tab: (name) => app.state.tabs.find((t) => t.name === name),
       pageEl,
       /** Resolve when page i of the active view is rendered and pred(pageEl) holds; ms since t0. */
-      async rendered(i, t0, pred = () => true, timeout = 120_000) {
+      async rendered(i, t0, pred = () => true, timeout = 120_000, tab = undefined) {
         while (performance.now() - t0 < timeout) {
-          const el = pageEl(i);
+          const el = pageEl(i, tab);
           if (el?.classList.contains('rendered') && pred(el)) return performance.now() - t0;
           await new Promise((r) => setTimeout(r, 10));
         }
@@ -263,6 +298,59 @@ try {
     check(a.maxShift <= MAX_SHIFT, `${a.label}: PDFium and pdf.js disagree by ${a.maxShift.toFixed(2)} px (max ${MAX_SHIFT})`);
   }
   check(sc.maxShift > MAX_SHIFT && off.maxShift > MAX_SHIFT, `metric does not reject a 0.5% error: scale ${sc.maxShift}, offset ${off.maxShift}`);
+
+  await page.close(); // a fresh page for 5. and 6.: the renderer process would otherwise run out of memory
+  const ep = await appPage();
+  step = 'eligibility: non-embedded non-standard fonts and links with an appearance keep pdf.js';
+  const second = await ep.evaluate(() => window.__fd.open('fast.pdf')); // the other document PDFium draws
+  check(second.renderer === 'pdfium', `fast.pdf page 2 drawn by ${second.renderer} in the second page`);
+  const elig = await ep.evaluate(async (n) => {
+    const app = window.ashStudio, fdc = app.viewer.fastDraw;
+    fdc.thresholdMs = 300; // each 150k-segment page takes pdf.js longer: PDFium joins on every eligible one
+    try {
+      const bytes = new Uint8Array(await (await fetch('/__eligible.pdf')).arrayBuffer());
+      await app.openBytes({ name: 'eligible.pdf', bytes });
+      const tab = window.__fd.tab('eligible.pdf'), out = [];
+      for (let i = 0; i < n; i++) {
+        app.viewer.scrollToPage(tab, i);
+        await window.__fd.rendered(i, performance.now(), undefined, 120_000, tab);
+        out.push(window.__fd.pageEl(i, tab).dataset.renderer);
+      }
+      return { renderers: out, stats: await app.pdfium.stats() };
+    } finally { fdc.thresholdMs = 1500; }
+  }, ELIGIBLE.length);
+  ELIGIBLE.forEach(([what, want], i) => check(elig.renderers[i] === want, `page ${i + 1} (${what}) drawn by ${elig.renderers[i]}, expected ${want}`));
+  check(elig.stats.docs === 2 && elig.stats.keptPages <= 1, `two documents drawn: worker keeps ${JSON.stringify(elig.stats)} (expected 2 docs, <= 1 parsed page)`);
+
+  step = 'a tab closed while its heavy page waits for the eligibility answer leaves no PDFium document open';
+  const race = await ep.evaluate(async () => {
+    const app = window.ashStudio, fdc = app.viewer.fastDraw, proto = Object.getPrototypeOf(window.__fd.tab('fast.pdf').pages[0]);
+    const getAnnotations = proto.getAnnotations, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const before = (await app.pdfium.stats()).docs;
+    let asked = 0;
+    proto.getAnnotations = function (...args) { asked++; return wait(2500).then(() => getAnnotations.apply(this, args)); };
+    fdc.thresholdMs = 300;
+    try {
+      const bytes = new Uint8Array(await (await fetch('/__fast.pdf')).arrayBuffer());
+      await app.openBytes({ name: 'race.pdf', bytes });
+      const tab = window.__fd.tab('race.pdf');
+      app.viewer.scrollToPage(tab, 1);
+      await wait(1200); // page 2: pdf.js past the threshold, the eligibility answer still pending
+      const raced = asked > 0 && !window.__fd.pageEl(1, tab).classList.contains('rendered');
+      await app.closeTab(tab);
+      await wait(3500); // the answer arrives after the close
+      return { raced, before, after: (await app.pdfium.stats()).docs };
+    } finally { proto.getAnnotations = getAnnotations; fdc.thresholdMs = 1500; }
+  });
+  check(race.raced, 'race.pdf page 2 was not waiting for its eligibility answer when the tab closed (test did not exercise the race)');
+  check(race.after === race.before, `closing race.pdf mid-race left PDFium documents open: ${race.before} before, ${race.after} after`);
+  const closed = await ep.evaluate(async () => {
+    const app = window.ashStudio;
+    for (const name of ['eligible.pdf', 'fast.pdf']) await app.closeTab(window.__fd.tab(name));
+    await new Promise((r) => setTimeout(r, 500));
+    return app.pdfium.stats();
+  });
+  check(closed.docs === 0 && closed.keptPages === 0, `all tabs closed, PDFium still holds ${JSON.stringify(closed)}`);
 
   step = 'page 2 completes in under half the time pdf.js alone needs';
   check(fast.ms < 0.5 * slow.ms, `page 2 took ${fast.ms} ms with fast draw vs ${slow.ms} ms with pdf.js alone (need < 50%)`);

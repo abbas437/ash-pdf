@@ -11,6 +11,10 @@ const WORKER_URL = new URL('./worker.js', import.meta.url);
 const WASM_URL = new URL('../vendor/pdfium/pdfium.wasm', import.meta.url);
 let worker = null, starting = null, seq = 0;
 const pending = new Map(); // request id -> { resolve, reject }
+// Document ids handed out here -> the current worker's own ids. A restarted worker numbers its documents from
+// 1 again, so the old ids are dropped with the old worker: a stale id is an error, never another document.
+const docIds = new Map();
+let nextDocId = 1;
 
 function post(method, args) {
   return new Promise((resolve, reject) => {
@@ -23,6 +27,7 @@ function post(method, args) {
 function failAll(err) {
   for (const p of pending.values()) p.reject(err);
   pending.clear();
+  docIds.clear();
   worker?.terminate();
   worker = null; starting = null;
 }
@@ -47,31 +52,51 @@ async function call(method, ...args) {
   await start();
   return post(method, args);
 }
+/** A call on an open document: docId is translated to the current worker's id. */
+async function onDoc(method, docId, ...args) {
+  await start();
+  const id = docIds.get(docId);
+  if (id === undefined) throw new Error(`pdfium: no open document ${docId}`);
+  return post(method, [id, ...args]);
+}
 const copy = (bytes) => new Uint8Array(bytes); // own buffer, safe to transfer
 
 export const pdfium = {
-  open: (bytes) => call('open', copy(bytes)),
-  close: (docId) => call('close', docId),
-  pageCount: (docId) => call('pageCount', docId),
-  textObjects: (docId, pageIndex) => call('textObjects', docId, pageIndex),
-  save: (docId, { incremental = false } = {}) => call('save', docId, { incremental }),
+  async open(bytes) {
+    await start();
+    const w = worker, id = await post('open', [copy(bytes)]);
+    if (w !== worker) throw new Error('pdfium: worker restarted');
+    docIds.set(nextDocId, id);
+    return nextDocId++;
+  },
+  async close(docId) {
+    const id = docIds.get(docId);
+    if (id === undefined) return false;
+    docIds.delete(docId);
+    return post('close', [id]);
+  },
+  pageCount: (docId) => onDoc('pageCount', docId),
+  textObjects: (docId, pageIndex) => onDoc('textObjects', docId, pageIndex),
+  save: (docId, { incremental = false } = {}) => onDoc('save', docId, { incremental }),
   /** True redaction + full save; resolves to the new bytes. See redact.js. */
-  redact: (docId, areas, { fill = [0, 0, 0] } = {}) => call('redact', docId, areas, { fill }),
+  redact: (docId, areas, { fill = [0, 0, 0] } = {}) => onDoc('redact', docId, areas, { fill }),
   /** Image objects of a page: [{id, bbox, matrix, width, height, filter, inForm}] (see imgedit.js). */
-  pageImages: (docId, pageIndex) => call('pageImages', docId, pageIndex),
+  pageImages: (docId, pageIndex) => onDoc('pageImages', docId, pageIndex),
   /** Edit one image and save in full; resolves to the new bytes. op: {transform: matrix} | {remove: true} | {replace: {bytes, kind}}. */
-  editImage: (docId, pageIndex, id, op) => call('editImage', docId, pageIndex, id, op.replace ? { replace: { ...op.replace, bytes: copy(op.replace.bytes) } } : op),
+  editImage: (docId, pageIndex, id, op) => onDoc('editImage', docId, pageIndex, id, op.replace ? { replace: { ...op.replace, bytes: copy(op.replace.bytes) } } : op),
   /** Top-level objects of a page: { width, height, objects: [{ id, type, bbox, quad, … }] } (see wmpick.js). */
-  pageObjects: (docId, pageIndex) => call('pageObjects', docId, pageIndex),
+  pageObjects: (docId, pageIndex) => onDoc('pageObjects', docId, pageIndex),
   /** Remove page objects and save in full; resolves to the new bytes. list: [{ pageIndex, ids }]. */
-  removeObjects: (docId, list) => call('removeObjects', docId, list),
+  removeObjects: (docId, list) => onDoc('removeObjects', docId, list),
   /** Original-text lines of a page: [{ id, text, bbox, font, size, color, embedded, subset, objects, editable, reason? }]. See textedit.js. */
-  textLines: (docId, pageIndex) => call('textLines', docId, pageIndex),
+  textLines: (docId, pageIndex) => onDoc('textLines', docId, pageIndex),
   /** Replace a line's text + save (full unless incremental); resolves { ok, substituted, widthBefore, widthAfter, bytes } | { ok: false, reason }. */
-  editLine: (docId, pageIndex, lineId, newText, { incremental = false } = {}) => call('editLine', docId, pageIndex, lineId, newText, { incremental }),
-  /** Draw a page: { width, height, rgba } (opaque RGBA). opts: { width, height, matrix } - see pagerender.js. */
-  renderPage: (docId, pageIndex, { width, height, matrix }) => call('renderPage', docId, pageIndex, { width, height, matrix }),
+  editLine: (docId, pageIndex, lineId, newText, { incremental = false } = {}) => onDoc('editLine', docId, pageIndex, lineId, newText, { incremental }),
+  /** Draw a page: { width, height, rgba } (opaque RGBA), or { ineligible: 'font', font } when PDFium lacks a font the page needs (worker.js). opts: { width, height, matrix } - see pagerender.js. */
+  renderPage: (docId, pageIndex, { width, height, matrix }) => onDoc('renderPage', docId, pageIndex, { width, height, matrix }),
   get started() { return !!worker; },
+  /** Diagnostics for tests: { docs, keptPages } in the worker, without starting it. */
+  stats: async () => (worker ? call('stats') : { docs: 0, keptPages: 0 }),
   /** Diagnostics for tests: open a generated 2-page PDF, read it back, save incrementally. */
   async selfTest() {
     const { PDFDocument, StandardFonts } = await import('pdf-lib');
