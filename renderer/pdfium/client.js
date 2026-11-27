@@ -69,6 +69,8 @@ export const pdfium = {
   textLines: (docId, pageIndex) => call('textLines', docId, pageIndex),
   /** Replace a line's text + save (full unless incremental); resolves { ok, substituted, widthBefore, widthAfter, bytes } | { ok: false, reason }. */
   editLine: (docId, pageIndex, lineId, newText, { incremental = false } = {}) => call('editLine', docId, pageIndex, lineId, newText, { incremental }),
+  /** Draw a page: { width, height, rgba } (opaque RGBA). opts: { width, height, matrix } - see pagerender.js. */
+  renderPage: (docId, pageIndex, { width, height, matrix }) => call('renderPage', docId, pageIndex, { width, height, matrix }),
   get started() { return !!worker; },
   /** Diagnostics for tests: open a generated 2-page PDF, read it back, save incrementally. */
   async selfTest() {

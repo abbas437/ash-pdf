@@ -7,10 +7,11 @@ import { redactDocument } from './redact.js';
 import { pageImages, transformImage, deleteImage, replaceImage } from './imgedit.js';
 import { editLine, textLines } from './textedit.js';
 import { pageObjects, removeObjects } from './wmpick.js';
+import { renderPage } from './pagerender.js';
 
-const OBJ_TEXT = 1, FPDF_INCREMENTAL = 1;
+const OBJ_TEXT = 1, FPDF_INCREMENTAL = 1, RENDER_KEEP = 2;
 let m = null;
-const docs = new Map(); // docId -> { doc, ptr }
+const docs = new Map(); // docId -> { doc, ptr, pages? }  pages: Map<pageIndex, FPDF_PAGE> kept by renderPage
 let nextDoc = 1;
 const fonts = new Map(); // substitute font file -> Promise<Uint8Array>, fetched from the app's origin on first use
 const loadFont = (file) => {
@@ -70,10 +71,29 @@ const methods = {
   close(docId) {
     const d = docs.get(docId);
     if (!d) return false;
+    for (const page of d.pages?.values() ?? []) m.FPDF_ClosePage(page);
     m.FPDF_CloseDocument(d.doc);
     free(d.ptr);
     docs.delete(docId);
     return true;
+  },
+  /**
+   * Draw a page for the viewer (pagerender.js): { width, height, rgba } - opaque RGBA, white background,
+   * annotations off. opts: { width, height, matrix } with matrix = PDF user space -> bitmap pixels (y down).
+   * The last RENDER_KEEP parsed pages stay loaded, so a zoom re-render does not parse the page again.
+   */
+  renderPage(docId, pageIndex, opts) {
+    const d = getDoc(docId);
+    d.pages ??= new Map();
+    let page = d.pages.get(pageIndex);
+    if (page) d.pages.delete(pageIndex);
+    else {
+      page = m.FPDF_LoadPage(d.doc, pageIndex);
+      if (!page) throw new Error(`pdfium: cannot load page ${pageIndex}`);
+    }
+    d.pages.set(pageIndex, page); // most recent last
+    for (const [i, p] of d.pages) { if (d.pages.size <= RENDER_KEEP) break; m.FPDF_ClosePage(p); d.pages.delete(i); }
+    return renderPage(m, page, opts);
   },
   pageCount(docId) { return m.FPDF_GetPageCount(getDoc(docId).doc); },
   textObjects(docId, pageIndex) {
