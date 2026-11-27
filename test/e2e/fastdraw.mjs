@@ -405,7 +405,9 @@ try {
     const getAnnotations = proto.getAnnotations, wait = (ms) => new Promise((r) => setTimeout(r, ms));
     const before = (await app.pdfium.stats()).docs;
     let asked = 0;
-    proto.getAnnotations = function (...args) { asked++; return wait(2500).then(() => getAnnotations.apply(this, args)); };
+    // The answer is 'no annotations' even after the close (the real call would reject on the destroyed document and
+    // end the race on its own, so the closed-document guards would go untested).
+    proto.getAnnotations = function () { asked++; return wait(2500).then(() => []); };
     fdc.thresholdMs = 300;
     try {
       const bytes = new Uint8Array(await (await fetch('/__fast.pdf')).arrayBuffer());
