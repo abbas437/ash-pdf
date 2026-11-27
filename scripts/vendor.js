@@ -4,7 +4,7 @@
 // (no bundler, no node_modules inside the packaged app).
 //
 // Output (final names, referenced by renderer/index.html's import map):
-//   renderer/vendor/pdf.min.mjs            pdfjs-dist legacy/build/pdf.min.mjs           ("pdfjs-dist")
+//   renderer/vendor/pdf.min.mjs            pdfjs-dist legacy/build/pdf.min.mjs, patched by scripts/pdfjs-patch.mjs ("pdfjs-dist")
 //   renderer/vendor/pdf.worker.min.mjs     pdfjs-dist legacy/build/pdf.worker.min.mjs    ("pdfjs-worker")
 //   renderer/vendor/pdfjs/cmaps/           pdfjs-dist cmaps/          -> getDocument({ cMapUrl })
 //   renderer/vendor/pdfjs/standard_fonts/  pdfjs-dist standard_fonts/ -> getDocument({ standardFontDataUrl })
@@ -39,6 +39,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, write
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FONT_FILES } from '../renderer/pdfium/textedit.js';
+import { patchPdfjs } from './pdfjs-patch.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const nm = join(root, 'node_modules');
@@ -64,7 +65,9 @@ mkdirSync(out, { recursive: true });
 // The legacy build is used: the modern build needs very recent JS built-ins (e.g.
 // Map.prototype.getOrInsertComputed) that the Playwright test Chromium lacks; legacy
 // polyfills them and runs in both Electron and test browsers.
-copy('pdfjs-dist/legacy/build/pdf.min.mjs', 'pdf.min.mjs');
+// pdf.min.mjs gets the source patches in scripts/pdfjs-patch.mjs (large tiling patterns drawn whole).
+writeFileSync(join(out, 'pdf.min.mjs'), patchPdfjs(readFileSync(join(nm, 'pdfjs-dist/legacy/build/pdf.min.mjs'), 'utf8')));
+copied.push('pdfjs-dist/legacy/build/pdf.min.mjs -> renderer/vendor/pdf.min.mjs (patched: scripts/pdfjs-patch.mjs)');
 copy('pdfjs-dist/legacy/build/pdf.worker.min.mjs', 'pdf.worker.min.mjs');
 copy('pdfjs-dist/cmaps', 'pdfjs/cmaps');
 // Liberation fonts are excluded: pdf.js ships Liberation 1.x under GPL-2.0 with a font
