@@ -19,6 +19,11 @@ function dropKept() {
   if (kept) m.FPDF_ClosePage(kept.page);
   kept = null;
 }
+/** An edit changes docId's pages: its kept page would draw the old content. */
+function editing(docId) {
+  if (kept?.docId === docId) dropKept();
+  return getDoc(docId).doc;
+}
 // PDFium has built-in substitutes for these when they are not embedded; any other non-embedded font draws
 // nothing here (the wasm build has no system fonts: CJK text vanishes), so such pages stay with pdf.js.
 const STANDARD_14 = new Set(['Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique', 'Times-Roman', 'Times-Bold',
@@ -117,11 +122,11 @@ const methods = {
   renderPage(docId, pageIndex, opts) {
     const d = getDoc(docId);
     if (kept?.docId !== docId || kept.pageIndex !== pageIndex) {
-      dropKept();
       const page = m.FPDF_LoadPage(d.doc, pageIndex);
       if (!page) throw new Error(`pdfium: cannot load page ${pageIndex}`);
       const font = missingFont(page);
-      if (font) { m.FPDF_ClosePage(page); return { ineligible: 'font', font }; }
+      if (font) { m.FPDF_ClosePage(page); return { ineligible: 'font', font }; } // the kept page stays useful
+      dropKept();
       kept = { docId, pageIndex, page };
     }
     return renderPage(m, kept.page, opts);
@@ -154,14 +159,14 @@ const methods = {
   },
   /** True redaction (redact.js), then a FULL save: returns the new bytes. areas: [{ pageIndex, rects: [[x0,y0,x1,y1]] }], fill [r,g,b] | null. */
   redact(docId, areas, { fill = [0, 0, 0] } = {}) {
-    redactDocument(m, getDoc(docId).doc, areas, { fill });
+    redactDocument(m, editing(docId), areas, { fill });
     return methods.save(docId, { incremental: false });
   },
   /** Image objects of a page (imgedit.js). */
   pageImages(docId, pageIndex) { return pageImages(m, getDoc(docId).doc, pageIndex); },
   /** Image edits (imgedit.js), then a FULL save: return the new bytes. op: {transform: matrix} | {remove: true} | {replace: {bytes, kind}}. */
   editImage(docId, pageIndex, id, op) {
-    const doc = getDoc(docId).doc;
+    const doc = editing(docId);
     if (op.transform) transformImage(m, doc, pageIndex, id, op.transform);
     else if (op.remove) deleteImage(m, doc, pageIndex, id);
     else if (op.replace) replaceImage(m, doc, pageIndex, id, op.replace);
@@ -172,14 +177,14 @@ const methods = {
   pageObjects(docId, pageIndex) { return pageObjects(m, getDoc(docId).doc, pageIndex); },
   /** Remove page objects (wmpick.js), then a FULL save: returns the new bytes. list: [{ pageIndex, ids }]. */
   removeObjects(docId, list) {
-    removeObjects(m, getDoc(docId).doc, list);
+    removeObjects(m, editing(docId), list);
     return methods.save(docId, { incremental: false });
   },
   /** Visual lines of original text on a page (textedit.js). */
   textLines(docId, pageIndex) { return textLines(m, getDoc(docId).doc, pageIndex); },
   /** Replace one line's text (textedit.js), then save: { ok, substituted, widthBefore, widthAfter, bytes } | { ok: false, reason }. */
   async editLine(docId, pageIndex, lineId, newText, { incremental = false } = {}) {
-    const r = await editLine(m, getDoc(docId).doc, pageIndex, lineId, newText, { loadFont });
+    const r = await editLine(m, editing(docId), pageIndex, lineId, newText, { loadFont });
     return r.ok ? { ...r, bytes: methods.save(docId, { incremental }) } : r;
   },
   save(docId, { incremental = false } = {}) {

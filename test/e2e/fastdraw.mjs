@@ -25,7 +25,12 @@
 //  6e. Fast scroll (own page): 12 known-heavy pages, scrolled through at 100 ms a page. The page stopped on is drawn
 //      within ~two PDFium renders (the one in flight, then its own) instead of behind every page scrolled past, and an
 //      editing call (pdfium.pageCount) made meanwhile waits for at most the render in flight; the client queue posts
-//      fewer renders than were asked for (pdfium.stats().renders).
+//      fewer renders than were asked for (pdfium.stats().renders), and once the page is drawn no request for a page
+//      scrolled past still waits in it.
+//  6f. Fast scroll stopping mid-document (pages S and S+1 visible) while a render is in flight: the renders posted
+//      after it follow the viewer's order (S, S+1, then the off-screen neighbours S+2 and S-1), and S is drawn within
+//      the 6e bound.
+//  6g. A tab closed while a known-heavy page waits for its eligibility answer opens no PDFium document.
 //  7. Page 2 completes in less than half the time pdf.js alone needs for it (fast draw off, measured first in a
 //     fresh page of the same browser so the two runs share neither memory nor workers).
 // Prints "FASTDRAW OK". Run `node scripts/vendor.js` first.
@@ -423,6 +428,30 @@ try {
   });
   check(race.raced, 'race.pdf page 2 was not waiting for its eligibility answer when the tab closed (test did not exercise the race)');
   check(race.after === race.before, `closing race.pdf mid-race left PDFium documents open: ${race.before} before, ${race.after} after`);
+  step = 'a tab closed while a known-heavy page waits for the eligibility answer opens no PDFium document';
+  const known = await ep.evaluate(async () => {
+    const app = window.ashStudio, proto = Object.getPrototypeOf(window.__fd.tab('fast.pdf').pages[0]);
+    const getAnnotations = proto.getAnnotations, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const before = (await app.pdfium.stats()).docs;
+    let asked = 0;
+    proto.getAnnotations = function () { asked++; return wait(2500).then(() => []); }; // answers after the close (see above)
+    try {
+      const bytes = new Uint8Array(await (await fetch('/__fast.pdf')).arrayBuffer());
+      await app.openBytes({ name: 'known.pdf', bytes });
+      const tab = window.__fd.tab('known.pdf');
+      app.viewer.fastHeavy(tab).add(1);
+      app.viewer.rerender(tab); // page 2 goes straight to PDFium once its eligibility answer arrives
+      app.viewer.scrollToPage(tab, 1);
+      await wait(600);
+      await wait(400);
+      const waiting = !window.__fd.pageEl(1, tab).classList.contains('rendered');
+      await app.closeTab(tab);
+      await wait(3500);
+      return { waiting, before, after: (await app.pdfium.stats()).docs };
+    } finally { proto.getAnnotations = getAnnotations; }
+  });
+  check(known.waiting, 'known.pdf page 2 was drawn before the tab closed (test did not exercise the known-heavy wait)');
+  check(known.after === known.before, `closing known.pdf during the known-heavy wait left PDFium documents open: ${known.before} before, ${known.after} after`);
   const closed = await ep.evaluate(async () => {
     const app = window.ashStudio;
     for (const name of ['eligible.pdf', 'fast.pdf']) await app.closeTab(window.__fd.tab(name));
@@ -441,6 +470,8 @@ try {
       while (window.__fd.pageEl(i, tab).dataset.renderer !== 'pdfium') { if (performance.now() - t0 > 120_000) throw new Error(`page ${i + 1} not drawn`); await wait(10); }
       return performance.now() - t0;
     };
+    const posts = [], postMessage = Worker.prototype.postMessage; // renders posted to the PDFium worker, in order
+    Worker.prototype.postMessage = function (msg, ...rest) { if (msg?.method === 'renderPage') posts.push(msg.args.slice(0, 2)); return postMessage.call(this, msg, ...rest); };
     await app.pdfium.selfTest(); // worker started and warm
     const other = await app.pdfium.open(new Uint8Array(await (await fetch('/__light.pdf')).arrayBuffer()));
     await app.openBytes({ name: 'many.pdf', bytes: new Uint8Array(await (await fetch('/__many.pdf')).arrayBuffer()) });
@@ -457,19 +488,38 @@ try {
     const stop = await drawn(tab, K - 1, t0);
     const s1 = (await app.pdfium.stats()).renders;
     await app.pdfium.close(other);
-    return { one: Math.round(one), stop: Math.round(stop), edit: Math.round(await edit), posted: s1.posted - s0.posted, dropped: s1.dropped - s0.dropped };
+    // 6f: a render in flight (a blocker on another document, posted ahead of everything), meanwhile the view is
+    // re-rendered at the last page and scrolled back up to page S at the same pace; pages S and S+1 visible at the stop
+    const S = 5, blocker = await app.pdfium.open(new Uint8Array(await (await fetch('/__many.pdf')).arrayBuffer()));
+    const blockerPosted = posts.length;
+    const blocked = app.pdfium.renderPage(blocker, 0, { width: 1600, height: 1131, matrix: [1.344, 0, 0, -1.344, 0, 1131] }, { priority: () => [Infinity, 0] });
+    while (!posts.slice(blockerPosted).some(([, p]) => p === 0)) await wait(10);
+    const from = posts.length;
+    app.viewer.rerender(tab);
+    for (let i = K - 2; i >= S; i--) { app.viewer.scrollToPage(tab, i); await wait(100); }
+    t0 = performance.now();
+    const mid = await drawn(tab, S, t0), blockerDone = !!(await blocked);
+    await drawn(tab, S - 1, t0); // the last neighbour
+    await app.pdfium.close(blocker);
+    const midOrder = posts.slice(from).map(([, p]) => p), rank = [S, S + 1, S + 2, S - 1];
+    const ranks = midOrder.filter((p) => rank.includes(p)).map((p) => rank.indexOf(p));
+    return { one: Math.round(one), stop: Math.round(stop), edit: Math.round(await edit), posted: s1.posted - s0.posted, dropped: s1.dropped - s0.dropped,
+      queued: s1.queued, mid: Math.round(mid), midOrder, blockerDone, midInOrder: midOrder.length >= 4 && ranks.every((r, k) => k === 0 || ranks[k - 1] < r) };
   }, MANY);
   await sp.close();
   check(scroll.stop < 3 * scroll.one, `fast scroll: stopped-on page drawn after ${scroll.stop} ms, one PDFium render takes ${scroll.one} ms (need < 3x) ${JSON.stringify(scroll)}`);
   check(scroll.edit < 1.5 * scroll.one, `fast scroll: pdfium.pageCount took ${scroll.edit} ms behind the renders, one render takes ${scroll.one} ms (need < 1.5x) ${JSON.stringify(scroll)}`);
-  check(scroll.posted < MANY - 2 && scroll.dropped > 0, `fast scroll: ${scroll.posted} renders posted to the worker, ${scroll.dropped} dropped for ${MANY - 2} pages scrolled through ${JSON.stringify(scroll)}`);
+  check(scroll.posted < MANY - 2, `fast scroll: ${scroll.posted} renders posted to the worker, ${scroll.dropped} dropped for ${MANY - 2} pages scrolled through ${JSON.stringify(scroll)}`);
+  check(scroll.queued <= 2, `fast scroll: ${scroll.queued} renders still queued once the stopped-on page is drawn (at most its 2 other wanted pages) ${JSON.stringify(scroll)}`);
+  check(scroll.midInOrder, `fast scroll stopping mid-document: renders posted after the stop in the order ${scroll.midOrder} (expected page indices 5, 6, 7, then 4) ${JSON.stringify(scroll)}`);
+  check(scroll.mid < 3 * scroll.one, `fast scroll stopping mid-document: page 6 drawn after ${scroll.mid} ms, one PDFium render takes ${scroll.one} ms (need < 3x) ${JSON.stringify(scroll)}`);
 
   step = 'page 2 completes in under half the time pdf.js alone needs';
   check(fast.ms < 0.5 * slow.ms, `page 2 took ${fast.ms} ms with fast draw vs ${slow.ms} ms with pdf.js alone (need < 50%)`);
 
   check(problems.length === 0, `console/page errors: ${problems.join(' | ')}`);
   const fmt = (a) => a.maxShift.toFixed(2);
-  console.log(`FASTDRAW OK (page 2: ${fast.ms} ms PDFium vs ${slow.ms} ms pdf.js; zoom ${zr.ms} ms; fast scroll: stop ${scroll.stop} ms, edit ${scroll.edit} ms, one render ${scroll.one} ms, ${scroll.posted} posted / ${scroll.dropped} dropped; max centroid shift ${fmt(a0)} px / ${fmt(a90)} px rotated, 0.5% errors give ${fmt(sc)} / ${fmt(off)} px)`);
+  console.log(`FASTDRAW OK (page 2: ${fast.ms} ms PDFium vs ${slow.ms} ms pdf.js; zoom ${zr.ms} ms; fast scroll: stop ${scroll.stop} ms, edit ${scroll.edit} ms, one render ${scroll.one} ms, mid-document stop ${scroll.mid} ms, ${scroll.posted} posted / ${scroll.dropped} dropped; max centroid shift ${fmt(a0)} px / ${fmt(a90)} px rotated, 0.5% errors give ${fmt(sc)} / ${fmt(off)} px)`);
 } catch (err) {
   console.error(`fastdraw e2e FAILED at step "${step}": ${err.message}`);
   process.exitCode = 1;

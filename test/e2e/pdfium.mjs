@@ -77,6 +77,51 @@ try {
   check(t.after.join('|') === 'Łódź 4712|Footer stays', `after ${JSON.stringify(t.after)}`);
   check(requests.some((u) => u.endsWith('/renderer/vendor/fonts/edit/Arimo-Regular.ttf')), 'font not fetched from the app origin');
 
+  step = 'kept page: dropped when its document is edited; survives a font-ineligible probe of another document';
+  const k = await page.evaluate(async () => {
+    const p = window.ashStudio.pdfium;
+    const { PDFDocument, PDFName, rgb } = await import('pdf-lib');
+    const pageOf = async (build) => { const doc = await PDFDocument.create(); build(doc, doc.addPage([300, 300])); return new Uint8Array(await doc.save()); };
+    const size = { width: 150, height: 150, matrix: [0.5, 0, 0, -0.5, 0, 150] }; // PDF user space -> bitmap pixels, y down (as the viewer builds it)
+    const square = await pageOf((doc, pg) => pg.drawRectangle({ x: 50, y: 50, width: 100, height: 100, color: rgb(0.8, 0.2, 0.2) }));
+    // Text in a Type0 font that is not embedded (MS-Gothic, UniJIS-UCS2-H): PDFium cannot draw it, so the page is ineligible.
+    const gothic = await pageOf((doc, pg) => {
+      const ctx = doc.context, descriptor = ctx.register(ctx.obj({ Type: 'FontDescriptor', FontName: 'MS-Gothic', Flags: 32, FontBBox: [-200, -300, 1200, 1000], ItalicAngle: 0, Ascent: 900, Descent: -200, CapHeight: 700, StemV: 80 }));
+      const font = ctx.register(ctx.obj({ Type: 'Font', Subtype: 'Type0', BaseFont: 'MS-Gothic', Encoding: 'UniJIS-UCS2-H', DescendantFonts: [ctx.register(ctx.obj({
+        Type: 'Font', Subtype: 'CIDFontType2', BaseFont: 'MS-Gothic', CIDSystemInfo: { Registry: ctx.obj('(Adobe)'), Ordering: ctx.obj('(Japan1)'), Supplement: 2 }, DW: 1000, FontDescriptor: descriptor }))] }));
+      pg.node.setFontDictionary(PDFName.of('F1'), font);
+      pg.node.set(PDFName.of('Contents'), ctx.register(ctx.flateStream('0 0 0 rg BT /F1 28 Tf 50 150 Td <65E5672C8A9E> Tj ET')));
+    });
+    const kept = async () => (await p.stats()).keptPages;
+    const out = { start: await kept() };
+    const a = await p.open(square);
+    try {
+      const first = await p.renderPage(a, 0, size);
+      out.rendered = !first.ineligible && first.width === 150;
+      out.afterRender = await kept();
+      const obj = (await p.pageObjects(a, 0)).objects[0];
+      out.hasObject = !!obj;
+      await p.removeObjects(a, [{ pageIndex: 0, ids: [obj.id] }]);
+      out.afterEdit = await kept();
+    } finally { await p.close(a); }
+    const a2 = await p.open(square), b = await p.open(gothic);
+    try {
+      await p.renderPage(a2, 0, size);
+      out.beforeProbe = await kept();
+      out.probe = await p.renderPage(b, 0, size);
+      out.afterProbe = await kept();
+      const again = await p.renderPage(a2, 0, size);
+      out.again = !again.ineligible && again.width === 150;
+    } finally { await p.close(a2); await p.close(b); }
+    out.end = await kept();
+    return out;
+  }).catch((e) => ({ error: `${e.name}: ${e.message}` }));
+  check(!k.error, `kept page threw: ${k.error}`);
+  check(k.start === 0 && k.rendered && k.afterRender === 1 && k.hasObject, `kept page after render ${JSON.stringify(k)}`);
+  check(k.afterEdit === 0, `editing a document must drop its kept page ${JSON.stringify(k)}`);
+  check(k.beforeProbe === 1 && k.probe?.ineligible === 'font' && k.afterProbe === 1 && k.again, `an ineligible probe of another document must leave the kept page ${JSON.stringify(k)}`);
+  check(k.end === 0, `closing the documents must drop the kept page ${JSON.stringify(k)}`);
+
   step = 'errors propagate; caller bytes stay usable';
   const e = await page.evaluate(async () => {
     const p = window.ashStudio.pdfium, junk = new Uint8Array([1, 2, 3]);

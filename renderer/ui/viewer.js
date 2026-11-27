@@ -559,6 +559,9 @@ function update(tab) {
   for (let i = first; i <= last; i++) { wanted.push(i); v.ps[i].lastUsed = now; }
   if (last + 1 < tab.numPages) wanted.push(last + 1);
   if (first - 1 >= 0) wanted.push(first - 1);
+  // PDFium draws the latest update's pages first, in this order (fastCanvas: the client queue's priority)
+  const gen = ++updates;
+  wanted.forEach((i, rank) => { v.ps[i].want = [gen, rank]; });
   const scale = cssScale(tab);
   // A render waiting on PDFium (one worker, seconds per heavy page) for a page scrolled away or at another scale or
   // rotation is cancelled, so its request never reaches the worker; renders not started yet are dropped likewise.
@@ -579,6 +582,7 @@ function update(tab) {
   for (const i of far.slice(KEEP_FAR)) release(tab, i);
 }
 
+let updates = 0; // update() calls so far: the generation of each page's place in `wanted` (ps.want)
 const queue = [];
 let running = 0;
 const MAX_RUNNING = 2;
@@ -646,13 +650,13 @@ async function renderPage(tab, i) {
   const dropProgressive = () => { if (progressive && ps.canvas === canvas) { canvas.remove(); ps.canvas = null; } };
   let drawn = null;
   // ps.fast: this render's PDFium request, pending (update() cancels it when the page is scrolled away or rescaled)
-  const fast = fd && { ctl: new AbortController(), scale, rotation: vp.rotation, key: ps };
+  const fast = fd && { ctl: new AbortController(), scale, rotation: vp.rotation, key: ps, priority: () => ps.want };
   const fastDone = () => { fast.ctl.abort(); if (ps.fast === fast) ps.fast = null; };
   if (fd?.known) {
     const job = { cancelled: false, cancel() { this.cancelled = true; fast.ctl.abort(); } };
     ps.task = job; // release() and the queue see a running render
     ps.fast = fast;
-    drawn = await fd.eligible.then((ok) => (ok ? fastCanvas(fd.f, i, canvas.width, canvas.height, matrix, fast) : null))
+    drawn = await fd.eligible.then((ok) => (ok && !job.cancelled ? fastCanvas(fd.f, i, canvas.width, canvas.height, matrix, fast) : null))
       .catch((err) => { fastFailed(fd.f, err); return null; })
       .finally(() => { fastDone(); if (ps.task === job) ps.task = null; });
     if (job.cancelled) { if (drawn) freeCanvas(drawn); freeCanvas(canvas); return; }
@@ -773,10 +777,10 @@ async function raceFast(fd, task, i, canvas, matrix, req, joined) {
  * PDFium's drawing of page i as a new canvas (opens the view bytes in PDFium once per pdf.js document), or null:
  * the document is closed, or PDFium lacks a font the page uses (then the page is remembered as ineligible).
  */
-async function fastCanvas(f, i, width, height, matrix, { ctl, key }) {
+async function fastCanvas(f, i, width, height, matrix, { ctl, key, priority }) {
   if (f.closed) return null;
   f.id ??= pdfium.open(f.bytes);
-  const r = await pdfium.renderPage(await f.id, i, { width, height, matrix }, { signal: ctl.signal, key });
+  const r = await pdfium.renderPage(await f.id, i, { width, height, matrix }, { signal: ctl.signal, key, priority });
   if (r.ineligible) { f.ineligible.add(i); f.heavy.delete(i); return null; }
   const { rgba } = r;
   const c = h('canvas.page-canvas', { 'aria-hidden': 'true' });

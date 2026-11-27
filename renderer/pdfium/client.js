@@ -17,8 +17,9 @@ const docIds = new Map();
 let nextDocId = 1;
 // renderPage requests wait here and the worker gets ONE at a time (all documents together): a heavy page takes it
 // seconds, and the worker cannot stop a render it has begun. So a request cancelled while it waits never reaches
-// the worker, the newest request goes first (the page the user stopped on was asked for last), and every other
-// call (editing tools) waits behind at most the one render in flight.
+// the worker, the most urgent request goes first (its `priority`: [generation, rank], the latest generation first,
+// then the lowest rank - the viewer's latest update, visible pages before their neighbours; requests without one
+// come after, newest first), and every other call (editing tools) waits behind at most the one render in flight.
 const renders = []; // { docId, pageIndex, opts, key, resolve, reject, signal, onAbort }
 let rendering = null; // the request the worker is drawing
 const renderStats = { posted: 0, dropped: 0 };
@@ -32,7 +33,16 @@ function drop(r, err = cancelled()) {
 }
 function pumpRenders() {
   if (rendering || !renders.length || !worker) return;
-  const r = renders.pop();
+  // a before b: the later generation, then the lower rank; a request without a priority last; ties: the newer one
+  const before = (a, b) => {
+    const pa = a.priority?.(), pb = b.priority?.();
+    if (!pb) return !!pa;
+    if (!pa) return false;
+    return pa[0] !== pb[0] ? pa[0] > pb[0] : pa[1] < pb[1];
+  };
+  let k = renders.length - 1;
+  for (let j = k - 1; j >= 0; j--) if (before(renders[j], renders[k])) k = j;
+  const [r] = renders.splice(k, 1);
   const id = docIds.get(r.docId);
   if (id === undefined) { settle(r); r.reject(new Error(`pdfium: no open document ${r.docId}`)); pumpRenders(); return; }
   rendering = r;
@@ -124,14 +134,15 @@ export const pdfium = {
    * Draw a page: { width, height, rgba } (opaque RGBA), or { ineligible: 'font', font } when PDFium lacks a font the
    * page needs (worker.js). opts: { width, height, matrix } - see pagerender.js. Queued (see `renders`): `signal`
    * aborted rejects with an AbortError at once (a waiting request is never sent; one being drawn is discarded);
-   * a newer request with the same `key` (e.g. one view's page) replaces a waiting one.
+   * a newer request with the same `key` (e.g. one view's page) replaces a waiting one. `priority`: () => [generation,
+   * rank], asked each time the worker is free (see `renders`).
    */
-  async renderPage(docId, pageIndex, { width, height, matrix }, { signal, key } = {}) {
+  async renderPage(docId, pageIndex, { width, height, matrix }, { signal, key, priority } = {}) {
     await start();
     if (signal?.aborted) throw cancelled();
     if (!docIds.has(docId)) throw new Error(`pdfium: no open document ${docId}`);
     return new Promise((resolve, reject) => {
-      const r = { docId, pageIndex, opts: { width, height, matrix }, key, resolve, reject, signal, onAbort: () => drop(r) };
+      const r = { docId, pageIndex, opts: { width, height, matrix }, key, priority, resolve, reject, signal, onAbort: () => drop(r) };
       if (key !== undefined) for (const q of renders.filter((q) => q.key === key)) drop(q);
       signal?.addEventListener('abort', r.onAbort);
       renders.push(r);
