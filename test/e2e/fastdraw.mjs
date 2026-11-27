@@ -19,6 +19,13 @@
 //     With two documents drawn, the worker keeps at most one parsed page.
 //  6. A tab closed while its page waits for the eligibility answer leaves no PDFium document open; closing every
 //     tab closes all of them.
+//  6b. A reload (tab:bytesChanged) closes the old PDFium document: the open-document count does not grow.
+//  6c. A heavy page drawn by PDFium goes back to pdf.js once a layer (optional content group) is hidden.
+//  6d. When PDFium wins, pdf.js's render of the page is cancelled and the page holds exactly one canvas.
+//  6e. Fast scroll (own page): 12 known-heavy pages, scrolled through at 100 ms a page. The page stopped on is drawn
+//      within ~two PDFium renders (the one in flight, then its own) instead of behind every page scrolled past, and an
+//      editing call (pdfium.pageCount) made meanwhile waits for at most the render in flight; the client queue posts
+//      fewer renders than were asked for (pdfium.stats().renders).
 //  7. Page 2 completes in less than half the time pdf.js alone needs for it (fast draw off, measured first in a
 //     fresh page of the same browser so the two runs share neither memory nor workers).
 // Prints "FASTDRAW OK". Run `node scripts/vendor.js` first.
@@ -27,7 +34,7 @@ import { readFile } from 'node:fs/promises';
 import { extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
-import { PDFDocument, PDFName, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, PDFName, PDFString, StandardFonts, rgb } from 'pdf-lib';
 
 const root = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.svg': 'image/svg+xml' };
@@ -92,13 +99,31 @@ async function eligiblePdf() {
   }
   return doc.save();
 }
+/** One heavy page; a black square on it belongs to layer "Part" (optional content, visible by default). */
+async function layersPdf() {
+  const doc = await PDFDocument.create(), ctx = doc.context, size = [841.89, 595.28];
+  const ocg = ctx.register(ctx.obj({ Type: 'OCG', Name: PDFString.of('Part') }));
+  doc.catalog.set(PDFName.of('OCProperties'), ctx.obj({ OCGs: [ocg], D: { ON: [ocg], Order: [ocg] } }));
+  const p = doc.addPage(size);
+  p.node.Resources().set(PDFName.of('Properties'), ctx.obj({ L1: ocg }));
+  p.node.set(PDFName.of('Contents'), ctx.register(ctx.flateStream(`${heavyContent(150_000, [0, 0, ...size])}\n/OC /L1 BDC 0 0 0 rg 300 200 200 200 re f EMC`)));
+  return doc.save();
+}
+const MANY = 12;
+/** MANY copies of fast.pdf's heavy page (one shared content stream). */
+async function manyPdf() {
+  const doc = await PDFDocument.create(), box = [0, 0, 1190.55, 841.89];
+  const contents = doc.context.register(doc.context.flateStream(heavyContent(700_000, box)));
+  for (let i = 0; i < MANY; i++) doc.addPage([box[2], box[3]]).node.set(PDFName.of('Contents'), contents);
+  return doc.save();
+}
 async function lightPdf() {
   const doc = await PDFDocument.create();
   doc.addPage([595.28, 841.89]).drawRectangle({ x: 72, y: 600, width: 200, height: 100, color: rgb(0.8, 0.3, 0.2) });
   return doc.save();
 }
 
-const files = { '/__fast.pdf': await fastPdf(), '/__light.pdf': await lightPdf(), '/__eligible.pdf': await eligiblePdf() };
+const files = { '/__fast.pdf': await fastPdf(), '/__light.pdf': await lightPdf(), '/__eligible.pdf': await eligiblePdf(), '/__layers.pdf': await layersPdf(), '/__many.pdf': await manyPdf() };
 const server = createServer(async (req, res) => {
   const pathname = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   if (files[pathname]) { res.writeHead(200, { 'content-type': 'application/pdf' }).end(Buffer.from(files[pathname])); return; }
@@ -223,11 +248,30 @@ try {
   });
   check(!(await page.evaluate(() => window.ashStudio.pdfium.started)) && wasmRequests.length === 0, `PDFium started for a light document: ${wasmRequests.join(', ')}`);
   check(await page.evaluate(() => window.__fd.pageEl(0).dataset.renderer) === 'pdfjs', 'light page not marked data-renderer="pdfjs"');
-  await page.evaluate(() => window.ashStudio.closeTab(window.__fd.tab('light.pdf')));
+  await page.evaluate(() => { // record pdf.js page renders (6d.)
+    const proto = Object.getPrototypeOf(window.__fd.tab('light.pdf').pages[0]), render = proto.render, tasks = [];
+    proto.render = function (...args) {
+      const task = render.apply(this, args), t = { page: this.pageNumber, state: 'running' };
+      task.promise.then(() => { t.state = 'done'; }, (e) => { t.state = e?.name ?? String(e); });
+      if (args[0].canvas?.classList.contains('page-canvas')) tasks.push(t); // the main view's, not thumbnails
+      return task;
+    };
+    window.__fd.renders = { tasks, restore: () => { proto.render = render; } };
+    return window.ashStudio.closeTab(window.__fd.tab('light.pdf'));
+  });
 
   step = 'heavy page 2 is drawn by PDFium';
   const fast = await page.evaluate(() => window.__fd.open('fast.pdf'));
   check(fast.renderer === 'pdfium', `page 2 drawn by ${fast.renderer}, expected pdfium (${fast.ms} ms)`);
+  step = 'PDFium won: pdf.js was cancelled and page 2 holds one canvas';
+  const won = await page.evaluate(async () => {
+    await new Promise((r) => setTimeout(r, 300));
+    const { tasks, restore } = window.__fd.renders;
+    restore();
+    return { tasks: tasks.filter((t) => t.page === 2).map((t) => t.state), canvases: window.__fd.pageEl(1).querySelectorAll('canvas.page-canvas').length };
+  });
+  check(won.tasks.length === 1 && won.tasks[0] === 'RenderingCancelledException', `pdf.js renders of page 2 after PDFium won: ${JSON.stringify(won.tasks)} (expected one, cancelled)`);
+  check(won.canvases === 1, `page 2 holds ${won.canvases} canvases after PDFium won (expected 1)`);
   check(wasmRequests.length === 1, `expected one pdfium.wasm request, saw ${wasmRequests.length}`);
 
   step = 'light page 1 and heavy page 3 with a form field are drawn by pdf.js';
@@ -304,6 +348,18 @@ try {
   step = 'eligibility: non-embedded non-standard fonts and links with an appearance keep pdf.js';
   const second = await ep.evaluate(() => window.__fd.open('fast.pdf')); // the other document PDFium draws
   check(second.renderer === 'pdfium', `fast.pdf page 2 drawn by ${second.renderer} in the second page`);
+
+  step = 'a reload (bytes changed) closes the old PDFium document';
+  const reloaded = await ep.evaluate(async () => {
+    const app = window.ashStudio, tab = window.__fd.tab('fast.pdf'), oldDoc = tab.pdfDoc, before = (await app.pdfium.stats()).docs;
+    app.bus.emit('tab:bytesChanged', { tab });
+    const t0 = performance.now();
+    while (tab.pdfDoc === oldDoc && performance.now() - t0 < 30_000) await new Promise((r) => setTimeout(r, 20));
+    app.viewer.scrollToPage(tab, 1);
+    await window.__fd.rendered(1, t0, (el) => el.dataset.renderer === 'pdfium', 120_000, tab);
+    return { before, after: (await app.pdfium.stats()).docs, reloaded: tab.pdfDoc !== oldDoc };
+  });
+  check(reloaded.reloaded && reloaded.before === 1 && reloaded.after === 1, `reload: PDFium documents ${reloaded.before} before, ${reloaded.after} after (expected 1 and 1)`);
   const elig = await ep.evaluate(async (n) => {
     const app = window.ashStudio, fdc = app.viewer.fastDraw;
     fdc.thresholdMs = 300; // each 150k-segment page takes pdf.js longer: PDFium joins on every eligible one
@@ -321,6 +377,27 @@ try {
   }, ELIGIBLE.length);
   ELIGIBLE.forEach(([what, want], i) => check(elig.renderers[i] === want, `page ${i + 1} (${what}) drawn by ${elig.renderers[i]}, expected ${want}`));
   check(elig.stats.docs === 2 && elig.stats.keptPages <= 1, `two documents drawn: worker keeps ${JSON.stringify(elig.stats)} (expected 2 docs, <= 1 parsed page)`);
+
+  step = 'a page with a layer hidden goes back to pdf.js';
+  const layer = await ep.evaluate(async () => {
+    const app = window.ashStudio, fdc = app.viewer.fastDraw;
+    fdc.thresholdMs = 300;
+    try {
+      const bytes = new Uint8Array(await (await fetch('/__layers.pdf')).arrayBuffer());
+      await app.openBytes({ name: 'layers.pdf', bytes });
+      const tab = window.__fd.tab('layers.pdf');
+      await window.__fd.rendered(0, performance.now(), undefined, 120_000, tab);
+      const shown = window.__fd.pageEl(0, tab).dataset.renderer;
+      const [[id]] = [...tab.ocConfig];
+      tab.ocConfig.setVisibility(id, false);
+      app.viewer.rerender(tab);
+      await window.__fd.rendered(0, performance.now(), undefined, 120_000, tab);
+      const hidden = window.__fd.pageEl(0, tab).dataset.renderer;
+      await app.closeTab(tab);
+      return { shown, hidden };
+    } finally { fdc.thresholdMs = 1500; }
+  });
+  check(layer.shown === 'pdfium' && layer.hidden === 'pdfjs', `layers.pdf drawn by ${layer.shown}, then by ${layer.hidden} with the layer hidden (expected pdfium, then pdfjs)`);
 
   step = 'a tab closed while its heavy page waits for the eligibility answer leaves no PDFium document open';
   const race = await ep.evaluate(async () => {
@@ -352,12 +429,45 @@ try {
   });
   check(closed.docs === 0 && closed.keptPages === 0, `all tabs closed, PDFium still holds ${JSON.stringify(closed)}`);
 
+  await ep.close();
+
+  step = 'fast scroll over known-heavy pages: the page stopped on does not wait behind the pages scrolled past';
+  const sp = await appPage();
+  const scroll = await sp.evaluate(async (K) => {
+    const app = window.ashStudio, wait = (ms) => new Promise((r) => setTimeout(r, ms));
+    const drawn = async (tab, i, t0) => { // PDFium's canvas shown (before the text layer)
+      while (window.__fd.pageEl(i, tab).dataset.renderer !== 'pdfium') { if (performance.now() - t0 > 120_000) throw new Error(`page ${i + 1} not drawn`); await wait(10); }
+      return performance.now() - t0;
+    };
+    await app.pdfium.selfTest(); // worker started and warm
+    const other = await app.pdfium.open(new Uint8Array(await (await fetch('/__light.pdf')).arrayBuffer()));
+    await app.openBytes({ name: 'many.pdf', bytes: new Uint8Array(await (await fetch('/__many.pdf')).arrayBuffer()) });
+    const tab = window.__fd.tab('many.pdf'), heavy = app.viewer.fastHeavy(tab);
+    for (let i = 0; i < K; i++) heavy.add(i);
+    let t0 = performance.now();
+    app.viewer.rerender(tab); // pages 1 and 2 (visible) go straight to PDFium, one after the other
+    const ms1 = await drawn(tab, 0, t0), ms2 = await drawn(tab, 1, t0);
+    const one = ms2 - ms1; // one PDFium render of the heavy page
+    const s0 = (await app.pdfium.stats()).renders;
+    for (let i = 2; i < K; i++) { app.viewer.scrollToPage(tab, i); await wait(100); }
+    t0 = performance.now();
+    const edit = app.pdfium.pageCount(other).then(() => performance.now() - t0);
+    const stop = await drawn(tab, K - 1, t0);
+    const s1 = (await app.pdfium.stats()).renders;
+    await app.pdfium.close(other);
+    return { one: Math.round(one), stop: Math.round(stop), edit: Math.round(await edit), posted: s1.posted - s0.posted, dropped: s1.dropped - s0.dropped };
+  }, MANY);
+  await sp.close();
+  check(scroll.stop < 3 * scroll.one, `fast scroll: stopped-on page drawn after ${scroll.stop} ms, one PDFium render takes ${scroll.one} ms (need < 3x) ${JSON.stringify(scroll)}`);
+  check(scroll.edit < 1.5 * scroll.one, `fast scroll: pdfium.pageCount took ${scroll.edit} ms behind the renders, one render takes ${scroll.one} ms (need < 1.5x) ${JSON.stringify(scroll)}`);
+  check(scroll.posted < MANY - 2 && scroll.dropped > 0, `fast scroll: ${scroll.posted} renders posted to the worker, ${scroll.dropped} dropped for ${MANY - 2} pages scrolled through ${JSON.stringify(scroll)}`);
+
   step = 'page 2 completes in under half the time pdf.js alone needs';
   check(fast.ms < 0.5 * slow.ms, `page 2 took ${fast.ms} ms with fast draw vs ${slow.ms} ms with pdf.js alone (need < 50%)`);
 
   check(problems.length === 0, `console/page errors: ${problems.join(' | ')}`);
   const fmt = (a) => a.maxShift.toFixed(2);
-  console.log(`FASTDRAW OK (page 2: ${fast.ms} ms PDFium vs ${slow.ms} ms pdf.js; zoom ${zr.ms} ms; max centroid shift ${fmt(a0)} px / ${fmt(a90)} px rotated, 0.5% errors give ${fmt(sc)} / ${fmt(off)} px)`);
+  console.log(`FASTDRAW OK (page 2: ${fast.ms} ms PDFium vs ${slow.ms} ms pdf.js; zoom ${zr.ms} ms; fast scroll: stop ${scroll.stop} ms, edit ${scroll.edit} ms, one render ${scroll.one} ms, ${scroll.posted} posted / ${scroll.dropped} dropped; max centroid shift ${fmt(a0)} px / ${fmt(a90)} px rotated, 0.5% errors give ${fmt(sc)} / ${fmt(off)} px)`);
 } catch (err) {
   console.error(`fastdraw e2e FAILED at step "${step}": ${err.message}`);
   process.exitCode = 1;
