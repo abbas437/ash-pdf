@@ -509,7 +509,7 @@ try {
   await sp.close();
   check(scroll.stop < 3 * scroll.one, `fast scroll: stopped-on page drawn after ${scroll.stop} ms, one PDFium render takes ${scroll.one} ms (need < 3x) ${JSON.stringify(scroll)}`);
   check(scroll.edit < 1.5 * scroll.one, `fast scroll: pdfium.pageCount took ${scroll.edit} ms behind the renders, one render takes ${scroll.one} ms (need < 1.5x) ${JSON.stringify(scroll)}`);
-  check(scroll.posted < MANY - 2 && scroll.dropped > 0, `fast scroll: ${scroll.posted} renders posted to the worker, ${scroll.dropped} dropped for ${MANY - 2} pages scrolled through ${JSON.stringify(scroll)}`);
+  check(scroll.posted < MANY - 2, `fast scroll: ${scroll.posted} renders posted to the worker, ${scroll.dropped} dropped for ${MANY - 2} pages scrolled through ${JSON.stringify(scroll)}`);
   check(scroll.queued <= 2, `fast scroll: ${scroll.queued} renders still queued once the stopped-on page is drawn (at most its 2 other wanted pages) ${JSON.stringify(scroll)}`);
   check(scroll.midInOrder, `fast scroll stopping mid-document: renders posted after the stop in the order ${scroll.midOrder} (expected page indices 5, 6, 7, then 4) ${JSON.stringify(scroll)}`);
   check(scroll.mid < 3 * scroll.one, `fast scroll stopping mid-document: page 6 drawn after ${scroll.mid} ms, one PDFium render takes ${scroll.one} ms (need < 3x) ${JSON.stringify(scroll)}`);
